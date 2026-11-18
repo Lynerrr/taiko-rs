@@ -56,9 +56,9 @@ text  490,291  0:00 / 0:10
 text  675,291  peak 7.0 notes/s at 0:01
 text   44,298  Regression  |  mapped by tests
 text  508,307  click / drag / wheel to scroll - play from where you stop
-text  751,442  Play
-text  503,443  Mods
-text  575,443  Random
+text  751,428  Play
+text  513,429  Mods
+text  587,429  Random
 hit    26,20     56x24   ToMenu
 hit   397,20     65x24   SortList
 hit    94,20    296x24   TextField
@@ -75,9 +75,9 @@ hit   701,95     16x13   SelectLike
 hit   490,177   330x61   Preview
 hit   488,244   334x44   Preview
 hit   716,56     95x24   BoardPage
-hit   480,435    56x24   ModsButton
-hit   552,435    70x24   Key(F2)
-hit   717,434   136x26   Key(Enter)
+hit   490,421    56x24   ModsButton
+hit   564,421    70x24   Key(F2)
+hit   717,408   137x50   Key(Enter)
 hit   472,229     8x48   SplitList
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account

@@ -209,6 +209,11 @@ pub struct Preview {
     /// Room kept free at the right of the title line, for a button over the panel's corner
     /// (song select's way to the leaderboard); 0 elsewhere.
     pub title_room: f32,
+    /// Drawn bare, in the main menu's look (song select outside the Legacy layout): no panel or
+    /// boxes, the details straight over the background, the autoplay a lane of its own running
+    /// off the screen's right edge and the timeline's bars on their own. Set by the caller
+    /// before `draw_panel`.
+    pub bare: bool,
     /// The map shown is marked EPIC on taiko.rs (set by the caller before `draw_panel`): its pill
     /// stands in the status's place, EPIC being a status of its own.
     pub epic: bool,
@@ -863,7 +868,6 @@ impl Preview {
             .filter(|&(into, len)| into.is_finite() && len.is_finite() && len > 0.0)
     }
 
-    /// Where the music is in map time, while `entry`'s song plays.
     /// Whether the music playing is `e`'s (a new song's starts a moment after it's picked).
     #[cfg(target_os = "android")]
     pub fn plays(&self, e: &Entry) -> bool {
@@ -876,9 +880,10 @@ impl Preview {
         self.play_rect = None;
     }
 
-    pub fn map_time(&self, entry: Option<usize>) -> Option<f64> {
+    /// The map whose music plays, and where it is (map ms).
+    pub fn playing_time(&self) -> Option<(usize, f64)> {
         let (i, ..) = self.map.as_ref().filter(|_| self.audio_active)?;
-        (Some(*i) == entry && self.last_time.is_finite()).then_some(self.last_time)
+        self.last_time.is_finite().then_some((*i, self.last_time))
     }
 
     /// Whether the music is in a kiai now.
@@ -966,6 +971,7 @@ impl Preview {
             self.pending_seek.unwrap_or(game.time()),
             e.meta.preview_time,
             marker,
+            !self.bare,
         );
         self.graph_rect = Some(rect);
         self.play_rect = draw_play_button(
@@ -1053,14 +1059,16 @@ impl Preview {
             (self.size_cap, self.size_shown) = (fitted(110.0), wanted.min(fitted(110.0)));
             let below = unit * self.size_shown + 12.0 + after_box;
             self.panel_bottom = y + h.min(110.0 + below);
-            c.round_rect(
-                [x, y],
-                [w, h.min(110.0 + below)],
-                8.0,
-                rgba(0x15151d, 0.82),
-                rgba(0x2a2a38, 1.0),
-                1.0,
-            );
+            if !self.bare {
+                c.round_rect(
+                    [x, y],
+                    [w, h.min(110.0 + below)],
+                    8.0,
+                    rgba(0x15151d, 0.82),
+                    rgba(0x2a2a38, 1.0),
+                    1.0,
+                );
+            }
             return None;
         };
         let e = &library[i];
@@ -1198,14 +1206,32 @@ impl Preview {
         let preview_h = band_h * k;
         let h = head + preview_h + after_box;
         self.panel_bottom = y + h;
-        c.round_rect(
-            [x, y],
-            [w, h],
-            8.0,
-            rgba(0x15151d, 0.82),
-            rgba(0x2a2a38, 1.0),
-            1.0,
-        );
+        if self.bare {
+            // No panel: only a soft shade under the details, so they read over a bright picture.
+            // Its soft edge reaches out past its shape (`softness`), to the panel's sides.
+            const SOFT: f32 = 20.0;
+            let shade = rgba(0x08080c, 0.38);
+            c.shapes.push(crate::render::Shape {
+                center: [x + w / 2.0, y + head / 2.0],
+                half: [
+                    (w / 2.0 - SOFT).max(4.0),
+                    (head / 2.0 - SOFT + 2.0).max(4.0),
+                ],
+                fill: shade,
+                border: shade,
+                params: [12.0, 0.0, SOFT, 0.0],
+                angle: 0.0,
+            });
+        } else {
+            c.round_rect(
+                [x, y],
+                [w, h],
+                8.0,
+                rgba(0x15151d, 0.82),
+                rgba(0x2a2a38, 1.0),
+                1.0,
+            );
+        }
 
         let mut cy = y + 12.0;
         for line in &title {
@@ -1309,25 +1335,42 @@ impl Preview {
         // As wide as the lane at that scale (all of the panel at full size), centred.
         let bw = lane_w * k;
         let (bx, by, bh) = (x + 10.0 + (w - 20.0 - bw) / 2.0, cy, preview_h);
-        c.round_rect(
-            [bx, by],
-            [bw, bh],
-            6.0,
-            rgba(0x0c0c12, 1.0),
-            rgba(0x2a2a38, 1.0),
-            1.0,
-        );
+        // Bare, the autoplay is a lane like the menu's, its drum at the left, running on towards
+        // the screen's right edge as far as the friends tab there leaves room; the notes come in
+        // from its end.
+        let lane_end = if self.bare {
+            c.width - crate::social::TAB_ROOM
+        } else {
+            bx + bw
+        };
+        let lane = [bx, by, lane_end - bx, bh];
+        if self.bare {
+            crate::style::lane_strip(c, lane, true);
+        } else {
+            c.round_rect(
+                [bx, by],
+                [bw, bh],
+                6.0,
+                rgba(0x0c0c12, 1.0),
+                rgba(0x2a2a38, 1.0),
+                1.0,
+            );
+        }
         self.box_rect = Some([bx, by, bw, bh]);
-        c.hit(bx, by, bw, bh, Hit::Preview);
+        c.hit(bx, by, lane_end.min(c.width) - bx, bh, Hit::Preview);
         let loaded = loaded.is_some();
         if loaded {
+            let graph_start = c.shapes.len();
             self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], button);
             // Seeking goes by the music: until this map's plays, a click would move the last one.
             if !playing {
                 self.graph_rect = None;
                 self.play_rect = None;
             }
-            if fade < 1.0 {
+            if self.bare {
+                // Nothing behind it to cover it with: it fades in itself.
+                c.fade_since(graph_start, fade, 1.0);
+            } else if fade < 1.0 {
                 c.rect(
                     bx - 1.0,
                     by + bh + 4.0,
@@ -1358,16 +1401,24 @@ impl Preview {
         };
         let full_w = c.width;
         let start = c.shapes.len();
-        c.width = lane_w;
+        c.width = (lane_end - bx) / k;
         game.view.kiai_effects = self.kiai_effects;
         game.draw_playfield(c, scroll_speed);
         let oy = by - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
+        // The playfield fills the lane: its lines go over it.
+        if self.bare {
+            crate::style::lane_edges(c, lane, true);
+        }
         if button.is_some() {
             // Song select only (download previews have no fullscreen view).
             c.text_right(
-                bx + bw - 6.0,
+                if self.bare {
+                    lane_end - 8.0
+                } else {
+                    bx + bw - 6.0
+                },
                 by + bh - 10.0,
                 6.0,
                 rgba(0x6f6f86, 1.0),
@@ -1379,19 +1430,25 @@ impl Preview {
             );
         }
         if fade < 1.0 {
-            c.round_rect(
-                [bx, by],
-                [bw, bh],
-                6.0,
-                rgba(0x0c0c12, 1.0 - fade),
-                rgba(0, 0.0),
-                0.0,
-            );
+            if self.bare {
+                let start = c.shapes.len();
+                crate::style::lane_strip(c, lane, true);
+                c.fade_since(start, 1.0 - fade, 1.0);
+            } else {
+                c.round_rect(
+                    [bx, by],
+                    [bw, bh],
+                    6.0,
+                    rgba(0x0c0c12, 1.0 - fade),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+            }
         }
         let clip = crate::layout::Area {
             x: bx / full_w,
             y: by / VIRTUAL_HEIGHT,
-            w: bw / full_w,
+            w: (lane_end - bx) / full_w,
             h: bh / VIRTUAL_HEIGHT,
         };
         // Only the lane is clipped to the box.
@@ -1449,25 +1506,29 @@ fn fmt_time(ms: f64) -> String {
 
 /// Difficulty timeline like lazer's song progress graph: strain bars over the map's length,
 /// kiai tinted, the preview point marked, and a playhead. Returns the time range it spans.
-pub fn draw_graph(
+/// `boxed`: in a box of its own, else its bars bare over what's behind them.
+fn draw_graph(
     c: &mut Canvas,
     g: &Graph,
     [x, y, w, h]: [f32; 4],
     now: f64,
     preview_at: f64,
     marker: Option<f64>,
+    boxed: bool,
 ) -> (f64, f64) {
     let (t0, t1) = (g.start.min(0.0).max(g.start - 2000.0), g.end);
     let span = (t1 - t0).max(1.0);
     let x_of = |t: f64| x + (((t - t0) / span).clamp(0.0, 1.0) as f32) * w;
-    c.round_rect(
-        [x, y],
-        [w, h],
-        5.0,
-        rgba(0x0c0c12, 1.0),
-        rgba(0x2a2a38, 1.0),
-        1.0,
-    );
+    if boxed {
+        c.round_rect(
+            [x, y],
+            [w, h],
+            5.0,
+            rgba(0x0c0c12, 1.0),
+            rgba(0x2a2a38, 1.0),
+            1.0,
+        );
+    }
     for &(s, e) in &g.kiai {
         c.rect(
             x_of(s),

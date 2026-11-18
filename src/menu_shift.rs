@@ -168,15 +168,39 @@ pub fn lane(t: f32, width: f32, row: [f32; 4]) -> Vec<LanePoint> {
         .collect()
 }
 
+/// The kiai's gold, as the menu lights its panel.
+const KIAI_GOLD: u32 = 0xFFD34D;
+
 /// The lane as a band through `points`: the panel's fill, its edges along both sides. Where it
 /// turns, the pieces meet in round joints (as a thick line drawn with a round pen), and the edges
-/// leave off where the turn is sharp.
-pub fn draw_lane(c: &mut Canvas, points: &[LanePoint], alpha: f32) {
+/// leave off where the turn is sharp. `kiai`: how gold its edges and fill are (0 to 1 each, as
+/// `menu::Menu::kiai_glow`), the menu's kiai carried along with it.
+pub fn draw_lane(c: &mut Canvas, points: &[LanePoint], alpha: f32, kiai: (f32, f32)) {
     if alpha <= 0.0 || points.len() < 2 {
         return;
     }
-    let fill = rgba(style::PANEL, alpha);
-    let edge = rgba(style::PANEL_EDGE, alpha);
+    band(
+        c,
+        points,
+        rgba(style::PANEL, alpha),
+        rgba(style::PANEL_EDGE, alpha),
+        false,
+    );
+    let (edge, fill) = (kiai.0 * alpha, kiai.1 * alpha);
+    if edge > 0.003 || fill > 0.003 {
+        band(
+            c,
+            points,
+            rgba(KIAI_GOLD, fill),
+            rgba(KIAI_GOLD, edge),
+            true,
+        );
+    }
+}
+
+/// `over`: laid over the lane, see-through, so its pieces mustn't overlap (no joints, no
+/// overdraw), or the seams would show brighter.
+fn band(c: &mut Canvas, points: &[LanePoint], fill: [f32; 4], edge: [f32; 4], over: bool) {
     let angle_at = |i: usize| {
         let (a, b) = (points[i], points[i + 1]);
         (b.y - a.y).atan2(b.x - a.x)
@@ -188,7 +212,7 @@ pub fn draw_lane(c: &mut Canvas, points: &[LanePoint], alpha: f32) {
     let last = points.len() - 2;
     // The joints first, under the pieces.
     for (i, p) in points.iter().enumerate().take(last + 1).skip(1) {
-        if turn(angle_at(i - 1), angle_at(i)) > 0.02 {
+        if !over && turn(angle_at(i - 1), angle_at(i)) > 0.02 {
             c.circle(p.x, p.y, p.h / 2.0, fill, fill, 0.0);
         }
     }
@@ -202,7 +226,7 @@ pub fn draw_lane(c: &mut Canvas, points: &[LanePoint], alpha: f32) {
         let angle = angle_at(i);
         let mid = [(a.x + b.x) / 2.0, (a.y + b.y) / 2.0];
         let h = (a.h + b.h) / 2.0;
-        let w = len + 1.0;
+        let w = if over { len } else { len + 1.0 };
         let start = c.shapes.len();
         c.rect(mid[0] - w / 2.0, mid[1] - h / 2.0, w, h, fill);
         let sharp = [i.checked_sub(1), (i < last).then_some(i + 1)]
@@ -322,6 +346,30 @@ mod tests {
                 assert!(gap < 80.0, "at {t}: {gap}");
             }
         }
+    }
+
+    #[test]
+    fn the_lane_carries_a_kiai_s_gold_along_with_it_and_none_without_one() {
+        let pts = lane(0.3, 853.3, [20.0, 14.0, 452.0, 34.0]);
+        let gold = |c: &Canvas| {
+            c.shapes
+                .iter()
+                .filter(|s| {
+                    let [r, g, b, a] = s.fill.map(|v| v.max(0.0));
+                    a > 0.0 && r > 0.0 && g / r > 0.7 && b / r < 0.5
+                })
+                .count()
+        };
+        let mut plain = Canvas::default();
+        draw_lane(&mut plain, &pts, 1.0, (0.0, 0.0));
+        assert_eq!(gold(&plain), 0);
+        let mut lit = Canvas::default();
+        draw_lane(&mut lit, &pts, 1.0, (0.8, 0.12));
+        assert!(gold(&lit) >= pts.len() - 1, "every piece of it");
+        assert!(
+            lit.shapes.len() > plain.shapes.len(),
+            "over the lane, not instead"
+        );
     }
 
     #[test]
