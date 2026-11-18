@@ -328,6 +328,12 @@ impl Screen for SongSelect {
             state.select.list_share = state.cfg.song_list_share;
             state.select.banner = state.pick_to_edit || state.picking_lobby_map;
             let phone = mobile::active();
+            // Under the open sort and filter panel nothing lights up for the pointer: it's on the
+            // panel, drawn over all this.
+            let pointer = canvas.mouse;
+            if state.select.lens_ui.is_some() {
+                canvas.mouse = (f32::MIN, f32::MIN);
+            }
             if phone {
                 state.draw_mobile_select(canvas);
             } else {
@@ -635,6 +641,7 @@ impl Screen for SongSelect {
                     ),
                 );
             }
+            canvas.mouse = pointer;
             state.select.draw_popups(canvas, &state.library);
             if let Some(naming) = &state.select.naming {
                 super::collections::draw_collection_naming(canvas, naming);

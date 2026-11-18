@@ -75,12 +75,16 @@ text  617,165  98%
 text  644,165  69pp
 text   47,170  bpm
 text  192,170  length
-text  301,170  length
+text  301,170  length (minutes)
 text   44,182  rolls-and-swells
-text  311,183  < 1:30
-text  374,183  1:30-3:00
-text  436,183  3:00-5:00
-text  499,183  5:00+
+text  306,183  < 1.5
+text  369,183  1.5-3
+text  431,183  3-5
+text  494,183  5+
+text  352,184  7
+text  414,184  0
+text  477,184  0
+text  539,184  0
 text   47,185  hp
 text  191,185  BPM
 text  416,187  1 diff
@@ -90,18 +94,15 @@ text  191,200  date added
 text  300,202  status
 text   47,215  status
 text  192,215  last played
-text  311,215  Ranked
-text  361,215  Loved
-text  411,215  Pending
-text  461,215  Local
-text  511,215  Custom
+text  306,215  Local
 text   44,216  sv-and-kiai
+text  339,216  7
 text  416,221  1 diff
 text   44,230  Regression  |  mapped by tests
 text   47,230  recently played
 text  191,230  ascending
-text  311,238  not played yet
-text  436,238  reset
+text  306,238  not played yet
+text  431,238  reset
 text   47,245  date added
 text   44,250  stream
 text  416,255  1 diff
@@ -179,11 +180,7 @@ hit   300,179    59x14   Lens(Length(0))
 hit   363,179    59x14   Lens(Length(1))
 hit   425,179    59x14   Lens(Length(2))
 hit   488,179    59x14   Lens(Length(3))
-hit   300,211    46x14   Lens(Status(0))
-hit   350,211    46x14   Lens(Status(1))
-hit   400,211    46x14   Lens(Status(2))
-hit   450,211    46x14   Lens(Status(3))
-hit   500,211    46x14   Lens(Status(4))
+hit   300,211    46x14   Lens(Status(3))
 hit   300,234   121x14   Lens(Unplayed)
 hit   425,234   121x14   Lens(Reset)
 hit   771,2      74x14   Changelog

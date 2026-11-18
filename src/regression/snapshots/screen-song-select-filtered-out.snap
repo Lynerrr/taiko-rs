@@ -1,0 +1,42 @@
+text  723,7    log in
+text  778,7    what's new
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   SONGS
+text  264,27   SETTINGS
+text  354,27   MULTIPLAYER
+text  467,27   DOWNLOAD
+text  551,27   Tab
+text  624,28   0 songs, 0 maps  |  taiko only
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text  174,61   search...
+text   35,63   Ranked
+text   93,63   not played
+text  318,63   Sort: artist +2
+text  434,63   Mods
+text   75,64   x
+text  157,64   x
+text  721,71   Leaderboard >
+text  174,200  No maps match.
+text   57,222  Ctrl+Backspace clears the search and filters
+text  641,421  Play
+text   24,452  Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort and filter
+hit   188,20     59x22   Tab(0)
+hit   254,20     82x22   Tab(1)
+hit   344,20    105x22   Tab(2)
+hit   457,20     82x22   Tab(3)
+hit   424,56     44x20   ModsButton
+hit   308,56    110x20   SortList
+hit    24,54    278x24   TextField
+hit    30,58     54x16   LensToken(Status)
+hit    88,58     78x16   LensToken(Unplayed)
+hit   709,64    102x20   BoardPage
+hit   480,414   350x22   Key(Enter)
+hit   472,221     8x48   SplitList
+hit   771,2      74x14   Changelog
+hit   715,2      50x14   Account

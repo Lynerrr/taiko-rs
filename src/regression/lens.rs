@@ -266,7 +266,7 @@ fn the_lens_filters_and_orders_the_list() {
     let mut out = String::new();
     s.set_source(Source::Tja, &lib);
     s.toggle_lens(&lib);
-    let _ = writeln!(out, "TJA star bars: {:?}", s.star_bins);
+    let _ = writeln!(out, "TJA star bars: {:?}", s.facets.stars);
     // A bar, then a higher one: from the first to the second.
     s.lens_pick(LensItem::Star(7), &lib);
     s.lens_pick(LensItem::Star(9), &lib);
@@ -360,4 +360,99 @@ fn the_panel_keys_move_pick_and_close() {
     s.toggle_lens(&lib);
     s.toggle_lens(&lib);
     assert!(s.lens_ui.is_none());
+}
+
+#[test]
+fn the_filters_stay_across_tabs_and_count_what_they_leave() {
+    let lib = library();
+    let mut s = select(&lib);
+    let path = |title: &str| {
+        lib.iter()
+            .find(|e| e.meta.title == title)
+            .unwrap()
+            .path
+            .clone()
+    };
+    s.status.insert(path("Apple Pie"), crate::search::RANKED);
+    s.status.insert(path("Midnight"), crate::search::LOVED);
+    s.played.insert(path("Kaze no Uta"), 1_000);
+    s.refilter(&lib);
+    let mut out = String::new();
+    let tokens = |s: &Select| -> Vec<String> {
+        s.tabs
+            .active(s.shown_source())
+            .tokens()
+            .into_iter()
+            .map(|t| t.1)
+            .collect()
+    };
+    let rows = |s: &Select| -> Vec<String> {
+        s.lens_grid()[2]
+            .iter()
+            .map(|row| format!("{:?}", row[0]))
+            .collect()
+    };
+    let state = |out: &mut String, s: &Select, what: &str| {
+        let _ = writeln!(
+            out,
+            "{what}: tabs list {:?} (maps {:?}), tokens {:?}",
+            s.source_listed,
+            s.source_maps,
+            tokens(s)
+        );
+        let _ = writeln!(out, "  filter rows: {:?}", rows(s));
+        let f = &s.facets;
+        let _ = writeln!(
+            out,
+            "  counts: stars {:?}, status {:?}, course {:?}",
+            f.stars, f.statuses, f.courses
+        );
+    };
+    s.toggle_lens(&lib);
+    state(&mut out, &s, "all sources, nothing on");
+    list(&mut out, &s, &lib);
+    // Not played yet: on in every tab, the tabs' counts with it.
+    s.lens_pick(LensItem::Unplayed, &lib);
+    state(&mut out, &s, "not played yet");
+    s.set_source(Source::Tja, &lib);
+    state(&mut out, &s, "TJA, still not played yet");
+    list(&mut out, &s, &lib);
+    // A course: only among TJA charts.
+    s.lens_pick(LensItem::Course(3), &lib);
+    state(&mut out, &s, "TJA, and Oni");
+    list(&mut out, &s, &lib);
+    s.set_source(Source::Osu, &lib);
+    state(&mut out, &s, "osu!: the course filter left for TJA");
+    list(&mut out, &s, &lib);
+    // A status: never among TJA charts.
+    s.lens_pick(LensItem::Status(0), &lib);
+    state(&mut out, &s, "osu!, and ranked");
+    list(&mut out, &s, &lib);
+    s.set_source(Source::Tja, &lib);
+    state(&mut out, &s, "TJA: Oni again, ranked left for the others");
+    list(&mut out, &s, &lib);
+    s.set_source(Source::All, &lib);
+    state(&mut out, &s, "all sources: ranked, not played");
+    list(&mut out, &s, &lib);
+    assert_eq!(
+        s.tabs.filters.courses,
+        1 << 3,
+        "kept, for the TJA tab, though it doesn't filter here"
+    );
+    assert_snapshot("lens-filters-across-tabs", &out);
+
+    // The status choices are the statuses the tab's maps have, and any picked.
+    s.tabs.filters = Default::default();
+    s.set_source(Source::Own, &lib);
+    let statuses: Vec<String> = s.lens_grid()[2]
+        .iter()
+        .flatten()
+        .filter(|i| matches!(i, LensItem::Status(_)))
+        .map(|i| format!("{i:?}"))
+        .collect();
+    assert_eq!(
+        statuses,
+        ["Status(3)"],
+        "taiko.rs's map, never submitted: Local only"
+    );
 }
