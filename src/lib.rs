@@ -7539,14 +7539,14 @@ impl State {
 
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
-        // A TJA chart stays on this computer: the others have no way to it, and the server
-        // isn't told about it.
-        if self.library[entry].is_tja() {
+        // A TJA chart is played in a lobby (the players without it get it from the host), but
+        // isn't a song to guess: mapguessr's songs are osu! maps.
+        if self.library[entry].is_tja() && self.mp.as_ref().is_some_and(|s| s.mapguessr) {
             self.toast(
                 tr!(
-                    "TJA charts can't be played in multiplayer yet",
-                    "TJA譜面はまだマルチプレイで遊べません",
-                    "TJA-чарты пока нельзя играть в мультиплеере"
+                    "TJA charts can't be guessed in mapguessr",
+                    "TJA譜面はマップ当てに使えません",
+                    "TJA-чарты нельзя угадывать в mapguessr"
                 )
                 .into(),
             );
@@ -8319,12 +8319,15 @@ impl State {
         !e.is_tja() || self.tja_boards
     }
 
-    /// Whether the live play is of a TJA chart (`Entry::is_tja`).
-    fn live_is_tja(&self) -> bool {
+    /// Whether the live play is of a TJA chart (`Entry::is_tja`): a song played on its own, or
+    /// the lobby's map in a match.
+    pub(crate) fn live_is_tja(&self) -> bool {
         self.behind_settings()
             .unwrap_or(&self.scene)
             .song_play()
-            .and_then(|p| self.library.get(p.0))
+            .map(|p| p.0)
+            .or_else(|| self.mp.as_ref().and_then(|s| s.map_entry))
+            .and_then(|i| self.library.get(i))
             .is_some_and(Entry::is_tja)
     }
 
@@ -13570,9 +13573,12 @@ impl State {
     fn send_map_to(&mut self, to: u32) {
         let Some(s) = &self.mp else { return };
         let tx = s.client.bulk_sender();
-        let folder = s
-            .map_entry
-            .and_then(|i| self.library[i].path.parent().map(|p| p.to_path_buf()));
+        let entry = s.map_entry.map(|i| &self.library[i]);
+        let folder = entry.and_then(|e| e.path.parent().map(|p| p.to_path_buf()));
+        // A TJA chart: its file, sent with what it names rather than its whole folder.
+        let tja = entry
+            .filter(|e| e.is_tja())
+            .map(|e| crate::tja_maps::file_of(&e.path));
         let roots = self.lobby_send_roots();
         std::thread::spawn(move || {
             // Stops by itself when the host picks another map.
@@ -13588,18 +13594,19 @@ impl State {
                 send(error("the host doesn't have the map either".into()));
                 return;
             };
-            if !download::is_set_folder(&folder, &roots) {
-                send(error(
-                    "the host's map isn't in a set folder of its own".into(),
-                ));
-                return;
-            }
-            let name = folder
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            match download::pack_folder(&folder) {
-                Ok(bytes) => {
+            let packed = if let Some(file) = tja {
+                download::pack_tja(&file)
+            } else if download::is_set_folder(&folder, &roots) {
+                let name = folder
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                download::pack_folder(&folder).map(|bytes| (name, bytes))
+            } else {
+                Err("the host's map isn't in a set folder of its own".into())
+            };
+            match packed {
+                Ok((name, bytes)) => {
                     let total = bytes.len() as u64;
                     for (k, chunk) in bytes.chunks(download::PART_BYTES).enumerate() {
                         let part = net::MapPart {
@@ -13665,6 +13672,7 @@ impl State {
                 m.hash,
                 self.songs_dir.clone(),
                 self.custom_dir.clone(),
+                self.tja_dir.clone(),
             );
             // A transfer that's still going is given up for this one.
             self.stop_host_transfer();

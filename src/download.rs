@@ -1981,7 +1981,6 @@ pub const PART_BYTES: usize = 96 * 1024;
 /// ([`is_set_file`]), and links aren't followed: what a host sends is the map, never other files
 /// that happen to be next to it.
 pub fn pack_folder(dir: &Path) -> Result<Vec<u8>, String> {
-    use std::io::Write as _;
     const LIMIT: u64 = 300 << 20;
     let mut files = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -2006,6 +2005,12 @@ pub fn pack_folder(dir: &Path) -> Result<Vec<u8>, String> {
     if size > LIMIT {
         return Err(format!("the set is too big to send ({} MB)", size >> 20));
     }
+    zip_files(dir, &files, size)
+}
+
+/// `files` (all in `dir` or below, `size` bytes together) zipped as they are, by their paths
+/// from `dir`.
+fn zip_files(dir: &Path, files: &[PathBuf], size: u64) -> Result<Vec<u8>, String> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::with_capacity(
         size as usize + 4096,
     )));
@@ -2016,11 +2021,41 @@ pub fn pack_folder(dir: &Path) -> Result<Vec<u8>, String> {
             continue;
         };
         let name = rel.to_string_lossy().replace('\\', "/");
-        let bytes = std::fs::read(&f).map_err(|e| e.to_string())?;
+        let bytes = std::fs::read(f).map_err(|e| e.to_string())?;
         zip.start_file(name, options).map_err(|e| e.to_string())?;
         zip.write_all(&bytes).map_err(|e| e.to_string())?;
     }
     Ok(zip.finish().map_err(|e| e.to_string())?.into_inner())
+}
+
+/// A TJA chart file as a lobby host sends it: the `.tja` and the music and pictures it names
+/// (`tja_maps::files_named`: beside it or below, never above), not the rest of its folder,
+/// which can be a pack of other songs. With the name of the folder it goes into.
+pub fn pack_tja(file: &Path) -> Result<(String, Vec<u8>), String> {
+    const LIMIT: u64 = 300 << 20;
+    let dir = file.parent().ok_or("the chart has no folder")?;
+    let mut files = vec![file.to_path_buf()];
+    for named in crate::tja_maps::files_named(file) {
+        if named.is_file() && is_set_file(&named) && !files.contains(&named) {
+            files.push(named);
+        }
+    }
+    let size: u64 = files
+        .iter()
+        .filter_map(|f| std::fs::metadata(f).ok())
+        .map(|m| m.len())
+        .sum();
+    if size > LIMIT {
+        return Err(format!("the chart is too big to send ({} MB)", size >> 20));
+    }
+    // The chart's own folder, unless it lies loose in the TJA folder: then its name.
+    let folder = Some(dir)
+        .filter(|d| !crate::tja_maps::is_root(d))
+        .and_then(Path::file_name)
+        .or_else(|| file.file_stem())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok((folder, zip_files(dir, &files, size)?))
 }
 
 /// Whether `folder` is a set folder a lobby host may send: inside one of `roots` (the Songs
@@ -2200,7 +2235,9 @@ pub fn safe_folder_name(name: &str) -> String {
 }
 
 /// Receives a map set from the multiplayer host: feed the parts (None aborts); the job
-/// reports the unpacked folder like a mirror download.
+/// reports the unpacked folder like a mirror download. A TJA chart (`pack_tja`) goes into the
+/// TJA folder `tja`, the only place it's read from.
+#[allow(clippy::too_many_arguments)]
 pub fn receive(
     set: SetInfo,
     name: String,
@@ -2208,6 +2245,7 @@ pub fn receive(
     map: u64,
     songs: PathBuf,
     custom: PathBuf,
+    tja: Option<PathBuf>,
 ) -> (Job, Sender<Option<Vec<u8>>>) {
     let (feed, parts) = mpsc::channel::<Option<Vec<u8>>>();
     let (tx, rx) = mpsc::channel();
@@ -2236,6 +2274,12 @@ pub fn receive(
                 }
             }
             drop(file);
+            let courses = archive_tja_courses(&archive);
+            if !courses.is_empty() {
+                let result = unpack_tja(&archive, &courses, map, tja.as_deref(), &name);
+                let _ = std::fs::remove_file(&archive);
+                return result;
+            }
             let result = holds_map(&archive, map).and_then(|_| {
                 // In a folder of its own: what the host sent doesn't touch what's there. Only a
                 // set's kinds of file: the host is just another player. A taiko.rs custom set goes
@@ -2340,6 +2384,65 @@ fn holds_map(archive: &Path, map: u64) -> Result<(), String> {
     } else {
         Err("that isn't the lobby's map".into())
     }
+}
+
+/// The hashes (`Entry::hash`) of the TJA courses in an archive's `.tja` files: none for a map
+/// set, or one that can't be read.
+fn archive_tja_courses(archive: &Path) -> Vec<u64> {
+    let Ok(f) = std::fs::File::open(archive) else {
+        return Vec::new();
+    };
+    let Ok(mut zip) = zip::ZipArchive::new(f) else {
+        return Vec::new();
+    };
+    let mut hashes = Vec::new();
+    for i in 0..zip.len() {
+        let Ok(mut entry) = zip.by_index(i) else {
+            continue;
+        };
+        if !entry.is_file()
+            || !entry
+                .enclosed_name()
+                .is_some_and(|n| crate::tja_maps::is_tja_file(&n))
+        {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        if entry
+            .by_ref()
+            .take(16 << 20)
+            .read_to_end(&mut bytes)
+            .is_err()
+        {
+            continue;
+        }
+        if let Ok(song) = taiko_logic::tja::parse_bytes(&bytes) {
+            hashes.extend(song.courses.iter().map(|c| c.hash.short()));
+        }
+    }
+    hashes
+}
+
+/// A TJA chart from the lobby host, unpacked into a folder of its own in the TJA folder `tja`
+/// (with only its chart, music and pictures) once it's the lobby's: one of its `courses` is
+/// `map`.
+fn unpack_tja(
+    archive: &Path,
+    courses: &[u64],
+    map: u64,
+    tja: Option<&Path>,
+    name: &str,
+) -> Result<PathBuf, String> {
+    if !courses.contains(&map) {
+        return Err("that isn't the lobby's map".into());
+    }
+    let root = tja.ok_or("there's no TJA folder to put the chart in")?;
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    let dest = free_folder(root, name);
+    extract_keeping(archive, &dest, &|p| {
+        is_set_file(p) || crate::tja_maps::is_tja_file(p)
+    })?;
+    Ok(dest)
 }
 
 /// `name` in `songs`, or with a number if that's taken.
