@@ -46,3 +46,12 @@ Notable ones: [wgpu](https://github.com/gfx-rs/wgpu) and [winit](https://github.
 [rosu-pp](https://github.com/MaxOhn/rosu-pp) (stars and pp), [image](https://github.com/image-rs/image),
 [zip](https://github.com/zip-rs/zip2), [ureq](https://github.com/algesten/ureq),
 [serde](https://github.com/serde-rs/serde), and on the server [argon2](https://github.com/RustCrypto/password-hashes).
+
+## TJA reference material
+
+The TJA file format has no license tied to it, although some charts and documentation were used as reference material to understand the format itself. Under no circumstances has any official content, including Taiko no Tatsujin charts and OpenTaiko charts, been used as reference material.
+- [TJA documentation](https://iepiweidieng.github.io/TJAPlayer3/tja/) courtesy of @IepIweidieng
+
+These charters have agreed to use their own TJA charts as reference material. Their chart repositories can be found by clicking on their respective names:
+- [BeaniCraft](https://ese.tjadataba.se/BeaniCraft/BeaniCrafts-Charts)
+- [TFD500](https://ese.tjadataba.se/TFD500/TFD500-Charts)
