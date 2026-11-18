@@ -665,6 +665,8 @@ impl Select {
                 epic: asks_epic && self.is_epic(e),
             }
         };
+        let query_facts = query.needs_facts();
+        let no_facts = crate::search::Facts::default();
         // The filters as each tab has them (`Filters::active_in`).
         let active = Source::ALL.map(|s| self.tabs.active(s));
         let lens_open = self.lens_ui.is_some();
@@ -707,9 +709,10 @@ impl Select {
             {
                 continue;
             }
-            let known = (!query.is_empty() || filtering).then(|| facts(i, e));
-            if let Some(f) = known.as_ref().filter(|_| !query.is_empty())
-                && !query.matches_text(&e.meta, e.text(), f)
+            // A search by words alone needs no facts (they cost a few lookups by path each).
+            let known = (query_facts || filtering).then(|| facts(i, e));
+            if !query.is_empty()
+                && !query.matches_text(&e.meta, e.text(), known.as_ref().unwrap_or(&no_facts))
             {
                 continue;
             }
@@ -881,7 +884,9 @@ impl Select {
         for i in 1..=self.visible.len() {
             let split = i == self.visible.len()
                 || each
-                || library[self.visible[i]].set_key() != library[self.visible[i - 1]].set_key()
+                // As bytes: `Path`'s own == goes component by component, and this runs for
+                // every row of the list on each refilter.
+                || library[self.visible[i]].set_key().as_os_str() != library[self.visible[i - 1]].set_key().as_os_str()
                 // The last of one star heading and the first of the next can be the same song's.
                 || (self.sort == SortMode::Difficulty && star_heading(self.row_value[i]) != star_heading(self.row_value[i - 1]));
             if split {

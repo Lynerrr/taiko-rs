@@ -87,7 +87,7 @@ impl Entry {
     pub fn set_key(&self) -> &Path {
         match self.chart_file() {
             Some(file) => file,
-            None => self.path.parent().unwrap_or(Path::new("")),
+            None => folder_of(&self.path),
         }
     }
 
@@ -124,6 +124,22 @@ impl Entry {
     pub fn is_tja(&self) -> bool {
         self.tja
     }
+}
+
+/// The folder `path` is in, as `Path::parent` has it: cut at the last separator, since
+/// `parent` takes the whole path apart into components and song select asks this of every row
+/// on each refilter (`Entry::set_key`). A file at the top of a drive or of `/` goes the long way.
+pub fn folder_of(path: &Path) -> &Path {
+    if let Some(s) = path
+        .to_str()
+        .filter(|s| !s.ends_with(std::path::is_separator))
+        && let Some(at) = s.rfind(std::path::is_separator)
+        && s[..at].contains(std::path::is_separator)
+        && !s[..at].ends_with(std::path::is_separator)
+    {
+        return Path::new(&s[..at]);
+    }
+    path.parent().unwrap_or(Path::new(""))
 }
 
 /// (size, modified as Unix seconds) of a file.
@@ -1259,6 +1275,31 @@ pub(crate) fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Opti
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_maps_folder_is_its_parent_however_it_is_found() {
+        use std::path::Path;
+        for path in [
+            "/home/p/Songs/1 A - B/a.osu",
+            "Songs/1 A - B/b [Oni].osu",
+            "/a//b/c.osu",
+            "/c.osu",
+            "c.osu",
+            "/x/y/z/",
+        ] {
+            let path = Path::new(path);
+            assert_eq!(
+                super::folder_of(path),
+                path.parent().unwrap_or(Path::new("")),
+                "{path:?}"
+            );
+        }
+        #[cfg(windows)]
+        for path in [r"C:\Songs\1 A - B\a.osu", r"C:\a.osu", "C:/Songs/x/a.osu"] {
+            let path = Path::new(path);
+            assert_eq!(super::folder_of(path), path.parent().unwrap(), "{path:?}");
+        }
+    }
+
     use super::*;
 
     /// osu!lazer's `.olz` export is the same zip as an `.osz`: it is a map archive, it is read
