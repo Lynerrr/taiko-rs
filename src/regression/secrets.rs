@@ -112,6 +112,8 @@ fn the_menu_s_stray_note_never_takes_a_button_s_click() {
             paused: false,
             session: (0.0, 0.0),
             glitch: false,
+            shifting: false,
+            away: None,
         };
         menu.draw(&mut c, &frame, &mut eggs);
         let Some(gold) = c.hits.iter().position(|h| h.hit == Hit::StrayNote) else {

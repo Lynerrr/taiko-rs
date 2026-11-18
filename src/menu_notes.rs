@@ -310,6 +310,133 @@ pub fn draw(
     }
 }
 
+/// How many more routes song select has behind it than the menu: the same song, more universes.
+pub const MORE: usize = 12;
+/// How bright those are next to a route of the menu's (they're many: each is fainter).
+const MORE_ALPHA: f32 = 0.45;
+/// How long the more routes take to clear off on the way back to the menu (ms).
+pub const DRAIN_MS: f32 = 700.0;
+
+/// One of song select's routes past the menu's three, and how deep it lies: the deeper, the
+/// further its notes slide with the camera.
+struct More {
+    route: Route,
+    depth: f32,
+}
+
+/// Song select's routes past the menu's: spread down the screen, the same ones every run.
+fn more() -> &'static [More] {
+    static MORE_ROUTES: std::sync::OnceLock<Vec<More>> = std::sync::OnceLock::new();
+    MORE_ROUTES.get_or_init(|| {
+        let mut seed: u32 = 42;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32
+        };
+        (0..MORE)
+            .map(|i| {
+                let y = 24.0 + ((i as f32 * 0.618 + next() * 0.3) % 1.0) * 430.0;
+                let waves = [
+                    (
+                        10.0 + next() * 34.0,
+                        0.6 + next() * 1.6,
+                        (next() - 0.5) * 0.05,
+                    ),
+                    (
+                        4.0 + next() * 12.0,
+                        1.5 + next() * 1.8,
+                        (next() - 0.5) * 0.04,
+                    ),
+                ];
+                let ms = 2200.0 + f64::from(next()) * 4200.0;
+                let (r, alpha) = (4.0 + next() * 9.0, 0.1 + next() * 0.22);
+                More {
+                    route: Route {
+                        y,
+                        waves,
+                        ms,
+                        r,
+                        alpha,
+                    },
+                    depth: 0.3 + next() * 1.2,
+                }
+            })
+            .collect()
+    })
+}
+
+/// How song select's own routes stand.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Crowd {
+    /// How far they've come in (0 to 1).
+    pub shown: f32,
+    /// How far the camera is towards song select (0 on the menu to 1): deeper routes slide
+    /// further with it.
+    pub cam: f32,
+    /// Leaving for the menu: the song's position then (map ms), and how far they've cleared
+    /// off since (0 to 1). No more notes come on; the ones there speed off to the right.
+    pub drain: Option<(f64, f32)>,
+}
+
+/// Song select's routes past the menu's three (`MORE` of them), as `crowd` has them. `clock` and
+/// `shift` as for `draw`.
+pub fn draw_more(c: &mut Canvas, view: &View, clock: f32, shift: usize, crowd: Crowd) {
+    let universes = multiverse::get();
+    let (width, secs) = (c.width, clock / 1000.0);
+    let shown = crowd.shown.clamp(0.0, 1.0);
+    if shown <= 0.0 {
+        return;
+    }
+    for (k, more) in more().iter().enumerate() {
+        let route = &more.route;
+        let universe = universes[(k + 3 + shift) % universes.len()];
+        let ms = route.ms / universe.speed();
+        let slide = crowd.cam * more.depth * 1.4;
+        // Clearing off: pushed right, faster and faster, and fading.
+        let (push, left, from, until) = match crowd.drain {
+            Some((at, e)) => {
+                if e >= 1.0 {
+                    return;
+                }
+                let push = 1.15 * e.powf(1.6) * (1.0 + more.depth);
+                // Only what was on the route when it began: nothing new comes on.
+                let first = at + f64::from(slide - PAST) * ms;
+                let last = at + f64::from(1.0 + slide) * ms;
+                (push, 1.0 - e, first, last)
+            }
+            None => (0.0, 1.0, f64::MIN, f64::MAX),
+        };
+        let bright = view.fade * shown * left;
+        const DOTS: usize = 56;
+        for dot in 0..DOTS {
+            let [x, y] = route_point(route, dot as f32 / DOTS as f32, secs, width, 1.0);
+            c.rect(x, y, 2.0, 2.0, rgba(universe.idle(), 0.09 * bright));
+        }
+        let from = from.max(view.time + f64::from(slide - push - PAST) * ms);
+        let until = until.min(view.time + f64::from(1.0 + slide - push) * ms);
+        if until <= from {
+            continue;
+        }
+        let start = view.notes.partition_point(|n| n.time < from);
+        let end = start + view.notes[start..].partition_point(|n| n.time <= until);
+        for note in view.notes[start..end].iter().rev() {
+            let along = ((note.time - view.time) / ms) as f32 - slide + push;
+            let [x, y] = route_point(route, along, secs, width, 1.0);
+            let ends = ((along + PAST) / PAST)
+                .min((1.0 - along) * 8.0)
+                .clamp(0.0, 1.0);
+            let col = if note.kat {
+                universe.kat()
+            } else {
+                universe.don()
+            };
+            let r = route.r * if note.big { 1.45 } else { 1.0 };
+            let a = route.alpha * MORE_ALPHA * view.fade * shown * ends;
+            crate::game::shaped_note(c, universe.shape, x, y, r, col, a);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,6 +497,73 @@ mod tests {
             set_of(&converts, 0),
             vec![0, 1],
             "only converts: those will do"
+        );
+    }
+
+    #[test]
+    fn song_selects_routes_are_the_same_every_run_and_stay_faint() {
+        let a = more();
+        assert_eq!(a.len(), MORE);
+        assert!(std::ptr::eq(a, more()));
+        for m in a {
+            assert!(m.route.y > 0.0 && m.route.y < 480.0, "on the screen");
+            assert!(
+                m.route.alpha * MORE_ALPHA < 0.16,
+                "fainter than the menu's own"
+            );
+            assert!(m.route.ms > 1000.0 && m.depth > 0.0);
+        }
+    }
+
+    #[test]
+    fn leaving_song_select_clears_its_routes_off_to_the_right_and_brings_none_on() {
+        let notes: Vec<Ghost> = (0..400)
+            .map(|i| Ghost {
+                time: f64::from(i) * 100.0,
+                kat: i % 2 == 0,
+                big: false,
+            })
+            .collect();
+        let draw = |time: f64, crowd: Crowd| {
+            let mut c = Canvas {
+                width: 853.3,
+                ..Default::default()
+            };
+            draw_more(&mut c, &View::of(&notes, time), 0.0, 0, crowd);
+            c
+        };
+        let still = Crowd {
+            shown: 1.0,
+            cam: 1.0,
+            drain: None,
+        };
+        let full = draw(10_000.0, still);
+        assert!(
+            full.shapes.len() > MORE * 56,
+            "every route with notes on it"
+        );
+        let none = draw(
+            10_000.0,
+            Crowd {
+                shown: 0.0,
+                ..still
+            },
+        );
+        assert!(none.shapes.is_empty(), "not shown: nothing");
+        // Half way through clearing off, at the same moment: fewer notes, none new (later).
+        let leaving = |e: f32| Crowd {
+            drain: Some((10_000.0, e)),
+            ..still
+        };
+        let half = draw(10_000.0, leaving(0.5));
+        assert!(half.shapes.len() < full.shapes.len());
+        // Later in the song the routes would be full of other notes; draining, they stay empty.
+        let later = draw(16_000.0, leaving(0.9));
+        let count = |c: &Canvas| c.shapes.len();
+        assert!(count(&later) < count(&draw(16_000.0, still)));
+        assert!(
+            draw(10_000.0, leaving(1.0)).shapes.is_empty(),
+            "gone at the end"
         );
     }
 

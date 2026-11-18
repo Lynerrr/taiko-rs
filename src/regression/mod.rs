@@ -25,6 +25,7 @@ mod gameplay;
 mod glyphs;
 mod lens;
 mod map_delete;
+mod menu_shift;
 mod music_player;
 mod network;
 mod phone;
