@@ -75,8 +75,9 @@ impl Source {
         }
     }
 
-    pub fn takes(self, e: &Entry) -> bool {
-        self == Source::All || Source::of(e) == self
+    /// Whether a map from `source` is listed under this one.
+    pub fn takes(self, source: Source) -> bool {
+        self == Source::All || source == self
     }
 }
 

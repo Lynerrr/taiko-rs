@@ -641,16 +641,6 @@ impl Select {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        // The maps of each source, for its tab, and so the source shown.
-        let mut maps = [0; 4];
-        for e in library
-            .iter()
-            .filter(|e| !self.gone.contains(&e.path) && (self.show_converts || e.meta.mode == 1))
-        {
-            maps[0] += 1;
-            maps[Source::of(e).index()] += 1;
-        }
-        self.source_maps = maps;
         let info = self.info.as_ref().map(|i| i.lock().unwrap());
         let facts = |i: usize, e: &Entry| {
             let known = info.as_ref().and_then(|v| v.get(i).copied().flatten());
@@ -672,31 +662,39 @@ impl Select {
                 epic: asks_epic && self.is_epic(e),
             }
         };
-        let listable =
-            |e: &Entry| !self.gone.contains(&e.path) && (self.show_converts || e.meta.mode == 1);
-        let source = self.shown_source();
         let filters = self.tabs.filters;
         let count_bins = self.lens_ui.is_some();
-        let mut bins = [0; 10];
-        let mut visible = Vec::new();
+        let lens = !filters.is_empty() || count_bins;
+        // One pass over the library: each source's maps (for its tab, and whether the picked one
+        // has any), and what passes everything but the source, with its source (None: pinned,
+        // listed whatever the source). The star bars are counted for each source and all.
+        let mut maps = [0; 4];
+        let mut bins = [[0; 10]; 4];
+        let mut passed: Vec<(usize, Option<Source>)> = Vec::new();
         for (i, e) in library.iter().enumerate() {
             if self.gone.contains(&e.path) {
                 continue;
             }
+            let listable = self.show_converts || e.meta.mode == 1;
+            let source = listable.then(|| Source::of(e));
+            if let Some(s) = source {
+                maps[0] += 1;
+                maps[s.index()] += 1;
+            }
             if self.pinned.contains(&e.path) {
-                visible.push(i);
+                passed.push((i, None));
                 continue;
             }
-            if !(listable(e)
-                && source.takes(e)
-                && only.is_none_or(|set| set.contains(&i))
+            let Some(source) = source else {
+                continue;
+            };
+            if !(only.is_none_or(|set| set.contains(&i))
                 && by_collection
                     .iter()
                     .all(|(negated, inside, set)| (set.contains(&i) == *inside) != *negated))
             {
                 continue;
             }
-            let lens = !filters.is_empty() || count_bins;
             let known = (!query.is_empty() || lens).then(|| facts(i, e));
             if let Some(f) = known.as_ref().filter(|_| !query.is_empty())
                 && !query.matches_text(&e.meta, e.text(), f)
@@ -709,17 +707,25 @@ impl Select {
                     && filters.keeps(f, course, false)
                     && let Some(s) = f.stars
                 {
-                    bins[star_bin(s)] += 1;
+                    let b = star_bin(s);
+                    bins[0][b] += 1;
+                    bins[source.index()][b] += 1;
                 }
                 if !filters.keeps(f, course, true) {
                     continue;
                 }
             }
-            visible.push(i);
+            passed.push((i, Some(source)));
         }
         drop(info);
-        self.visible = visible;
-        self.star_bins = bins;
+        self.source_maps = maps;
+        let shown = self.shown_source();
+        self.visible = passed
+            .into_iter()
+            .filter(|&(_, s)| s.is_none_or(|s| shown.takes(s)))
+            .map(|(i, _)| i)
+            .collect();
+        self.star_bins = bins[shown.index()];
         self.sort_visible(library);
         self.regroup(library);
         match selected.and_then(|s| self.visible.iter().position(|&v| v == s)) {
