@@ -85,10 +85,11 @@ pub enum Status {
     Off,
     Checking,
     UpToDate,
-    /// A newer build (or the other channel's): its commit, the archive's URLs (tried in
-    /// order) and size.
+    /// A newer build (or the other channel's): its commit, what it's called (`release_name`),
+    /// the archive's URLs (tried in order) and size.
     Available {
         commit: String,
+        name: String,
         urls: Vec<String>,
         size: u64,
     },
@@ -114,6 +115,33 @@ pub struct Updater {
 /// Short form of a commit hash for display.
 pub fn short(commit: &str) -> &str {
     &commit[..commit.len().min(7)]
+}
+
+/// This build as players know it (`version_label`); None for a local build.
+pub fn this_build() -> Option<String> {
+    BUILD.map(|commit| version_label(env!("CARGO_PKG_VERSION"), BUILD_CHANNEL, commit))
+}
+
+/// What a CI build of `version` (Cargo.toml's) from `commit` for `channel` is called: the
+/// version for a stable build (`1.0.0`), with `-dev` and the commit for a test build, which
+/// several builds of the same version are (`1.0.0-dev (abc1234)`). The release notes'
+/// `Version:` line says the same (release.yml).
+pub fn version_label(version: &str, channel: Channel, commit: &str) -> String {
+    match channel {
+        Channel::Stable => version.to_string(),
+        Channel::Dev => format!("{version}-dev ({})", short(commit)),
+    }
+}
+
+/// What a release is called (its notes' `Version:` line, release.yml), else, for one published
+/// before versions were named, its commit's short form.
+fn release_name(notes: &str, commit: &str) -> String {
+    notes
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Version:"))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| short(commit).to_string(), str::to_string)
 }
 
 impl Updater {
@@ -189,11 +217,16 @@ impl Updater {
         let (status, current) = (self.status.clone(), self.channel.clone());
         let channel = self.channel();
         std::thread::spawn(move || {
-            let result = release(channel).map(|(commit, urls, size)| {
+            let result = release(channel).map(|(commit, name, urls, size)| {
                 if commit == build && channel == BUILD_CHANNEL {
                     Status::UpToDate
                 } else {
-                    Status::Available { commit, urls, size }
+                    Status::Available {
+                        commit,
+                        name,
+                        urls,
+                        size,
+                    }
                 }
             });
             let mut status = status.lock().unwrap();
@@ -208,7 +241,7 @@ impl Updater {
         });
     }
 
-    /// Starts installing what the check at launch found: the commit, once, when it found one.
+    /// Starts installing what the check at launch found: what it's called, once, when it found one.
     /// Call every frame the game could take it.
     pub fn install_at_launch(&self) -> Option<String> {
         if !self.at_launch.load(Ordering::Relaxed) {
@@ -219,11 +252,11 @@ impl Updater {
             return None;
         }
         self.at_launch.store(false, Ordering::Relaxed);
-        let Status::Available { commit, .. } = status else {
+        let Status::Available { name, .. } = status else {
             return None;
         };
         self.install();
-        Some(commit)
+        Some(name)
     }
 
     /// Downloads and swaps in the available build. Status goes to `Installed` (then call
@@ -312,12 +345,13 @@ pub fn api_get(path: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-/// The channel's release: its commit and this platform's archive (URLs, size).
+/// The channel's release: its commit, what it's called (`release_name`) and this platform's
+/// archive (URLs, size).
 ///
 /// The archive has two URLs: the usual download link, and the API's link to the same file,
 /// which goes through a different GitHub front end and still works when the first one answers
 /// 504 (as it did for hours on 2026-11-08).
-fn release(channel: Channel) -> Result<(String, Vec<String>, u64), String> {
+fn release(channel: Channel) -> Result<(String, String, Vec<String>, u64), String> {
     crate::offline::internet()?;
     #[derive(serde::Deserialize)]
     struct Asset {
@@ -329,6 +363,8 @@ fn release(channel: Channel) -> Result<(String, Vec<String>, u64), String> {
     #[derive(serde::Deserialize)]
     struct Release {
         target_commitish: String,
+        #[serde(default)]
+        body: Option<String>,
         assets: Vec<Asset>,
     }
     let url = format!(
@@ -354,8 +390,13 @@ fn release(channel: Channel) -> Result<(String, Vec<String>, u64), String> {
         .into_iter()
         .find(|a| a.name == ASSET)
         .ok_or_else(|| format!("no {ASSET} in the {} release", channel.name()))?;
+    let name = release_name(
+        release.body.as_deref().unwrap_or(""),
+        &release.target_commitish,
+    );
     Ok((
         release.target_commitish,
+        name,
         vec![asset.browser_download_url, asset.url],
         asset.size,
     ))
@@ -524,7 +565,37 @@ fn swap(exe: &Path, new: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BUILD_CHANNEL, Channel, Ordering, Status, Updater, first_working};
+    use super::{
+        BUILD_CHANNEL, Channel, Ordering, Status, Updater, first_working, release_name,
+        version_label,
+    };
+
+    #[test]
+    fn a_stable_build_is_called_by_its_version_and_a_test_build_by_its_commit_too() {
+        let commit = "0123456789abcdef";
+        assert_eq!(version_label("1.0.0", Channel::Stable, commit), "1.0.0");
+        assert_eq!(
+            version_label("1.0.0", Channel::Dev, commit),
+            "1.0.0-dev (0123456)"
+        );
+    }
+
+    #[test]
+    fn a_release_is_called_by_its_notes_version_line_else_by_its_commit() {
+        let commit = "0123456789abcdef";
+        let notes = "Version: 1.2.0\n\nBuild of 0123456789abcdef.\n";
+        assert_eq!(release_name(notes, commit), "1.2.0");
+        assert_eq!(
+            release_name("Version: 1.3.0-dev (0123456)\r\n\nTest build", commit),
+            "1.3.0-dev (0123456)"
+        );
+        // Published before versions were named, or with the line left empty.
+        assert_eq!(
+            release_name("Build of 0123456789abcdef.", commit),
+            "0123456"
+        );
+        assert_eq!(release_name("Version:  \nBuild", commit), "0123456");
+    }
 
     #[test]
     fn tests_see_a_stable_build_whatever_channel_ci_builds() {
@@ -545,6 +616,7 @@ mod tests {
     fn found(u: &Updater) {
         *u.status.lock().unwrap() = Status::Available {
             commit: "abc".into(),
+            name: "1.0.1".into(),
             // Nothing listens there: the install fails at once, without the network.
             urls: vec!["http://127.0.0.1:1/x".into()],
             size: 1,
@@ -556,7 +628,11 @@ mod tests {
         let u = launching();
         assert_eq!(u.install_at_launch(), None);
         found(&u);
-        assert_eq!(u.install_at_launch().as_deref(), Some("abc"));
+        assert_eq!(
+            u.install_at_launch().as_deref(),
+            Some("1.0.1"),
+            "by its name"
+        );
         assert_ne!(u.status(), Status::Checking);
         found(&u);
         assert_eq!(u.install_at_launch(), None);

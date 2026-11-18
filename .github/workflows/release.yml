@@ -240,6 +240,11 @@ jobs:
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/worktree-taiko-client' || github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest
     steps:
+      # Cargo.toml only: the version the releases are named by.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: Cargo.toml
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
@@ -250,11 +255,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # The version players see (Cargo.toml's, src/update.rs version_label): the notes'
+          # first line says it, and the game's updater reads it from there.
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
           # Recreate the release so its tag always points at this commit.
           gh release delete latest --yes --cleanup-tag || true
           raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/worktree-taiko-client"
-          notes=$(printf 'Build of %s.\n\nOn Windows: run `taiko-rs-windows-x64-setup.exe`, or install or update from PowerShell:\n```powershell\nirm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | sh\n```\n\nOn macOS (11+, Apple silicon or Intel), the same command in Terminal: `taiko-rs-macos.tar.gz` is not signed by Apple, so macOS stops it when it comes through a browser.\n\nOn Android (8.0+, 64-bit ARM): install `taiko-rs-android.apk`.' "$GITHUB_SHA" "$raw" "$raw")
-          gh release create latest taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs (latest build)" --notes "$notes" --target "$GITHUB_SHA"
+          notes=$(printf 'Version: %s\n\nBuild of %s.\n\nOn Windows: run `taiko-rs-windows-x64-setup.exe`, or install or update from PowerShell:\n```powershell\nirm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | sh\n```\n\nOn macOS (11+, Apple silicon or Intel), the same command in Terminal: `taiko-rs-macos.tar.gz` is not signed by Apple, so macOS stops it when it comes through a browser.\n\nOn Android (8.0+, 64-bit ARM): install `taiko-rs-android.apk`.' "$version" "$GITHUB_SHA" "$raw" "$raw")
+          gh release create latest taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs $version" --notes "$notes" --target "$GITHUB_SHA"
+          # Each version also keeps a release of its own (docs/releasing.md), made by its first
+          # build. "latest" stays the one installers, the game and GitHub's Latest badge use.
+          if ! gh release view "v$version" >/dev/null 2>&1; then
+            gh release create "v$version" taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs $version" --notes "$notes" --target "$GITHUB_SHA" --latest=false
+          fi
 
       - name: Publish "dev-build" pre-release
         if: github.ref == 'refs/heads/dev'
@@ -262,10 +275,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # A test build of the version on dev (src/update.rs version_label).
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          label="$version-dev (${GITHUB_SHA:0:7})"
           raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/worktree-taiko-client"
-          notes=$(printf 'Test build of %s (the `dev` branch); it may be broken.\n\nIn the game: Settings -> Updates -> Build channel: dev, then Update. Or install it directly on Windows (PowerShell):\n```powershell\n$env:TAIKO_RS_CHANNEL="dev"; irm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | TAIKO_RS_CHANNEL=dev sh\n```\n\nOn macOS, the same command in Terminal.' "$GITHUB_SHA" "$raw" "$raw")
+          notes=$(printf 'Version: %s\n\nTest build of %s (the `dev` branch); it may be broken.\n\nIn the game: Settings -> Updates -> Build channel: dev, then Update. Or install it directly on Windows (PowerShell):\n```powershell\n$env:TAIKO_RS_CHANNEL="dev"; irm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | TAIKO_RS_CHANNEL=dev sh\n```\n\nOn macOS, the same command in Terminal.' "$label" "$GITHUB_SHA" "$raw" "$raw")
           gh release delete dev-build --yes --cleanup-tag || true
-          gh release create dev-build taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs (dev build)" --notes "$notes" --target "$GITHUB_SHA" --prerelease --latest=false
+          gh release create dev-build taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs $label" --notes "$notes" --target "$GITHUB_SHA" --prerelease --latest=false
 
   # Runs the same one-line install command users run, on a fresh machine, against the release
   # that was just published.
