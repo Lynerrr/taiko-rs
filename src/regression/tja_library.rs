@@ -1258,3 +1258,19 @@ fn a_tja_song_folder_goes_whole_only_with_no_other_song_in_it() {
     assert!(!folder.exists() && in_bin(&s, &folder).is_some());
     assert!(f.tja.join("Pack/Box").is_dir());
 }
+
+/// A bar of zero (`#MEASURE 0/1`, TaikoManyGimmicks charts stack notes with it hundreds of
+/// times) lasts no time, as in OpenTaiko: its notes and the next bar's meet the drum together.
+/// It was ignored, the bar before's length used, and every one pushed the rest of the chart
+/// later off the song.
+#[test]
+fn notes_after_a_bar_of_zero_meet_the_drum_on_time() {
+    let text = "TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n#MEASURE 1/4\n0,\n#MEASURE 0/1\n1,\n#MEASURE 4/4\n1,\n#END\n";
+    let (dons, _) = drawn_at(text, 500.0);
+    let hx = taiko_logic::sim::HIT_X;
+    assert_eq!(dons.len(), 2, "{dons:?}");
+    assert!(
+        dons.iter().all(|d| (d.0 - hx).abs() < 0.05),
+        "both on the drum at 500: {dons:?}"
+    );
+}
