@@ -6563,6 +6563,14 @@ impl State {
             dd.wheel(notches);
             return;
         }
+        // The wheel over the sort and filter panel doesn't scroll the list under it (beside it,
+        // it does: to see what the filters left).
+        if self.scene.is_select() && self.select.lens_ui.is_some() {
+            let (vx, vy) = self.mouse_virtual();
+            if matches!(self.hit_at(vx, vy), Some(hit::Hit::Lens(_))) {
+                return;
+            }
+        }
         if self.scene.screen_is::<Preview>() {
             let (vx, vy) = self.mouse_virtual();
             if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() {

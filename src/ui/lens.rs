@@ -74,11 +74,6 @@ impl Source {
             Source::Osu
         }
     }
-
-    /// Whether a map from `source` is listed under this one.
-    pub fn takes(self, source: Source) -> bool {
-        self == Source::All || source == self
-    }
 }
 
 /// How the songs under each heading are ordered (all of them without headings).
@@ -216,12 +211,13 @@ impl Lens {
     }
 }
 
-/// The length filter's spans: a name and where each ends (seconds).
+/// The length filter's spans: a name (in minutes, as its caption says) and where each ends
+/// (seconds).
 pub const LENGTHS: [(&str, f64); 4] = [
-    ("< 1:30", 90.0),
-    ("1:30-3:00", 180.0),
-    ("3:00-5:00", 300.0),
-    ("5:00+", f64::INFINITY),
+    ("< 1.5", 90.0),
+    ("1.5-3", 180.0),
+    ("3-5", 300.0),
+    ("5+", f64::INFINITY),
 ];
 
 /// The status filter's choices: a name, its colour (the status headings') and the statuses in it.
@@ -299,22 +295,36 @@ impl Filters {
         *self == Filters::default()
     }
 
-    /// Whether a map with `facts` (and `course`, a TJA chart's) is kept; `stars` false leaves
-    /// the star filter out (what the star bars count).
-    pub fn keeps(&self, facts: &Facts, course: Option<CourseKind>, stars: bool) -> bool {
-        if let (true, Some((lo, hi))) = (stars, self.stars) {
+    /// The filters that mean something under `tab`: the course filter only among TJA charts,
+    /// the status filter (osu!'s and taiko.rs's) everywhere else. The others are kept for when
+    /// the tab they're for is back, but don't filter, nor show as tokens.
+    pub fn active_in(&self, tab: Source) -> Filters {
+        let mut f = *self;
+        if tab == Source::Tja {
+            f.statuses = 0;
+        } else {
+            f.courses = 0;
+        }
+        f
+    }
+
+    /// Whether a map with `facts` (and `course`, a TJA chart's) is kept; `skip` leaves one
+    /// filter out (what that filter's own choices count).
+    pub fn keeps(&self, facts: &Facts, course: Option<CourseKind>, skip: Option<Token>) -> bool {
+        if let (true, Some((lo, hi))) = (skip != Some(Token::Stars), self.stars) {
             match facts.stars {
                 Some(s) if (lo..=hi).contains(&(star_bin(s) as u8)) => {}
                 _ => return false,
             }
         }
-        if self.lengths != 0 {
+        if self.lengths != 0 && skip != Some(Token::Length) {
             match facts.length_s {
                 Some(l) if self.lengths & 1 << length_bin(l) != 0 => {}
                 _ => return false,
             }
         }
         if self.statuses != 0
+            && skip != Some(Token::Status)
             && !STATUSES
                 .iter()
                 .enumerate()
@@ -322,13 +332,13 @@ impl Filters {
         {
             return false;
         }
-        if self.courses != 0 {
+        if self.courses != 0 && skip != Some(Token::Course) {
             match course.and_then(|c| COURSES.iter().position(|x| x.2 == c)) {
                 Some(k) if self.courses & 1 << k != 0 => {}
                 _ => return false,
             }
         }
-        !(self.unplayed && facts.played_days.is_some())
+        !(self.unplayed && skip != Some(Token::Unplayed) && facts.played_days.is_some())
     }
 
     /// Whether they need the background analysis (stars of osu!'s maps, lengths).
@@ -348,22 +358,13 @@ impl Filters {
                 .join(" ")
         };
         if let Some((lo, hi)) = self.stars {
-            let bar = |b: u8| match b {
-                9 => "10+".to_string(),
-                b => (b + 1).to_string(),
-            };
-            let text = match (lo, hi) {
-                (0, 9) => "any".to_string(),
-                (lo, hi) if lo == hi => bar(lo),
-                (lo, 9) => format!("{}+", lo + 1),
-                (lo, hi) => format!("{}-{}", bar(lo), hi + 1),
-            };
+            let text = stars_text(Some((lo, hi)));
             let colour = crate::stars::color(lo as f32 + 1.5);
             out.push((Token::Stars, format!("stars {text}"), colour));
         }
         if self.lengths != 0 {
             let text = names(self.lengths, &mut LENGTHS.iter().map(|l| l.0));
-            out.push((Token::Length, text, 0xc8c8d8));
+            out.push((Token::Length, format!("{text} min"), 0xc8c8d8));
         }
         if self.statuses != 0 {
             let text = names(self.statuses, &mut STATUSES.iter().map(|s| s.0));
@@ -403,16 +404,75 @@ impl Filters {
     }
 }
 
-/// The source shown, and each source's lens and filters.
+/// The star bars kept, as the token and the panel say it: `7`, `5-8`, `8+`, `any`.
+pub fn stars_text(stars: Option<(u8, u8)>) -> String {
+    let bar = |b: u8| match b {
+        9 => "10+".to_string(),
+        b => (b + 1).to_string(),
+    };
+    match stars {
+        None | Some((0, 9)) => "any".to_string(),
+        Some((lo, hi)) if lo == hi => bar(lo),
+        Some((lo, 9)) => format!("{}+", lo + 1),
+        Some((lo, hi)) => format!("{}-{}", bar(lo), hi + 1),
+    }
+}
+
+/// The `STATUSES` choice a status code is under.
+pub fn status_choice(status: u8) -> Option<usize> {
+    STATUSES.iter().position(|s| s.2.contains(&status))
+}
+
+/// What each filter's choices would list, the other filters as they are: the star bars, and the
+/// counts on the length, status and course blocks. Counted while the panel is open.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Facets {
+    pub stars: [u32; 10],
+    pub lengths: [u32; 4],
+    pub statuses: [u32; 5],
+    pub courses: [u32; 5],
+    /// The statuses some map of the tab has, whatever the search and filters: the status
+    /// choices the panel offers.
+    pub has_status: u8,
+}
+
+impl Facets {
+    /// Counts a map with `facts` under the filters `active`.
+    pub fn count(&mut self, active: &Filters, facts: &Facts, course: Option<CourseKind>) {
+        if let Some(s) = facts.stars
+            && active.keeps(facts, course, Some(Token::Stars))
+        {
+            self.stars[star_bin(s)] += 1;
+        }
+        if let Some(l) = facts.length_s
+            && active.keeps(facts, course, Some(Token::Length))
+        {
+            self.lengths[length_bin(l)] += 1;
+        }
+        if let Some(k) = status_choice(facts.status)
+            && active.keeps(facts, course, Some(Token::Status))
+        {
+            self.statuses[k] += 1;
+        }
+        if let Some(k) = course.and_then(|c| COURSES.iter().position(|x| x.2 == c))
+            && active.keeps(facts, course, Some(Token::Course))
+        {
+            self.courses[k] += 1;
+        }
+    }
+}
+
+/// The source shown, each source's lens, and the filters (one set for every source).
 #[derive(Clone, PartialEq, Debug)]
 pub struct Tabs {
     pub source: Source,
-    /// The shown source's order and filters (its sort and headings are `Select`'s).
+    /// The shown source's order (its sort and headings are `Select`'s).
     pub order: Order,
     pub desc: bool,
+    /// The same whatever the source: a switch keeps them (see `Filters::active_in`).
     pub filters: Filters,
-    /// Each source's lens and filters as it was left (the shown one's are live).
-    pub saved: [(Lens, Filters); 4],
+    /// Each source's lens as it was left (the shown one's is live).
+    pub saved: [Lens; 4],
 }
 
 impl Default for Tabs {
@@ -422,7 +482,7 @@ impl Default for Tabs {
             order: Order::Sort,
             desc: false,
             filters: Filters::default(),
-            saved: Source::ALL.map(|s| (Lens::first(s, Lens::PLAIN), Filters::default())),
+            saved: Source::ALL.map(|s| Lens::first(s, Lens::PLAIN)),
         }
     }
 }
@@ -431,6 +491,11 @@ impl Tabs {
     /// Whether what's shown waits on the background analysis.
     pub fn needs_info(&self) -> bool {
         self.order.needs_info() || self.filters.needs_info()
+    }
+
+    /// The filters that filter under `tab`.
+    pub fn active(&self, tab: Source) -> Filters {
+        self.filters.active_in(tab)
     }
 }
 
@@ -492,8 +557,9 @@ impl Select {
             (0..10).map(LensItem::Star).collect(),
             (0..LENGTHS.len() as u8).map(LensItem::Length).collect(),
         ];
-        if self.lens_shows_statuses() {
-            filters.push((0..STATUSES.len() as u8).map(LensItem::Status).collect());
+        let statuses = self.lens_statuses();
+        if !statuses.is_empty() {
+            filters.push(statuses);
         }
         if self.lens_shows_courses() {
             filters.push((0..COURSES.len() as u8).map(LensItem::Course).collect());
@@ -502,20 +568,22 @@ impl Select {
         [sorts, orders, filters]
     }
 
-    fn lens_shows_statuses(&self) -> bool {
-        let n = &self.source_maps;
-        match self.shown_source() {
-            Source::All => n[Source::Osu.index()] + n[Source::Own.index()] > 0,
-            Source::Tja => false,
-            _ => true,
+    /// The status choices: the statuses the shown tab's maps have (and any picked), none among
+    /// TJA charts.
+    fn lens_statuses(&self) -> Vec<LensItem> {
+        if self.shown_source() == Source::Tja {
+            return Vec::new();
         }
+        let on = self.tabs.filters.statuses | self.facets.has_status;
+        (0..STATUSES.len() as u8)
+            .filter(|k| on & 1 << k != 0)
+            .map(LensItem::Status)
+            .collect()
     }
 
+    /// The course filter: in the TJA tab only (a course is a TJA chart's).
     fn lens_shows_courses(&self) -> bool {
-        match self.shown_source() {
-            Source::All => self.source_maps[Source::Tja.index()] > 0,
-            source => source == Source::Tja,
-        }
+        self.shown_source() == Source::Tja
     }
 
     /// Opens the sort and filter panel (on the sort the list has), or closes it.
@@ -630,7 +698,7 @@ impl Select {
         if source == self.tabs.source {
             self.lens()
         } else {
-            self.tabs.saved[source.index()].0
+            self.tabs.saved[source.index()]
         }
     }
 
@@ -641,17 +709,17 @@ impl Select {
         self.tabs.desc = lens.desc;
     }
 
-    /// Shows the maps of `source` with its own lens and filters; the one left keeps its own.
+    /// Shows the maps of `source` with its own lens (the one left keeps its own) and the same
+    /// filters.
     pub fn set_source(&mut self, source: Source, library: &[Entry]) {
         if source == self.tabs.source {
             return;
         }
         let old = self.tabs.source.index();
-        self.tabs.saved[old] = (self.lens(), self.tabs.filters);
+        self.tabs.saved[old] = self.lens();
         self.tabs.source = source;
-        let (lens, filters) = self.tabs.saved[source.index()];
+        let lens = self.tabs.saved[source.index()];
         self.set_lens(lens);
-        self.tabs.filters = filters;
         self.source_switched = Some(Instant::now());
         self.refilter(library);
     }
@@ -802,18 +870,7 @@ impl Select {
             let rstart = c.shapes.len();
             match items[0] {
                 LensItem::Star(_) => {
-                    let range = match f.stars {
-                        Some((lo, hi)) => format!(
-                            "{}-{}",
-                            lo + 1,
-                            if hi == 9 {
-                                "10+".to_string()
-                            } else {
-                                (hi + 1).to_string()
-                            }
-                        ),
-                        None => "any".to_string(),
-                    };
+                    let range = stars_text(f.stars);
                     c.text(
                         fx,
                         fy,
@@ -823,11 +880,12 @@ impl Select {
                     );
                     c.text_right(fx + COL_FILTER_W, fy, 6.0, rgba(0xffffff, 1.0), &range);
                     let by = fy + 10.0;
-                    let most = self.star_bins.iter().copied().max().unwrap_or(0).max(1) as f32;
+                    let bars = &self.facets.stars;
+                    let most = bars.iter().copied().max().unwrap_or(0).max(1) as f32;
                     let bw = (COL_FILTER_W - 9.0 * 3.0) / 10.0;
                     for b in 0..10u8 {
                         let bx = fx + b as f32 * (bw + 3.0);
-                        let n = self.star_bins[b as usize];
+                        let n = bars[b as usize];
                         let kept = f.stars.is_none_or(|(lo, hi)| (lo..=hi).contains(&b));
                         let col = crate::stars::color(b as f32 + 1.5);
                         let bh = if n == 0 {
@@ -877,7 +935,7 @@ impl Select {
                 }
                 first => {
                     let caption = match first {
-                        LensItem::Length(_) => "length",
+                        LensItem::Length(_) => "length (minutes)",
                         LensItem::Status(_) => "status",
                         LensItem::Course(_) => "TJA course",
                         _ => "",
@@ -886,27 +944,37 @@ impl Select {
                         c.text(fx, fy, 6.0, rgba(0x6f6f86, 1.0), caption);
                         fy += 9.0;
                     }
-                    let n = items.len() as f32;
+                    // Status blocks as wide as with every status there, whichever are.
+                    let n = match first {
+                        LensItem::Status(_) => STATUSES.len(),
+                        _ => items.len(),
+                    } as f32;
                     let bw = (COL_FILTER_W - (n - 1.0) * 4.0) / n;
                     for (k, &item) in items.iter().enumerate() {
                         let bx = fx + k as f32 * (bw + 4.0);
-                        let (label, colour, on) = match item {
-                            LensItem::Length(i) => {
-                                (LENGTHS[i as usize].0, 0xc8c8d8, f.lengths & 1 << i != 0)
-                            }
+                        let facets = &self.facets;
+                        let (label, colour, on, count) = match item {
+                            LensItem::Length(i) => (
+                                LENGTHS[i as usize].0,
+                                0xc8c8d8,
+                                f.lengths & 1 << i != 0,
+                                Some(facets.lengths[i as usize]),
+                            ),
                             LensItem::Status(i) => {
                                 let s = STATUSES[i as usize];
-                                (s.0, s.1, f.statuses & 1 << i != 0)
+                                let n = facets.statuses[i as usize];
+                                (s.0, s.1, f.statuses & 1 << i != 0, Some(n))
                             }
                             LensItem::Course(i) => {
                                 let s = COURSES[i as usize];
-                                (s.0, s.1, f.courses & 1 << i != 0)
+                                let n = facets.courses[i as usize];
+                                (s.0, s.1, f.courses & 1 << i != 0, Some(n))
                             }
-                            LensItem::Unplayed => ("not played yet", 0xc8c8d8, f.unplayed),
-                            _ => ("reset", crate::style::DANGER, false),
+                            LensItem::Unplayed => ("not played yet", 0xc8c8d8, f.unplayed, None),
+                            _ => ("reset", crate::style::DANGER, false, None),
                         };
                         let rect = [bx, fy, bw, BLOCK_H];
-                        block(c, rect, label, colour, on, Hit::Lens(item));
+                        block(c, rect, label, colour, on, count, Hit::Lens(item));
                         if at.0 == 2 && at.1 == r && at.2 == k {
                             target = Some(rect);
                         }
@@ -965,7 +1033,7 @@ impl Select {
     /// The filters on, as tokens from `x` along the search box at `y`; returns where they end.
     pub(super) fn draw_tokens(&self, c: &mut Canvas, x: f32, y: f32, room: f32) -> f32 {
         let mut tx = x;
-        for (token, text, colour) in self.tabs.filters.tokens() {
+        for (token, text, colour) in self.tabs.active(self.shown_source()).tokens() {
             let tw = Canvas::text_width(7.0, &text) + 18.0;
             if tx + tw > x + room {
                 break;
@@ -1011,11 +1079,8 @@ impl Select {
                     rgba(0x262634, 0.8),
                 );
             }
-            let n = if s == Source::All {
-                self.source_maps[0]
-            } else {
-                self.source_maps[s.index()]
-            };
+            // What the tab lists, the search and filters as they are.
+            let n = self.source_listed[s.index()];
             let label = s.label();
             let count = n.to_string();
             let lw = Canvas::text_width(7.0, label) + 6.0 + Canvas::text_width(6.0, &count);
@@ -1074,19 +1139,18 @@ impl Select {
         let source = Source::parse(&cfg.song_source).unwrap_or_default();
         self.tabs.source = Source::All;
         self.set_lens(all);
-        self.tabs.saved[Source::All.index()] = (all, Filters::default());
+        self.tabs.saved[Source::All.index()] = all;
         for (s, text) in [
             (Source::Osu, &cfg.lens_osu),
             (Source::Tja, &cfg.lens_tja),
             (Source::Own, &cfg.lens_own),
         ] {
-            self.tabs.saved[s.index()].0 = Lens::parse(text).unwrap_or(Lens::first(s, all));
+            self.tabs.saved[s.index()] = Lens::parse(text).unwrap_or(Lens::first(s, all));
         }
         if source != Source::All {
-            let (lens, filters) = self.tabs.saved[source.index()];
+            let lens = self.tabs.saved[source.index()];
             self.tabs.source = source;
             self.set_lens(lens);
-            self.tabs.filters = filters;
         }
     }
 
@@ -1151,8 +1215,18 @@ fn option_row(c: &mut Canvas, [x, y, w, h]: [f32; 4], label: &str, on: bool, alp
     }
 }
 
-/// A filter's choice: a block, its colour's square lit when it's on.
-fn block(c: &mut Canvas, [x, y, w, h]: [f32; 4], label: &str, colour: u32, on: bool, hit: Hit) {
+/// A filter's choice: a block, its colour's edge lit when it's on, and how many maps it would
+/// list at its right.
+#[allow(clippy::too_many_arguments)]
+fn block(
+    c: &mut Canvas,
+    [x, y, w, h]: [f32; 4],
+    label: &str,
+    colour: u32,
+    on: bool,
+    count: Option<u32>,
+    hit: Hit,
+) {
     let hover = c.hovered(x, y, w, h);
     let bg = match (on, hover) {
         (true, _) => 0x2e2e3e,
@@ -1167,20 +1241,24 @@ fn block(c: &mut Canvas, [x, y, w, h]: [f32; 4], label: &str, colour: u32, on: b
         1.0,
         rgba(if on { colour } else { 0x111118 }, 1.0),
     );
-    c.rect(
-        x + 4.0,
-        y + h / 2.0 - 2.0,
-        4.0,
-        4.0,
-        rgba(colour, if on { 1.0 } else { 0.3 }),
-    );
-    let size = Canvas::fit_size(6.0, 5.0, w - 14.0, label);
+    // Its colour down the left edge: a square would take the room the label and count need.
+    c.rect(x, y, 2.0, h, rgba(colour, if on { 1.0 } else { 0.35 }));
+    let count = count.map(|n| n.to_string());
+    let count_w = count
+        .as_deref()
+        .map_or(0.0, |n| Canvas::text_width(4.5, n) + 3.0);
+    if let Some(n) = &count {
+        let dim = if n == "0" { 0x45455a } else { 0x6f6f86 };
+        c.text_right(x + w - 3.0, y + (h - 4.5) / 2.0, 4.5, rgba(dim, 1.0), n);
+    }
+    let room = w - 9.0 - count_w;
+    let size = Canvas::fit_size(6.0, 4.5, room, label);
     c.text(
-        x + 11.0,
+        x + 6.0,
         y + (h - size) / 2.0,
         size,
         rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0),
-        &Canvas::fit(size, w - 13.0, label),
+        &Canvas::fit(size, room, label),
     );
     c.hit(x, y, w, h, hit);
 }

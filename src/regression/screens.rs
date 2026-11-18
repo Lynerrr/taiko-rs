@@ -67,6 +67,10 @@ fn song_select_sort_and_filter() {
     s.select.lens_pick(ui::LensItem::Unplayed, &s.library);
     s.select.lens_ui = None;
     assert_snapshot("screen-song-select-filtered", &shot(&mut s, &mut now));
+    // Filters that leave nothing: how to get the maps back, not where to find maps.
+    s.select.lens_pick(ui::LensItem::Status(0), &s.library);
+    assert!(s.select.song_groups().is_empty());
+    assert_snapshot("screen-song-select-filtered-out", &shot(&mut s, &mut now));
 }
 
 #[test]

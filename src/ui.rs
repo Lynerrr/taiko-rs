@@ -131,7 +131,7 @@ struct Section {
 mod list_layout_tests;
 
 pub mod lens;
-pub use lens::{Filters, LensItem, LensUi, Order, Source, Tabs, Token, course_colour, star_bin};
+pub use lens::{Facets, Filters, LensItem, LensUi, Order, Source, Tabs, Token, course_colour};
 
 /// Where the song list's rows go, worked out from the headings alone: a song's place is
 /// arithmetic (every song row is the same height), so a library of any size costs the same per
@@ -326,9 +326,11 @@ pub struct Select {
     /// Maps from each source (`Source::index`; all at 0) the list could show: not counting
     /// converts while they're hidden.
     pub source_maps: [usize; 4],
-    /// The maps listed but for the star filter, on each star bar (`star_bin`): counted while
-    /// the sort and filter panel is open.
-    pub star_bins: [u32; 10],
+    /// What each source's tab lists, the search and filters as they are (all at 0).
+    pub source_listed: [usize; 4],
+    /// The shown tab's counts for each filter's choices: counted while the sort and filter
+    /// panel is open.
+    pub facets: Facets,
     /// The sort and filter panel, while it's open.
     pub lens_ui: Option<LensUi>,
     /// When the source last changed: the list's rows come in for it.
@@ -557,7 +559,8 @@ impl Select {
             headings: true,
             tabs: Tabs::default(),
             source_maps: [0; 4],
-            star_bins: [0; 10],
+            source_listed: [0; 4],
+            facets: Facets::default(),
             lens_ui: None,
             source_switched: None,
             song_count: 0,
@@ -662,16 +665,19 @@ impl Select {
                 epic: asks_epic && self.is_epic(e),
             }
         };
-        let filters = self.tabs.filters;
-        let count_bins = self.lens_ui.is_some();
-        let lens = !filters.is_empty() || count_bins;
-        // One pass over the library: each source's maps (for its tab, and whether the picked one
-        // has any) and what passes. The star bars are counted for each source and all.
-        let mut maps = [0; 4];
-        let mut bins = [[0; 10]; 4];
+        // The filters as each tab has them (`Filters::active_in`).
+        let active = Source::ALL.map(|s| self.tabs.active(s));
+        let lens_open = self.lens_ui.is_some();
+        let filtering = !self.tabs.filters.is_empty() || lens_open;
         let picked = self.tabs.source;
+        // One pass over the library: each source's maps (for its tab, and whether the picked one
+        // has any), what each tab would list, and what's listed. While the panel is open, what
+        // each filter's choices would list too, for each tab.
+        let mut maps = [0; 4];
+        let mut listed = [0; 4];
+        let mut facets = [Facets::default(); 4];
         let mut visible = Vec::new();
-        // What the other sources have that passes, should the picked one have no maps.
+        // What all sources list that the picked one doesn't, should the picked one have no maps.
         let mut others = Vec::new();
         for (i, e) in library.iter().enumerate() {
             if self.gone.contains(&e.path) {
@@ -682,6 +688,10 @@ impl Select {
             if let Some(s) = source {
                 maps[0] += 1;
                 maps[s.index()] += 1;
+                if lens_open && let Some(k) = lens::status_choice(self.status_of(e)) {
+                    facets[0].has_status |= 1 << k;
+                    facets[s.index()].has_status |= 1 << k;
+                }
             }
             if self.pinned.contains(&e.path) {
                 visible.push(i);
@@ -697,41 +707,46 @@ impl Select {
             {
                 continue;
             }
-            let known = (!query.is_empty() || lens).then(|| facts(i, e));
+            let known = (!query.is_empty() || filtering).then(|| facts(i, e));
             if let Some(f) = known.as_ref().filter(|_| !query.is_empty())
                 && !query.matches_text(&e.meta, e.text(), f)
             {
                 continue;
             }
-            if let Some(f) = known.as_ref().filter(|_| lens) {
-                let course = crate::tja_maps::split(&e.path).map(|(_, k)| k);
-                if count_bins
-                    && filters.keeps(f, course, false)
-                    && let Some(s) = f.stars
-                {
-                    let b = star_bin(s);
-                    bins[0][b] += 1;
-                    bins[source.index()][b] += 1;
+            // Whether its own tab lists it, and all.
+            let (in_own, in_all) = match known.as_ref().filter(|_| filtering) {
+                Some(f) => {
+                    let course = e
+                        .is_tja()
+                        .then(|| crate::tja_maps::split(&e.path).map(|(_, k)| k))
+                        .flatten();
+                    let (own, all) = (&active[source.index()], &active[0]);
+                    if lens_open {
+                        facets[source.index()].count(own, f, course);
+                        facets[0].count(all, f, course);
+                    }
+                    (own.keeps(f, course, None), all.keeps(f, course, None))
                 }
-                if !filters.keeps(f, course, true) {
-                    continue;
-                }
-            }
-            if picked.takes(source) {
+                None => (true, true),
+            };
+            listed[source.index()] += in_own as usize;
+            listed[0] += in_all as usize;
+            if (picked == Source::All && in_all) || (picked == source && in_own) {
                 visible.push(i);
-            } else {
+            } else if in_all {
                 others.push(i);
             }
         }
         drop(info);
         self.source_maps = maps;
+        self.source_listed = listed;
         let shown = self.shown_source();
         if shown != picked {
             visible.extend(others);
             visible.sort_unstable();
         }
         self.visible = visible;
-        self.star_bins = bins[shown.index()];
+        self.facets = facets[shown.index()];
         self.sort_visible(library);
         self.regroup(library);
         match selected.and_then(|s| self.visible.iter().position(|&v| v == s)) {
@@ -2163,7 +2178,7 @@ impl Select {
             Order::Sort => String::new(),
             o => format!(", {}", o.label()),
         };
-        let filters = self.tabs.filters.tokens().len();
+        let filters = self.tabs.active(self.shown_source()).tokens().len();
         let more = if filters > 0 {
             format!(" +{filters}")
         } else {
@@ -2240,7 +2255,7 @@ impl Select {
         // The filters on, as tokens at the start of the box: the text goes after them.
         let token_room = search_w * 0.6;
         let mut tokens_w = 0.0;
-        for (_, text, _) in self.tabs.filters.tokens() {
+        for (_, text, _) in self.tabs.active(self.shown_source()).tokens() {
             let tw = Canvas::text_width(7.0, &text) + 18.0;
             if tokens_w + tw > token_room {
                 break;
@@ -2341,14 +2356,26 @@ impl Select {
                 &Canvas::fit(7.0, lw, later),
             );
         } else if self.visible.is_empty() {
+            // Maps there are, but what's picked leaves none: say how to get them back.
+            let narrowed = !self.filter.is_empty()
+                || !self.tabs.active(self.shown_source()).is_empty()
+                || self.collection.is_some();
             c.text_centered(
                 24.0 + lw / 2.0,
                 200.0,
                 12.0,
                 rgba(0xc8c8d8, 1.0),
-                "No maps found.",
+                if narrowed {
+                    "No maps match."
+                } else {
+                    "No maps found."
+                },
             );
-            let hint = if cfg!(target_os = "android") {
+            let hint = if narrowed && self.collection.is_some() {
+                "Ctrl+Backspace clears the search and filters, Ctrl+L: collections"
+            } else if narrowed {
+                "Ctrl+Backspace clears the search and filters"
+            } else if cfg!(target_os = "android") {
                 "Open .osz files with taiko.rs, or get maps in DOWNLOAD"
             } else {
                 "Run: taiko-rs <Songs folder | map.osz | map.osu>"
@@ -2676,7 +2703,28 @@ impl Select {
                     // A song with a map marked EPIC: a prism stripe down its left edge, its title
                     // in the shimmer, and a spark round the open one.
                     let epic = g.clone().any(|i| self.is_epic(&library[self.visible[i]]));
-                    let title = fit(e.meta.title.clone(), 10.0, lw - 110.0);
+                    // A TJA chart's courses, as the arcade's ladder at the right: each in its
+                    // colour with its level. The title stops short of it.
+                    let one = self.split_difficulties();
+                    let ladder: Vec<(u32, String, f32)> = if e.is_tja() && !one {
+                        g.clone()
+                            .map(|i| {
+                                let course = &library[self.visible[i]];
+                                let kind = crate::tja_maps::split(&course.path).map(|(_, k)| k);
+                                let text = course
+                                    .meta
+                                    .level
+                                    .map_or("?".to_string(), crate::style::level_text);
+                                let bw = (Canvas::text_width(6.0, &text) + 6.0).max(12.0);
+                                (kind.map_or(0x8a8aa0, course_colour), text, bw)
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let ladder_w: f32 = ladder.iter().map(|l| l.2 + 2.0).sum();
+                    let title_room = (lw - 110.0).min(lw - 12.0 - ladder_w - 28.0);
+                    let title = fit(e.meta.title.clone(), 10.0, title_room);
                     if epic {
                         crate::epic::stripe(c, 24.0, y + 3.0, rh - 10.0, 1.0);
                         crate::epic::text(c, 44.0, y + 6.0, 10.0, &title, 1.0);
@@ -2687,7 +2735,6 @@ impl Select {
                         c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &title);
                     }
                     // A row per difficulty: which one it is, rather than who mapped the set.
-                    let one = self.split_difficulties();
                     let sub = if one {
                         format!("{}  |  {}", e.meta.artist, e.meta.version)
                     } else {
@@ -2732,19 +2779,10 @@ impl Select {
                             level,
                             sorted_by,
                         );
-                    } else if e.is_tja() {
-                        // A TJA chart's courses as the arcade's ladder: each in its colour with
-                        // its level.
+                    } else if !ladder.is_empty() {
                         let mut right = 24.0 + lw - 12.0;
-                        for i in g.clone().rev() {
-                            let course = &library[self.visible[i]];
-                            let kind = crate::tja_maps::split(&course.path).map(|(_, k)| k);
-                            let colour = kind.map_or(0x8a8aa0, course_colour);
-                            let text = course
-                                .meta
-                                .level
-                                .map_or("?".to_string(), crate::style::level_text);
-                            let bw = (Canvas::text_width(6.0, &text) + 6.0).max(12.0);
+                        for (colour, text, bw) in ladder.iter().rev() {
+                            let (colour, bw) = (*colour, *bw);
                             right -= bw;
                             c.rect(right, diffs_y - 2.0, bw, 11.0, rgba(colour, 1.0));
                             c.rect(right, diffs_y + 8.0, bw, 1.0, rgba(0x000000, 0.35));
@@ -2753,7 +2791,7 @@ impl Select {
                                 diffs_y,
                                 6.0,
                                 rgba(0x15151d, 1.0),
-                                &text,
+                                text,
                             );
                             right -= 2.0;
                         }
