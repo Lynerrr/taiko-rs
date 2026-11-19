@@ -3674,7 +3674,18 @@ impl<H> Canvas<H> {
     pub fn picture_cover(
         &mut self,
         path: &std::path::Path,
+        rect: [f32; 4],
+        tint: [f32; 4],
+    ) -> bool {
+        self.picture_cover_clipped(path, rect, rect, tint)
+    }
+
+    /// `picture_cover` over `[x, y, w, h]`, but cut to `clip` (a strip of it, say).
+    pub fn picture_cover_clipped(
+        &mut self,
+        path: &std::path::Path,
         [x, y, w, h]: [f32; 4],
+        clip: [f32; 4],
         tint: [f32; 4],
     ) -> bool {
         let key = path_picture_key(path);
@@ -3687,7 +3698,7 @@ impl<H> Canvas<H> {
             .map_or(1.0, |&(_, a)| a.max(0.01));
         let start = self.shapes.len();
         let drawn = self.picture(&key, x + w / 2.0, y + h / 2.0, h.max(w / aspect), 0.0, tint);
-        self.clip_since(start, x, y, w, h);
+        self.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
         drawn
     }
 

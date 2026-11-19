@@ -204,15 +204,17 @@ fn the_selected_difficulty_is_in_its_ratings_colour() {
             .any(|sh| plain(sh) && inside(sh.center, row, 0.0) && same_rgb(sh.fill, colour)),
         "the selected difficulty's pill is in its rating's colour"
     );
-    // Its name over the details, right of the list: the letters' pixels, not the pill by it.
+    // Its chip in the details (left of the details' middle; its pill is at their right end).
     let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let middle = (28.0 + lw + c.width) / 2.0;
     assert!(
-        c.shapes.iter().any(|sh| (plain(sh) || glyph(sh))
-            && sh.half[0].min(sh.half[1]) < 1.0
+        c.shapes.iter().any(|sh| plain(sh)
             && sh.center[0] > 28.0 + lw
+            && sh.center[0] < middle
+            && sh.half[1] * 2.0 >= 17.0
             && on_select(sh, &c, &s)
             && same_rgb(sh.fill, colour)),
-        "the difficulty's name in the details is in its rating's colour"
+        "the difficulty's chip in the details is in its rating's colour"
     );
 }
 
@@ -309,4 +311,76 @@ fn the_last_card_fades_out_at_the_lists_bottom() {
         "the card at {cut:?} is drawn down to the bottom"
     );
     assert!(near.iter().all(|a| *a < 0.3), "faded out: {near:?}");
+}
+
+/// A picture drawn (`render::Canvas::picture`): its slot is in `params[3]` below -1000.
+fn picture(s: &Shape) -> bool {
+    s.params[3] <= -1000.0
+}
+
+#[test]
+fn the_details_open_on_a_banner_of_the_maps_picture_fading_out() {
+    let (mut s, _songs, mut now) = menu_look("select-look-banner");
+    let i = s.select.selected().expect("a map is selected");
+    let bg = preview::background_path(&s.library[i]).expect("it names a picture");
+    s.pictures
+        .pretend_loaded(&render::path_picture_key(&bg), 16.0 / 9.0);
+    let c = settled(&mut s, &mut now);
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    // Right of the list: the banner's strips, top to bottom (the card's own copy is in the list).
+    let strips: Vec<f32> = c
+        .shapes
+        .iter()
+        .filter(|sh| picture(sh) && sh.center[0] > 28.0 + lw)
+        .map(|sh| sh.fill[3])
+        .collect();
+    assert!(strips.len() >= 6, "a banner in strips: {strips:?}");
+    assert!(
+        (strips[0] - 1.0).abs() < 1e-3,
+        "whole at the top: {strips:?}"
+    );
+    assert!(
+        strips.windows(2).all(|w| w[1] <= w[0] + 1e-4),
+        "fading out downwards: {strips:?}"
+    );
+    assert!(
+        strips[strips.len() - 1] < 0.1,
+        "gone at its bottom: {strips:?}"
+    );
+}
+
+#[test]
+fn don_and_kat_are_one_bar_split_in_proportion() {
+    let (mut s, _songs, mut now) = menu_look("select-look-bar");
+    let c = settled(&mut s, &mut now);
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let count = |suffix: &str| {
+        c.texts
+            .iter()
+            .find_map(|(_, t)| t.strip_suffix(suffix)?.trim().parse::<f32>().ok())
+            .unwrap_or_else(|| panic!("a count of{suffix}"))
+    };
+    let (dons, kats) = (count(" DON"), count(" KAT"));
+    let notes = game::note_colours();
+    let segment = |col: u32| {
+        let fill = render::rgba(col, 1.0);
+        c.shapes
+            .iter()
+            .filter(|sh| plain(sh) && sh.center[0] > 28.0 + lw && on_select(sh, &c, &s))
+            .filter(|sh| same_rgb(sh.fill, fill))
+            .map(rect)
+            .find(|r| r[2] > 20.0 && r[3] < 8.0)
+            .unwrap_or_else(|| panic!("a bar segment in {col:06x}"))
+    };
+    let (don, kat) = (segment(notes.don()), segment(notes.kat()));
+    assert!(
+        (don[0] + don[2] - kat[0]).abs() < 0.01,
+        "kat runs on from don: {don:?} {kat:?}"
+    );
+    assert_eq!(don[1], kat[1]);
+    let share = don[2] / (don[2] + kat[2]);
+    assert!(
+        (share - dons / (dons + kats)).abs() < 1e-3,
+        "{share} of {dons}/{kats}"
+    );
 }

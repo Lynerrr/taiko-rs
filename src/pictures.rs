@@ -127,6 +127,15 @@ impl Pictures {
         self.slots.clone()
     }
 
+    /// Tests: `name` is in a slot, `aspect` wide per unit high, as if it had been read.
+    #[cfg(test)]
+    pub fn pretend_loaded(&mut self, name: &str, aspect: f32) {
+        let mut slots = (*self.slots).clone();
+        let slot = slots.len() as u32;
+        slots.insert(name.to_string(), (slot, aspect));
+        self.slots = Arc::new(slots);
+    }
+
     pub fn take_uploads(&mut self) -> Vec<(u32, Vec<u8>)> {
         std::mem::take(&mut self.uploads)
     }
