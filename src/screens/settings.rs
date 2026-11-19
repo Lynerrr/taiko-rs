@@ -210,6 +210,7 @@ impl Screen for SettingsScreen {
                 };
                 format!("Type to search   Up/Down select   Left/Right change   {enter}   {back}")
             };
+            state.refresh_key_clashes();
             let this = &*state;
             this.settings_ui.draw(
                 canvas,
