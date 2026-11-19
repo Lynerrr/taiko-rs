@@ -32,26 +32,26 @@ text  500,178  7.0
 text  581,178  200
 text  663,178  0:09
 text  744,178  64
-text   48,182  sv-and-kiai
+text   49,182  sv-and-kiai
 text  416,187  1 diff
-text   48,196  Regression  |  mapped by tests
+text   49,196  Regression  |  mapped by tests
 text  494,203  32 DON
 text  784,203  32 KAT
-text   48,216  stream
+text   51,216  stream
 text  416,221  1 diff
 text  517,229  130pp
 text  631,229  117pp
 text  738,229  99pp
-text   48,230  Regression  |  mapped by tests
+text   51,230  Regression  |  mapped by tests
 text  502,230  SS
 text  610,230  99%
 text  719,230  98%
-text   49,250  low-od
+text   55,250  low-od
 text  416,255  1 diff
-text   48,264  Regression  |  mapped by tests
-text   48,284  high-od
+text   53,264  Regression  |  mapped by tests
+text   57,284  high-od
 text  416,289  1 diff
-text   48,298  Regression  |  mapped by tests
+text   57,298  Regression  |  mapped by tests
 text  490,365  0:00 / 0:10
 text  675,365  peak 7.0 notes/s at 0:01
 text  508,381  click / drag / wheel to scroll - play from where you stop
@@ -65,10 +65,10 @@ hit    24,52    444x34   SongHeader(0)
 hit    44,86    424x22   SongRow(0)
 hit    36,108   432x34   SongHeader(1)
 hit    36,142   432x34   SongHeader(2)
-hit    36,176   432x34   SongHeader(3)
-hit    36,210   432x34   SongHeader(4)
-hit    36,244   432x34   SongHeader(5)
-hit    36,278   432x34   SongHeader(6)
+hit    37,176   431x34   SongHeader(3)
+hit    39,210   429x34   SongHeader(4)
+hit    41,244   426x34   SongHeader(5)
+hit    45,278   423x34   SongHeader(6)
 hit     4,52     20x402  SongScrollbar
 hit   712,118    16x13   SelectLike
 hit   490,251   330x61   Preview

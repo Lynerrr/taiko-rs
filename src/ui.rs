@@ -426,6 +426,9 @@ struct ListAnim {
     covers: std::collections::HashMap<String, std::time::Instant>,
     /// When the transition before this one started (selections coming faster than they land).
     last_start: Option<std::time::Instant>,
+    /// The selection last landed in the target, and when it did (its flash).
+    landed: Option<usize>,
+    flash: Option<std::time::Instant>,
 }
 
 /// The list held by the pointer: it scrolls with it, then flies on and settles on a song.
@@ -479,6 +482,20 @@ const BOTTOM_FADE: f32 = 16.0;
 const DIFF_BAR_DIM: f32 = 0.35;
 /// How long after the list has got to a new selection the cards start asking for pictures.
 const PICTURE_SETTLE_MS: f32 = 60.0;
+
+/// The list as a lane through the selection's target brackets: the cards stay straight near the
+/// target (`ARC_STRAIGHT` of the list's height), then bend away from it along an arc, `ARC_K`
+/// units per (list height)² beyond that, at most `ARC_MAX`, and fade by up to `ARC_FADE`
+/// (all of it `ARC_FADE_REACH` of the list's height beyond the straight part). A song or
+/// difficulty landing in the target flashes it for `LAND_FLASH_MS`, its brackets opening out
+/// `LAND_FLASH_GROW` units, like a note hit on the menu's target.
+const ARC_STRAIGHT: f32 = 0.12;
+const ARC_K: f32 = 64.0;
+const ARC_MAX: f32 = 24.0;
+const ARC_FADE: f32 = 0.3;
+const ARC_FADE_REACH: f32 = 0.5;
+const LAND_FLASH_MS: f32 = 300.0;
+const LAND_FLASH_GROW: f32 = 6.0;
 
 /// What a song's name starts with, as its heading when the list is by artist or title.
 fn initial(name: &str) -> String {
@@ -1369,7 +1386,7 @@ impl Select {
         }
     }
 
-    fn list_top(&self) -> f32 {
+    pub(crate) fn list_top(&self) -> f32 {
         if self.source_tabs().is_empty() {
             self.frame_top()
         } else {
@@ -2605,6 +2622,15 @@ impl Select {
         let p = a.start.map(|t| progress(t, ms)).unwrap_or(1.0);
         let open_f = a.open_from + (1.0 - a.open_from) * p;
         let closing_f = a.closing_from * (1.0 - p);
+        // Landed: the selection got to the target (not while the pointer flies the list), and
+        // the target flashes. Not on the first frame, nor without animations.
+        let flying = self.drag.is_some() || self.free.is_some();
+        if p >= 1.0 && !flying && a.landed != a.cursor {
+            if a.landed.is_some() && crate::render::animations() {
+                a.flash = Some(crate::render::frame_now());
+            }
+            a.landed = a.cursor;
+        }
         let mut scroll = a.scroll_from + (final_scroll - a.scroll_from) * p;
         let mut outline = a.outline_from + (final_outline - a.outline_from) * p;
         if let Some(f) = &mut self.free {
@@ -2768,6 +2794,9 @@ impl Select {
                 }
             }
         }
+        // How far a row's middle is from the target's, beyond the straight part (list heights).
+        let target_y = outline + DIFF_H / 2.0;
+        let away = |cy: f32| ((cy - target_y).abs() / view.max(1.0) - ARC_STRAIGHT).max(0.0);
         let mut lights = std::mem::take(&mut self.anim.card_light);
         let mut covers = std::mem::take(&mut self.anim.covers);
         for (row, ry, rh, alpha) in &rows {
@@ -2864,7 +2893,11 @@ impl Select {
                         } else {
                             0.0
                         };
-                        let inset = (CARD_INSET * (1.0 - out) - CARD_HOVER * light).max(0.0);
+                        // Farther from the target, bent away along the lane's arc (not the open
+                        // set's card as it slides out).
+                        let e = away(y + rh / 2.0);
+                        let bend = (ARC_K * e * e).min(ARC_MAX) * (1.0 - out);
+                        let inset = (CARD_INSET * (1.0 - out) + bend - CARD_HOVER * light).max(0.0);
                         (24.0 + inset, lw - inset)
                     };
                     if legacy {
@@ -3143,6 +3176,11 @@ impl Select {
                     let l = lights.get(&g.start).copied().unwrap_or(0.0);
                     c.fade_since(row_start, CARD_DIM + (1.0 - CARD_DIM) * l, 1.0);
                 }
+                // Farther from the target, a little fainter.
+                let e = (away(y + rh / 2.0) / ARC_FADE_REACH).min(1.0);
+                if e > 0.0 {
+                    c.fade_since(row_start, 1.0 - ARC_FADE * e * e, 1.0);
+                }
                 let over = (y + rh - (bottom - BOTTOM_FADE)).max(0.0);
                 let f = (1.0 - over / (rh + BOTTOM_FADE)).clamp(0.0, 1.0);
                 if f < 1.0 {
@@ -3170,7 +3208,33 @@ impl Select {
         // Not with its heading closed: the heading shows where the selection is instead.
         let oy = outline;
         if !self.visible.is_empty() && !cursor_hidden && oy > top - DIFF_H && oy < bottom {
-            crate::style::brackets(c, [41.0, oy - 3.0, lw - 14.0, DIFF_H + 3.0], 1.0);
+            let target = [41.0, oy - 3.0, lw - 14.0, DIFF_H + 3.0];
+            crate::style::brackets(c, target, 1.0);
+            // A song landing in it: a flash, the brackets opening out and fading.
+            if let Some(t) = self
+                .anim
+                .flash
+                .filter(|_| !legacy)
+                .map(|t| progress(t, LAND_FLASH_MS))
+            {
+                if t < 1.0 {
+                    let [x, y, w, h] = target;
+                    let flash = rgba(0xffffff, 0.22 * (1.0 - t));
+                    c.round_rect(
+                        [x + 3.0, y + 3.0],
+                        [w - 6.0, h - 3.0],
+                        5.0,
+                        flash,
+                        flash,
+                        0.0,
+                    );
+                    let g = LAND_FLASH_GROW * t;
+                    let out = [x - g, y - g, w + 2.0 * g, h + 2.0 * g];
+                    crate::style::brackets(c, out, 1.0 - t);
+                } else {
+                    self.anim.flash = None;
+                }
+            }
         }
         // Rows scrolling past the edges slide under them instead of over the search row.
         c.clip_since(list_start, 20.0, top - 2.0, lw + 8.0, bottom - top + 4.0);

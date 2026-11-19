@@ -249,8 +249,9 @@ fn the_open_set_slides_out_the_rest_sit_in_and_one_under_the_pointer_comes_out()
         .filter(|r| *r != open)
         .collect();
     assert!(!others.is_empty());
+    // By 12 units, and the ones far from the target bend away farther (the lane's arc).
     assert!(
-        others.iter().all(|r| r[0] == 36.0),
+        others.iter().all(|r| r[0] >= 36.0) && others.iter().any(|r| r[0] == 36.0),
         "the rest sit in: {others:?}"
     );
     // The others are dimmed: none of their shapes is at full strength.
@@ -279,7 +280,7 @@ fn the_open_set_slides_out_the_rest_sit_in_and_one_under_the_pointer_comes_out()
         .map(|(_, r)| r)
         .find(|r| (r[1] - first[1]).abs() < 0.5)
         .expect("the card under the pointer");
-    assert_eq!(moved[0], 32.0, "it comes out under the pointer");
+    assert_eq!(moved[0], first[0] - 4.0, "it comes out under the pointer");
 }
 
 #[test]
@@ -564,4 +565,133 @@ fn a_jump_reads_the_pictures_where_the_list_is_going_on_its_way() {
         c.pictures_wanted.contains(&landing) && c.pictures_wanted.contains(&next),
         "the set it lands on and its neighbours are asked for at once"
     );
+}
+
+/// Where the selected difficulty's row is (its hit).
+fn target(c: &Canvas, s: &State) -> [f32; 4] {
+    let cursor = s.select.cursor();
+    hit_rect(c, |h| matches!(h, Hit::SongRow(i) if *i == cursor)).expect("the selected row")
+}
+
+/// `n` songs on, each settled.
+fn songs_on(s: &mut State, now: &mut Instant, n: usize) -> Canvas {
+    for _ in 0..n {
+        press(s, KeyCode::ArrowRight, *now);
+        settled(s, now);
+    }
+    settled(s, now)
+}
+
+#[test]
+fn the_selected_song_sits_in_the_target_at_one_height() {
+    let (mut s, _songs, mut now) = menu_look_with("select-look-target", &many());
+    let at = |c: &Canvas, s: &State| target(c, s)[1];
+    // At the top of the list it sits at the top: the list doesn't scroll past its end.
+    let c = settled(&mut s, &mut now);
+    let first = at(&c, &s);
+    let c = songs_on(&mut s, &mut now, 6);
+    let (cursor, y) = (s.select.cursor(), at(&c, &s));
+    assert!(
+        y > first + 40.0,
+        "down in the list, not at its top: {first} then {y}"
+    );
+    for n in [1, 3] {
+        let c = songs_on(&mut s, &mut now, n);
+        assert_ne!(s.select.cursor(), cursor, "another song");
+        assert_eq!(at(&c, &s), y, "the selected song in the same place");
+    }
+}
+
+#[test]
+fn cards_bend_away_from_the_target_and_fade() {
+    let (mut s, _songs, mut now) = menu_look_with("select-look-arc", &many());
+    let c = songs_on(&mut s, &mut now, 6);
+    let t = target(&c, &s);
+    let ty = t[1] + t[3] / 2.0;
+    let [_, end] = s.select.frame_span();
+    let open = open_card(&c, &s);
+    // The closed sets in full view (not under the top's edge nor the bottom's fade), nearest
+    // to the target first.
+    let mut closed: Vec<(f32, [f32; 4])> = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r)
+        .filter(|r| *r != open && r[1] > s.select.list_top() && r[1] + r[3] < end - 24.0)
+        .map(|r| ((r[1] + r[3] / 2.0 - ty).abs(), r))
+        .collect();
+    closed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert!(closed.len() >= 4, "cards round the target: {closed:?}");
+    assert!(
+        closed.windows(2).all(|w| w[1].1[0] >= w[0].1[0]),
+        "farther, bent away farther: {closed:?}"
+    );
+    let (near, far) = (closed[0].1, closed[closed.len() - 1].1);
+    assert!(
+        far[0] - near[0] > 3.0,
+        "an arc, not a line: {near:?} {far:?}"
+    );
+    let strongest = |r: [f32; 4]| {
+        c.shapes
+            .iter()
+            .filter(|sh| plain(sh) && inside(sh.center, r, 0.0))
+            .map(|sh| sh.fill[3])
+            .fold(0.0, f32::max)
+    };
+    assert!(
+        strongest(far) < strongest(near) - 0.02,
+        "farther, fainter: {} near, {} far",
+        strongest(near),
+        strongest(far)
+    );
+}
+
+/// The target's flash: a soft white fill across the selected row.
+fn flashes(c: &Canvas, s: &State) -> bool {
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    c.shapes.iter().any(|sh| {
+        plain(sh)
+            && same_rgb(sh.fill, render::rgba(0xffffff, 1.0))
+            && sh.fill[3] > 0.02
+            && sh.fill[3] < 0.3
+            && sh.half[0] * 2.0 > lw / 2.0
+    })
+}
+
+#[test]
+fn a_song_landing_in_the_target_flashes_it() {
+    for animations in [true, false] {
+        let songs = Songs::new("select-look-flash", &many());
+        let cfg = Config {
+            main_menu: true,
+            accent: ACCENT,
+            animations,
+            ..harness::config()
+        };
+        let mut s = state_with(cfg, songs.entries());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        // Settled first (what was selected on opening has landed and its flash is over).
+        for _ in 0..120 {
+            now += Duration::from_millis(16);
+            frame(&mut s, now);
+        }
+        let mut seen = Vec::new();
+        for _ in 0..20 {
+            now += Duration::from_millis(16);
+            seen.push(flashes(&frame(&mut s, now), &s));
+        }
+        assert!(!seen.contains(&true), "nothing landed yet");
+        press(&mut s, KeyCode::ArrowRight, now);
+        let mut seen = Vec::new();
+        for _ in 0..80 {
+            now += Duration::from_millis(16);
+            seen.push(flashes(&frame(&mut s, now), &s));
+        }
+        if animations {
+            let first = seen.iter().position(|f| *f).expect("a flash once it lands");
+            assert!(first > 3, "when it lands, not as it leaves: frame {first}");
+            assert!(!seen[60..].contains(&true), "over in a moment");
+        } else {
+            assert!(!seen.contains(&true), "without animations a cut, no flash");
+        }
+    }
 }
