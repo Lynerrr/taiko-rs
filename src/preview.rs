@@ -24,6 +24,8 @@ const QUIET: Duration = Duration::from_millis(300);
 /// of its place it starts.
 const ENTER_MS: f32 = 180.0;
 const ENTER_SHIFT: f32 = 8.0;
+/// When the pp row (and the Leaderboard chip ending it) comes in after a song is picked.
+const PP_ENTER_MS: f32 = 260.0;
 /// The details of the song before a change go out as the new ones come in: `LEAVE_SHIFT`
 /// to the left and faded out over `LEAVE_MS`.
 const LEAVE_MS: f32 = 80.0;
@@ -1409,14 +1411,16 @@ impl Preview {
                 .sim_pp
                 .map_or_else(|| "...".to_string(), |pp| format!("{pp:.0}pp"));
             let pw = Canvas::text_width(text::BODY, &pp);
-            let what = Canvas::fit(text::CAPTION, row_w - pw - 24.0, what);
-            c.text(
-                lx + 8.0,
-                ty + 1.0,
-                text::CAPTION,
-                rgba(ink::SECONDARY, 1.0),
-                &what,
-            );
+            // Its name when it fits whole beside the pp.
+            if Canvas::text_width(text::CAPTION, what) <= row_w - pw - 24.0 {
+                c.text(
+                    lx + 8.0,
+                    ty + 1.0,
+                    text::CAPTION,
+                    rgba(ink::SECONDARY, 1.0),
+                    what,
+                );
+            }
             c.text_right(
                 lx + row_w - 8.0,
                 ty,
@@ -1442,14 +1446,21 @@ impl Preview {
                     crate::style::radius::SMALL,
                     Surface::Lifted,
                 );
-                let lw = c.text(
-                    fx + 8.0,
-                    ty + PP_H + SIM_GAP + 1.0,
-                    text::CAPTION,
-                    rgba(ink::CAPTION, 1.0),
-                    label,
-                );
+                // Its name when there's room for it beside the value and its - and +.
                 let bw = 14.0;
+                let value_w = Canvas::text_width(text::CAPTION, value) + 8.0;
+                let name_w = Canvas::text_width(text::CAPTION, label);
+                let lw = if 8.0 + name_w + 6.0 + 2.0 * bw + value_w + 2.0 <= half {
+                    c.text(
+                        fx + 8.0,
+                        ty + PP_H + SIM_GAP + 1.0,
+                        text::CAPTION,
+                        rgba(ink::CAPTION, 1.0),
+                        label,
+                    )
+                } else {
+                    -6.0
+                };
                 let minus = [fx + 8.0 + lw + 6.0, sy + 2.0, bw, PP_H - 4.0];
                 let plus = [fx + half - 2.0 - bw, sy + 2.0, bw, PP_H - 4.0];
                 for (dir, mark, [bx, by, bw, bh]) in [(-1, "-", minus), (1, "+", plus)] {
@@ -1488,8 +1499,19 @@ impl Preview {
             // Closed: what a full combo gives at SS, 99% and 98%, every number whole.
             pp_chip(c, button, over(button));
             c.hit(lx, cy, row_w, PP_H, Hit::PpSim);
-            let third = row_w / 3.0;
-            for (k, (label, pp)) in ["SS", "99%", "98%"].into_iter().zip(pp).enumerate() {
+            // As many as fit whole: a narrow panel leaves out 98%, then 99%.
+            let labels = ["SS", "99%", "98%"];
+            let least = |k: usize| {
+                Canvas::text_width(text::CAPTION, labels[k])
+                    + 16.0
+                    + Canvas::text_width(text::CAPTION, &format!("{:.0}", pp[k]))
+            };
+            let shown = (1..=3)
+                .rev()
+                .find(|&n| (0..n).all(|k| least(k) <= row_w / n as f32))
+                .unwrap_or(1);
+            let third = row_w / shown as f32;
+            for (k, (label, pp)) in labels.into_iter().zip(pp).take(shown).enumerate() {
                 let px = lx + k as f32 * third;
                 let lw = c.text(
                     px + 8.0,
@@ -1515,7 +1537,7 @@ impl Preview {
         if self.sim.is_some() {
             cy += SIM_GAP + PP_H;
         }
-        self.enter(c, part, 260.0);
+        self.enter(c, part, PP_ENTER_MS);
         cy += PP_H;
         if let (true, Some(what)) = (l.left_out, shown.left_out) {
             cy += 4.0;
@@ -1553,6 +1575,15 @@ impl Preview {
         }
         c.transform_since(start, [0.0, 0.0], 1.0, ENTER_SHIFT * (1.0 - p), 0.0);
         c.fade_since(start, p, 1.0);
+    }
+
+    /// Song select's Leaderboard chip, drawn since shape `start` after the details (at
+    /// `board_at`): it comes in with the pp row it ends and goes out with the details.
+    pub(crate) fn enter_board(&mut self, c: &mut Canvas, start: usize) {
+        self.enter(c, start, PP_ENTER_MS);
+        if let (true, Some(drawn)) = (crate::render::animations(), c.shapes.get(start..)) {
+            self.drawn.shapes.extend_from_slice(drawn);
+        }
     }
 
     /// The map's picture over `[x, y, w, h]` (cover-cropped), whole down to `BANNER_WHOLE` of

@@ -635,7 +635,6 @@ fn draw_songs(
             if bare {
                 let page = [x - t * step, panel_top, pw, panel_h];
                 style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
-                canvas.glass_last();
             }
             state.preview.title_room = bw + 10.0;
             state.preview.board_w = if bare { bw } else { 0.0 };
@@ -696,12 +695,17 @@ fn draw_songs(
             if state.select.legacy {
                 canvas.button(bx, by, bw, 20.0, &legacy_label, 7.0, hit, false);
             } else {
-                if let Some(chip) = state.preview.board_at.filter(|_| bare) {
+                let chip_start = canvas.shapes.len();
+                let chip = state.preview.board_at.filter(|_| bare);
+                if let Some(chip) = chip {
                     // As tall as the pp button it ends the row of.
                     style::surface(canvas, chip, style::radius::SMALL, style::Surface::Lifted);
                 }
                 let at = [bx + 6.0, by + 10.0];
                 style::icon_button(canvas, at, &style::PODIUM, label, None, 7.0, false, hit);
+                if chip.is_some() {
+                    state.preview.enter_board(canvas, chip_start);
+                }
             }
             canvas.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
         } else {
@@ -713,7 +717,6 @@ fn draw_songs(
             if bare {
                 let page = [page_x, panel_top, pw, panel_h];
                 style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
-                canvas.glass_last();
             } else {
                 style::panel(canvas, page_x, panel_top, pw, panel_h);
             }
@@ -1024,10 +1027,7 @@ fn draw_crowd(
     shown: f32,
     cam: f32,
 ) {
-    let first = canvas.shapes.len();
     draw_crowd_routes(state, canvas, now, base, shown, cam);
-    // Under song select's panels they're seen as through frosted glass.
-    canvas.frost_since(first);
 }
 
 fn draw_crowd_routes(
@@ -1094,7 +1094,6 @@ fn draw_shift(
     let routes = canvas.shapes.len();
     draw_menu(state, canvas, frame, Layer::Routes);
     canvas.fade_since(routes, routes_brightness(ph.cam), 1.0);
-    canvas.frost_since(routes);
     let shown = if into { (t * 2.0).min(1.0) } else { 1.0 };
     draw_crowd(state, canvas, frame.now, false, shown, ph.cam);
     if ph.landed < 1.0 {
