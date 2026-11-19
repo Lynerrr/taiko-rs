@@ -370,7 +370,7 @@ fn card_pictures_gpu_draw_their_own_strip() {
     let mut canvas = Canvas::<()>::default();
     canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), slot)].into());
     // As wide as the target and a third of it tall: its middle, cut to it.
-    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4]));
+    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 0.0));
     let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
     let at = |x: u32, y: u32| {
         let i = ((y * width + x) * 4) as usize;
@@ -382,4 +382,20 @@ fn card_pictures_gpu_draw_their_own_strip() {
     // As tall as the rect (its width is cut by the canvas's clip, which this doesn't apply).
     assert_eq!(at(128, 36)[3], 0, "nothing above it");
     assert_eq!(at(128, 92)[3], 0, "nothing below it");
+
+    // Rounded: its corners are cut, the rest of it is its strip as before.
+    let mut canvas = Canvas::<()>::default();
+    canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), slot)].into());
+    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 8.0));
+    let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
+    let at = |x: u32, y: u32| {
+        let i = ((y * width + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    for (x, y) in [(8, 40), (247, 40), (8, 87), (247, 87)] {
+        assert_eq!(at(x, y)[3], 0, "its corner at {x}, {y} is cut");
+    }
+    for (x, y) in [(20, 64), (128, 41), (240, 64)] {
+        assert_eq!(at(x, y), [0, 255, 0, 255], "its own strip at {x}, {y}");
+    }
 }

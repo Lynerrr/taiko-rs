@@ -378,7 +378,7 @@ pub(super) fn render_loop(
                 s.bg_changed = Some(Instant::now());
             }
             renderer.bg_brightness = s.bg_brightness;
-            renderer.bg_blur = s.idle.amount();
+            renderer.bg_blur = s.background_blur();
             // A new background cross-fades from the previous one.
             let fade = if s.on_menu() {
                 MENU_BACKGROUND_FADE_MS

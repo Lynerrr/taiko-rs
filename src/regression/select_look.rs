@@ -418,7 +418,7 @@ fn don_and_kat_are_one_bar_split_in_proportion() {
 }
 
 #[test]
-fn a_cards_shade_has_no_seams() {
+fn a_cards_shade_is_one_sweep_as_round_as_the_card_over_its_rounded_picture() {
     let (mut s, _songs, mut now) = menu_look("select-look-shade");
     let i = s.select.selected().expect("a map is selected");
     let bg = preview::background_path(&s.library[i]).expect("it names a picture");
@@ -426,53 +426,36 @@ fn a_cards_shade_has_no_seams() {
         .pretend_loaded(&render::path_picture_key(&bg), [0.5, 0.5, 0.5]);
     let c = settled(&mut s, &mut now);
     let open = open_card(&c, &s);
-    // The shade over the open card's picture: plain shapes in the card's dark surface colour.
+    // The shade over the open card's picture: one shape (no seams between bands), from the
+    // card's dark surface colour under the title to lighter on the right.
     let dark = render::rgba(style::SURFACE_1, 1.0);
-    let layers: Vec<[f32; 4]> = c
+    let shades: Vec<&Shape> = c
         .shapes
         .iter()
-        .filter(|sh| plain(sh) && same_rgb(sh.fill, dark) && inside(sh.center, open, 0.0))
-        .filter(|sh| sh.half[1] * 2.0 > open[3] * 0.8)
-        .map(rect)
+        .filter(|sh| sh.params[3] == render::SHADE_ACROSS && inside(sh.center, open, 0.0))
         .collect();
-    assert!(layers.len() >= 8, "a shade in layers: {layers:?}");
-    // All from the card's left, each to its own right edge: no edge shared by two of them (a
-    // light seam at some pixel sizes).
-    let left = layers[0][0];
+    assert_eq!(shades.len(), 1, "one sweep");
+    let shade = shades[0];
+    assert!(same_rgb(shade.fill, dark) && same_rgb(shade.border, dark));
     assert!(
-        layers.iter().all(|r| (r[0] - left).abs() < 0.01),
-        "{layers:?}"
-    );
-    let rights: Vec<f32> = layers.iter().map(|r| r[0] + r[2]).collect();
-    for (k, r) in rights.iter().enumerate() {
-        assert!(
-            rights.iter().skip(k + 1).all(|o| (o - r).abs() > 0.01),
-            "two layers end alike: {rights:?}"
-        );
-    }
-    // Darkest at the left, under the title, lighter to the right.
-    let through = |x: f32| {
-        layers
-            .iter()
-            .zip(c.shapes.iter().filter(|sh| {
-                plain(sh)
-                    && same_rgb(sh.fill, dark)
-                    && inside(sh.center, open, 0.0)
-                    && sh.half[1] * 2.0 > open[3] * 0.8
-            }))
-            .filter(|(r, _)| x >= r[0] && x < r[0] + r[2])
-            .map(|(_, sh)| 1.0 - sh.fill[3])
-            .product::<f32>()
-    };
-    let (l, r) = (
-        through(left + 2.0),
-        through(rights.iter().fold(0.0, |m: f32, v| m.max(*v)) - 2.0),
-    );
-    assert!(
-        1.0 - l > 0.8 && (1.0 - r - 0.4).abs() < 0.05,
+        shade.fill[3] > 0.8 && (shade.border[3] - 0.4).abs() < 0.05,
         "shade {} to {}",
-        1.0 - l,
-        1.0 - r
+        shade.fill[3],
+        shade.border[3]
+    );
+    // Over the picture, both as round as the card (1 in from its edge): no square corner pokes
+    // out of it.
+    let picture = c
+        .shapes
+        .iter()
+        .find(|sh| card_picture(sh) && inside(sh.center, open, 0.0))
+        .expect("the card's picture");
+    assert_eq!(rect(picture), rect(shade), "the shade covers the picture");
+    assert!(picture.params[0] > 0.0 && picture.params[0] == shade.params[0]);
+    let [_, _, w, h] = rect(picture);
+    assert!(
+        w < open[2] && h < open[3],
+        "inside the card, not a cover crop past it"
     );
 }
 
@@ -1337,4 +1320,18 @@ fn the_search_row_has_a_glass_a_quiet_hint_its_key_on_a_cap_and_the_counts_on_a_
             && rect(sh)[0] < counts[0]
     });
     assert!(chip, "on a chip");
+}
+
+#[test]
+fn the_map_s_picture_behind_song_select_is_blurred_to_a_field_of_colour() {
+    let (mut s, _songs, mut now) = menu_look("select-look-blur");
+    settled(&mut s, &mut now);
+    assert_eq!(s.background_blur(), 1.0, "the main menu's look");
+    // Legacy keeps the picture sharp.
+    let songs = Songs::new("select-look-blur-legacy", &maps::all());
+    let mut legacy = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut legacy, &mut now);
+    assert!(legacy.select.legacy);
+    assert_eq!(legacy.background_blur(), 0.0);
 }

@@ -192,6 +192,10 @@ pub(crate) const SPRITE_BASE: f32 = 10.0;
 
 /// What a shape needs, besides its position, to come out mirrored left to right: half circles
 /// swap sides, and a drumroll's end cap turns around (the other sprites are round).
+/// A plain shape's kind (`params[3]`) for `Canvas::shade_across`: its fill sweeps from `fill`
+/// to `border` across it.
+pub const SHADE_ACROSS: f32 = 3.0;
+
 fn flip_x(sh: &mut Shape) {
     let sprite = |s: Sprite| SPRITE_BASE + s as usize as f32;
     // The drum's halves have their mirror images in the atlas.
@@ -202,7 +206,9 @@ fn flip_x(sh: &mut Shape) {
     // Turned the other way in the mirror (the pieces of a bent lane: left as they were, its
     // bends came out turned against the lane and cut into it).
     sh.angle = -sh.angle;
-    if (0.5..2.5).contains(&sh.params[3]) {
+    if sh.params[3] == SHADE_ACROSS {
+        std::mem::swap(&mut sh.fill, &mut sh.border);
+    } else if (0.5..2.5).contains(&sh.params[3]) {
         sh.params[3] = 3.0 - sh.params[3];
     } else if sh.params[3] == sprite(Sprite::RollEnd) {
         sh.angle += std::f32::consts::PI;
@@ -1025,10 +1031,16 @@ fn shade(in: VOut) -> vec4<f32> {
         let cell = vec2<f32>(f32(slot % per), f32(slot / per));
         let size = vec2<f32>(f32(CARD_CELL_X), f32(CARD_CELL_Y));
         let edge = vec2<f32>(0.5) / size;
-        let uv = clamp(in.local / (2.0 * in.half) + 0.5, edge, vec2<f32>(1.0) - edge);
+        // The part of the strip the rect shows (`Canvas::card_picture`): `k` of its width, or
+        // `-k` of its height.
+        let k = in.params.z / max(in.params.y, 1e-6);
+        let part = select(vec2<f32>(1.0, -k), vec2<f32>(k, 1.0), k > 0.0);
+        let uv = clamp(in.local / (2.0 * in.half) * part + 0.5, edge, vec2<f32>(1.0) - edge);
         let side = vec2<f32>(f32(CARD_SIDE_X), f32(CARD_SIDE_Y));
         let t = textureSampleLevel(cards, samp, (cell + uv) * size / side, 0.0);
-        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a;
+        let r = min(in.params.x, min(in.half.x, in.half.y));
+        let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
+        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover;
     }
     if (in.params.w < -999.5) {
         // A map's picture (premultiplied), its square stretched over the quad, tinted by fill.
@@ -1111,13 +1123,20 @@ fn shade(in: VOut) -> vec4<f32> {
         color = vec4<f32>(in.fill.rgb, in.fill.a * a * a);
     } else {
         let coverage = clamp(0.5 - d, 0.0, 1.0);
-        let bw = in.params.y;
-        let inner = clamp(0.5 - (d + bw), 0.0, 1.0);
-        let c = mix(in.border, in.fill, select(1.0, inner, bw > 0.0));
-        color = vec4<f32>(c.rgb, c.a * coverage);
+        if (in.params.w > 2.5 && in.params.w < 3.5) {
+            // `Canvas::shade_across`: fill at the left edge, border at the right.
+            let u = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
+            let c = mix(in.fill, in.border, u);
+            color = vec4<f32>(c.rgb, c.a * coverage);
+        } else {
+            let bw = in.params.y;
+            let inner = clamp(0.5 - (d + bw), 0.0, 1.0);
+            let c = mix(in.border, in.fill, select(1.0, inner, bw > 0.0));
+            color = vec4<f32>(c.rgb, c.a * coverage);
+        }
     }
     let side = in.params.w;
-    if (side > 0.5) {
+    if (side > 0.5 && side < 2.5) {
         let dir = select(-1.0, 1.0, side > 1.5);
         color.a *= clamp(0.5 + in.local.x * dir, 0.0, 1.0);
     }
@@ -3858,6 +3877,7 @@ impl<H> Canvas<H> {
         path: &std::path::Path,
         [x, y, w, h]: [f32; 4],
         tint: [f32; 4],
+        radius: f32,
     ) -> bool {
         let key = path_picture_key(path);
         let slot = self.card_slots.get(&key).copied();
@@ -3871,17 +3891,43 @@ impl<H> Canvas<H> {
         } else {
             (h * CARD_ASPECT, h)
         };
-        let start = self.shapes.len();
+        // Only the rect is drawn, its corners `radius` round: the shader shows the part of the
+        // strip under it, from how much of the strip's width (`k`) or height (`-k`) that is. Both
+        // that and the 1 beside it are scaled to pixels on the way, so their ratio is `k` again.
+        let k = if w > h * CARD_ASPECT {
+            -(h / sh)
+        } else {
+            w / sw
+        };
         self.shapes.push(Shape {
             center: [x + w / 2.0, y + h / 2.0],
-            half: [sw / 2.0, sh / 2.0],
+            half: [w / 2.0, h / 2.0],
             fill: tint,
             border: CLEAR,
-            params: [0.0, 0.0, 0.0, -CARD_BASE - slot as f32],
+            params: [radius, 1.0, k, -CARD_BASE - slot as f32],
             angle: 0.0,
         });
-        self.clip_since(start, x, y, w, h);
         true
+    }
+
+    /// A box with corners `radius` round, its fill going from `left` at its left edge to
+    /// `right` at its right in one smooth sweep (one shape: no seams between bands).
+    pub fn shade_across(
+        &mut self,
+        [x, y]: [f32; 2],
+        [w, h]: [f32; 2],
+        radius: f32,
+        left: [f32; 4],
+        right: [f32; 4],
+    ) {
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [w / 2.0, h / 2.0],
+            fill: left,
+            border: right,
+            params: [radius, 0.0, 0.0, SHADE_ACROSS],
+            angle: 0.0,
+        });
     }
 
     /// Asks for the card picture of the map picture at `path` without drawing it, so it's in

@@ -3524,12 +3524,22 @@ impl Select {
             // Until its picture is in, the card shows the picture's average colour (once known),
             // and the picture fades in over it: nothing on the card pops.
             let colour = c.card_colour(&bg);
+            // Everything on the card is as round as it, 1 in.
+            let round = CARD_RADIUS - 1.0;
             if let Some([r, g, b]) = colour
                 && (!shown || a < 1.0)
             {
-                c.rect(inner[0], inner[1], inner[2], inner[3], [r, g, b, 1.0]);
+                let col = [r, g, b, 1.0];
+                c.round_rect(
+                    [inner[0], inner[1]],
+                    [inner[2], inner[3]],
+                    round,
+                    col,
+                    col,
+                    0.0,
+                );
             }
-            let drawn = c.card_picture(&bg, inner, [1.0, 1.0, 1.0, a]);
+            let drawn = c.card_picture(&bg, inner, [1.0, 1.0, 1.0, a], round);
             if drawn && since.is_none() {
                 covers.insert(key, crate::render::frame_now());
             }
@@ -3537,27 +3547,17 @@ impl Select {
                 // Over the colour the shade is there at once; over the bare surface it comes in
                 // with the picture.
                 let base = if colour.is_some() { 1.0 } else { a };
-                const BANDS: usize = 16;
-                let bw = inner[2] / BANDS as f32;
-                let shade = |b: usize| {
-                    let t = b as f32 / (BANDS - 1) as f32;
-                    (COVER_SHADE.0 + (COVER_SHADE.1 - COVER_SHADE.0) * t) * base
-                };
-                // Layers from the card's left edge to the end of each band, so band `b` is
-                // under layers `b..`: every edge belongs to one layer alone (bands side by side
-                // meet on shared edges, which show as light seams at some pixel sizes). Layer `b`
-                // adds what band `b` needs over the layers right of it.
-                for b in 0..BANDS {
-                    let below = if b + 1 < BANDS {
-                        1.0 - shade(b + 1)
-                    } else {
-                        1.0
-                    };
-                    let alpha = 1.0 - (1.0 - shade(b)) / below;
-                    let r = crate::render::snap_to_grid(inner[0] + (b + 1) as f32 * bw);
-                    let col = rgba(style::SURFACE_1, alpha.max(0.0));
-                    c.rect(inner[0], inner[1], r - inner[0], inner[3], col);
-                }
+                // One sweep from dark under the title to lighter on the right, as round as the
+                // card.
+                let shade = |s: f32| rgba(style::SURFACE_1, s * base);
+                let (left, right) = (shade(COVER_SHADE.0), shade(COVER_SHADE.1));
+                c.shade_across(
+                    [inner[0], inner[1]],
+                    [inner[2], inner[3]],
+                    round,
+                    left,
+                    right,
+                );
             }
         }
         let clear = rgba(0, 0.0);

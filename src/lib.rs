@@ -10620,6 +10620,20 @@ impl State {
         (!covered).then_some(middle)
     }
 
+    /// How far the background is into its blurred copy: the idle screen's, and all of it on song
+    /// select in the main menu's look, where the map's picture is a field of colour under the
+    /// cards and the banner (they show it sharp). On the way between the menu and song select it
+    /// blurs and clears with the camera. Legacy and the phone layout keep it sharp.
+    pub(crate) fn background_blur(&self) -> f32 {
+        let look = !self.select.legacy && !mobile::active() && self.scene.is_select();
+        let select = match &self.menu_shift {
+            Some(shift) if look => menu_shift::phases(shift.t()).cam,
+            _ if look && !self.on_menu() => 1.0,
+            _ => 0.0,
+        };
+        self.idle.amount().max(select)
+    }
+
     /// Song select, or a screen that is part of it (its fullscreen preview, the download tab):
     /// the song list's pointer, the preview panel and the map's stars work there.
     fn in_song_select(&self) -> bool {

@@ -1219,7 +1219,12 @@ impl Preview {
         for (k, (caption, value, alpha)) in tiles.iter().enumerate() {
             let part = c.shapes.len();
             let tx = lx + k as f32 * (tw + space::CARD_GAP);
-            surface(c, [tx, cy, tw, TILE_H], 4.0, Surface::Raised);
+            surface(
+                c,
+                [tx, cy, tw, TILE_H],
+                crate::style::radius::SMALL,
+                Surface::Raised,
+            );
             let room = tw - 12.0;
             let caption = Canvas::fit(text::CAPTION, room, caption);
             c.text(

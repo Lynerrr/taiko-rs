@@ -90,6 +90,13 @@ pub fn skeleton(c: &mut Canvas, [x, y, w, h]: [f32; 4], radius: f32) {
     c.clip_since(start, x, y, w, h);
 }
 
+/// Corners, one scale for every surface of the main menu's look: the small things (key caps,
+/// chips' insides, tiles) and everything a card or strip big.
+pub mod radius {
+    pub const SMALL: f32 = 4.0;
+    pub const CARD: f32 = 8.0;
+}
+
 /// Room, on a grid of 4 units.
 pub mod space {
     /// The grid every gap and inset is a step of.
@@ -928,11 +935,10 @@ pub fn lane_fade_strip(
     }
 }
 
-/// A strip in the menu lane's place as a surface: the raised tone alone, no lines round it (song
-/// select's lane of actions in the main menu's look).
-pub fn lane_surface(c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
-    let fill = surface_fill(Surface::Raised);
-    c.rect(x, y, w, h, fill);
+/// A strip in the menu lane's place as a surface: the raised tone alone, no lines round it, its
+/// corners as round as the cards' (song select's lane of actions in the main menu's look).
+pub fn lane_surface(c: &mut Canvas, rect: [f32; 4]) {
+    surface(c, rect, radius::CARD, Surface::Raised);
 }
 
 /// The middle and radius at rest of the main menu's Play note at the end of a lane `[x, y, h]`
@@ -984,15 +990,16 @@ pub fn lane_end_button(
         );
     }
     let fill = tint(col, 0x000000, 0.5 - 0.5 * g);
-    c.rect(x, y, w, h, rgba(fill, 0.9 + 0.1 * pulse()));
+    // Rounded as the lane it ends (its right end is off the screen).
+    let r = radius::CARD;
+    let fill = rgba(fill, 0.9 + 0.1 * pulse());
+    c.round_rect([x, y], [w, h], r, fill, fill, 0.0);
     // Its edge only lights under the pointer: at rest the fill alone tells it apart.
     let edge = rgba(tint(col, 0xffffff, 0.35 * g), g);
-    c.rect(x, y, w, 1.5, edge);
-    c.rect(x, y + h - 1.5, w, 1.5, edge);
-    c.rect(x, y, 1.5, h, edge);
+    c.round_rect([x, y], [w, h], r, rgba(0, 0.0), edge, 1.5);
     let line = rgba(tint(col, 0xffffff, 0.3), 0.6 * g);
-    c.rect(x, y + 4.0, w, 1.0, line);
-    c.rect(x, y + h - 5.0, w, 1.0, line);
+    c.rect(x + r, y + 4.0, w - r, 1.0, line);
+    c.rect(x + r, y + h - 5.0, w - r, 1.0, line);
     let size = (h * 0.42).clamp(8.0, 11.0);
     let (at, r) = lane_end_disc([x, y, h]);
     if disc_shown {
@@ -1172,6 +1179,33 @@ fn rating_pill(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_lane_of_actions_and_its_play_end_are_as_round_as_the_cards() {
+        let mut c = Canvas {
+            width: 853.3,
+            ..Canvas::default()
+        };
+        lane_surface(&mut c, [480.0, 400.0, 375.0, 50.0]);
+        let strip = c.shapes.len();
+        lane_end_button(
+            &mut c,
+            "round-test",
+            [700.0, 400.0, 50.0],
+            "Play",
+            crate::hit::Hit::Key(winit::keyboard::KeyCode::Enter),
+            true,
+            None,
+        );
+        assert_eq!(c.shapes[0].params[0], radius::CARD, "the lane");
+        // The Play bar: the widest shape from its left edge.
+        let bar = c.shapes[strip..]
+            .iter()
+            .filter(|s| (s.center[0] - s.half[0] - 700.0).abs() < 0.01)
+            .max_by(|a, b| a.half[0].total_cmp(&b.half[0]))
+            .expect("the Play bar");
+        assert_eq!(bar.params[0], radius::CARD, "Play");
+    }
+
     use super::*;
 
     #[test]
