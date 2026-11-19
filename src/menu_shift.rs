@@ -315,13 +315,13 @@ fn wrap(a: f32) -> f32 {
 }
 
 /// The hit note on its way from its place on the menu (`from`: middle and radius) to its button
-/// (`to`: the icon's middle and size), `f` of the way: it sheds its disc as it goes, and what
-/// lands is the bare icon, split red and cyan in the air.
+/// (`to`: the middle and radius of the note there), `f` of the way: the whole note flies,
+/// shrinking to the one it lands into, its icon split red and cyan in the air.
 pub fn draw_flight(
     c: &mut Canvas,
     item: Item,
     (from, r0): ([f32; 2], f32),
-    (to, size): ([f32; 2], f32),
+    (to, r1): ([f32; 2], f32),
     f: f32,
 ) {
     if f <= 0.0 || f >= 1.0 {
@@ -330,29 +330,15 @@ pub fn draw_flight(
     let ctrl = [(from[0] + to[0]) / 2.0, from[1].min(to[1]) - 30.0];
     let bez = |a: f32, b: f32, k: f32| (1.0 - f).powi(2) * a + 2.0 * (1.0 - f) * f * k + f * f * b;
     let (x, y) = (bez(from[0], to[0], ctrl[0]), bez(from[1], to[1], ctrl[1]));
-    // The icon is 16 of the note's 31 art pixels across.
-    let r1 = size * menu::NOTE_ART_R / 16.0;
     let r = r0 + (r1 - r0) * f;
-    let shed = clamp01(f * 1.6);
-    if shed < 1.0 {
-        let start = c.shapes.len();
-        menu::note(c, item, x, y, r);
-        c.fade_since(start, (1.0 - shed).powf(1.5), 1.0);
-    }
+    menu::note(c, item, x, y, r);
+    // The icon is 16 of the note's 31 art pixels across.
     let icon = item.icon_art();
     let is = 16.0 * r / menu::NOTE_ART_R;
     let air = (std::f32::consts::PI * f).sin();
     for (col, side) in [(0x9f2137, -1.0), (0x2a9fb5, 1.0)] {
-        style::icon(
-            c,
-            icon,
-            [x + side * 3.0 * air, y],
-            is,
-            col,
-            0.7 * shed * air,
-        );
+        style::icon(c, icon, [x + side * 3.0 * air, y], is, col, 0.5 * air);
     }
-    style::icon(c, icon, [x, y], is, 0xffffff, shed);
 }
 
 /// Whether the way between the menu and song select is animated at all (else it's a cut, as
@@ -364,6 +350,39 @@ pub fn animated() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_hit_note_flies_whole_and_lands_as_big_as_the_note_it_lands_into() {
+        let across = |f: f32| {
+            let mut c = Canvas::default();
+            draw_flight(
+                &mut c,
+                Item::Play,
+                ([100.0, 200.0], 40.0),
+                ([760.0, 433.0], 17.0),
+                f,
+            );
+            let white = rgba(0xffffff, 1.0);
+            let xs = c.shapes.iter().filter(|s| s.fill == white);
+            let lo = xs
+                .clone()
+                .map(|s| s.center[0] - s.half[0])
+                .fold(f32::MAX, f32::min);
+            let hi = xs.map(|s| s.center[0] + s.half[0]).fold(f32::MIN, f32::max);
+            hi - lo
+        };
+        // The white of its rim is 0.9 of the note across.
+        assert!(
+            (across(0.5) - 0.9 * 57.0).abs() < 3.0,
+            "whole on the way: {}",
+            across(0.5)
+        );
+        assert!(
+            (across(0.999) - 0.9 * 34.0).abs() < 3.0,
+            "landing: {}",
+            across(0.999)
+        );
+    }
 
     #[test]
     fn everything_starts_at_once_and_is_done_at_the_end() {

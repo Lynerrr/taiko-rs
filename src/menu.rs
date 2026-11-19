@@ -1315,24 +1315,9 @@ impl Menu {
         if k >= 1.0 {
             return;
         }
-        let a = 1.0 - k;
-        let px = pixel_size(LANE_PIXEL);
-        pixel_ring(
-            c,
-            self.spot,
-            34.0 + k * 50.0,
-            px * 2.0,
-            0,
-            px,
-            rgba(item.colour(), a * 0.9),
-        );
-        c.text_centered(
-            self.spot[0],
-            lane_top() - 22.0 - k * 18.0,
-            12.0,
-            rgba(0xFFD34D, a),
-            "GREAT",
-        );
+        let ring = rgba(item.colour(), (1.0 - k) * 0.9);
+        let text_y = lane_top() - 22.0 - k * 18.0;
+        burst_at(c, self.spot, 34.0 + k * 50.0, ring, (text_y, 12.0), k);
     }
 
     fn draw_title(&self, c: &mut Canvas, maps: usize) {
@@ -1581,6 +1566,22 @@ pub fn pixel_ring(
             }
         }
     }
+}
+
+/// A hit's burst round `spot`, `k` (0 to 1) of the way: a pixel ring `r` across in `ring`'s
+/// colour, and GREAT in gold at `text` (its top and size), both fading out.
+fn burst_at(c: &mut Canvas, spot: [f32; 2], r: f32, ring: [f32; 4], text: (f32, f32), k: f32) {
+    let a = 1.0 - k;
+    let px = pixel_size(LANE_PIXEL);
+    pixel_ring(c, spot, r, px * 2.0, 0, px, ring);
+    c.text_centered(spot[0], text.0, text.1, rgba(GOLD, a), "GREAT");
+}
+
+/// The menu's hit burst on the Play note elsewhere (song select's Play): its ring `r` across
+/// round `spot`, GREAT at `text_y` in `size`, `k` (0 to 1) of the way.
+pub fn hit_burst(c: &mut Canvas, spot: [f32; 2], r: f32, text_y: f32, size: f32, k: f32) {
+    let ring = rgba(Item::Play.colour(), (1.0 - k) * 0.9);
+    burst_at(c, spot, r, ring, (text_y, size), k);
 }
 
 /// An item's note on its own (the guide's pictures).

@@ -582,6 +582,98 @@ pub const DICE: Icon = [
     "................",
     "................",
 ];
+const DICE_ONE: Icon = [
+    "................",
+    "................",
+    "..############..",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".######..######.",
+    ".######..######.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    "..############..",
+    "................",
+    "................",
+];
+const DICE_TWO: Icon = [
+    "................",
+    "................",
+    "..############..",
+    ".##############.",
+    ".##..##########.",
+    ".##..##########.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##########..##.",
+    ".##########..##.",
+    ".##############.",
+    "..############..",
+    "................",
+    "................",
+];
+const DICE_THREE: Icon = [
+    "................",
+    "................",
+    "..############..",
+    ".##############.",
+    ".##..##########.",
+    ".##..##########.",
+    ".##############.",
+    ".######..######.",
+    ".######..######.",
+    ".##############.",
+    ".##########..##.",
+    ".##########..##.",
+    ".##############.",
+    "..############..",
+    "................",
+    "................",
+];
+const DICE_FOUR: Icon = [
+    "................",
+    "................",
+    "..############..",
+    ".##############.",
+    ".##..######..##.",
+    ".##..######..##.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##..######..##.",
+    ".##..######..##.",
+    ".##############.",
+    "..############..",
+    "................",
+    "................",
+];
+const DICE_SIX: Icon = [
+    "................",
+    "................",
+    "..############..",
+    ".##############.",
+    ".##..######..##.",
+    ".##..######..##.",
+    ".##############.",
+    ".##..######..##.",
+    ".##..######..##.",
+    ".##############.",
+    ".##..######..##.",
+    ".##..######..##.",
+    ".##############.",
+    "..############..",
+    "................",
+    "................",
+];
+/// The die's faces as it rolls (Random pressed), the five (`DICE`) where it stops.
+pub const DICE_ROLL: [&Icon; 5] = [&DICE_THREE, &DICE_SIX, &DICE_TWO, &DICE_FOUR, &DICE_ONE];
 /// Rankings: a podium.
 pub const PODIUM: Icon = [
     "................",
@@ -791,22 +883,31 @@ pub fn lane_surface(c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
     c.rect(x, y, w, h, fill);
 }
 
-/// The size of a lane-end button's ▶ at `[x, y, h]`, and its middle.
-pub fn lane_end_icon([x, y, h]: [f32; 3]) -> ([f32; 2], f32) {
-    let size = (h * 0.42).clamp(8.0, 11.0);
-    ([x + 14.0 + size * 0.5, y + h / 2.0], size * 1.1)
+/// The middle and radius at rest of the main menu's Play note at the end of a lane `[x, y, h]`
+/// (where the menu's hit note lands).
+pub fn lane_end_disc([x, y, h]: [f32; 3]) -> ([f32; 2], f32) {
+    let r = (h * 0.34).clamp(8.0, 17.0);
+    ([x + 12.0 + r, y + h / 2.0], r)
 }
 
+/// How much bigger the lane end's Play note is on the beat, and under the pointer.
+pub const LANE_END_BEAT_GROW: f32 = 0.06;
+pub const LANE_END_HOVER_GROW: f32 = 0.12;
+
 /// The main action as the end of a lane: a bar of the accent colour from `x` to the screen's
-/// right edge, the ▶ and `label` on it in white. Under the pointer it lights up and glows (no
-/// frame round it), easing in and out. `icon_shown`: the ▶ is in its place (not on its way).
+/// right edge, the main menu's Play note and `label` on it in white. The note swells a little on
+/// the beat; under the pointer it grows and the bar lights up and glows (no frame round it),
+/// easing in and out. `disc_shown`: the note is in its place (not on its way). `burst`: how far
+/// (0 to 1) a press's GREAT burst is, as the menu's notes have when hit.
+#[allow(clippy::too_many_arguments)]
 pub fn lane_end_button(
     c: &mut Canvas,
     key: &'static str,
     [x, y, h]: [f32; 3],
     label: &str,
     hit: crate::hit::Hit,
-    icon_shown: bool,
+    disc_shown: bool,
+    burst: Option<f32>,
 ) {
     use crate::menu::tint;
     let w = c.width - x;
@@ -841,14 +942,20 @@ pub fn lane_end_button(
     c.rect(x, y + 4.0, w, 1.0, line);
     c.rect(x, y + h - 5.0, w, 1.0, line);
     let size = (h * 0.42).clamp(8.0, 11.0);
-    if icon_shown {
-        let (at, icon_size) = lane_end_icon([x, y, h]);
-        icon(c, &PLAY, at, icon_size, 0xffffff, 1.0);
+    let (at, r) = lane_end_disc([x, y, h]);
+    if disc_shown {
+        let beat = if render::animations() { pulse() } else { 0.0 };
+        let grow = 1.0 + LANE_END_BEAT_GROW * beat + LANE_END_HOVER_GROW * g;
+        crate::menu::note(c, crate::menu::Item::Play, at[0], at[1], r * grow);
     }
-    let room = w - (28.0 + size * 1.1) - 8.0;
+    if let Some(k) = burst.filter(|k| (0.0..1.0).contains(k)) {
+        crate::menu::hit_burst(c, at, r * (1.3 + 1.6 * k), y - 14.0 - k * 10.0, 9.0, k);
+    }
+    let lx = at[0] + r + 10.0;
+    let room = w - (lx - x) - 8.0;
     glitch_text(
         c,
-        x + 22.0 + size * 1.1,
+        lx,
         y + (h - size) / 2.0,
         size,
         0xffffff,
@@ -1109,6 +1216,99 @@ mod tests {
         }
     }
 
+    /// The box round the white of the Play note's rim at a lane end (its text left out).
+    fn note_box(c: &Canvas) -> [f32; 4] {
+        let in_text = |i: usize| c.texts.iter().any(|(r, _)| r.contains(&i));
+        let white = rgba(0xffffff, 1.0);
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for (i, s) in c.shapes.iter().enumerate() {
+            if in_text(i) || s.fill != white {
+                continue;
+            }
+            for k in 0..2 {
+                lo[k] = lo[k].min(s.center[k] - s.half[k]);
+                hi[k] = hi[k].max(s.center[k] + s.half[k]);
+            }
+        }
+        [lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]]
+    }
+
+    fn lane_end(mouse: (f32, f32), burst: Option<f32>) -> Canvas {
+        let mut c = Canvas {
+            width: 853.3,
+            dt_ms: 1000.0,
+            mouse,
+            audit: true,
+            ..Default::default()
+        };
+        lane_end_button(
+            &mut c,
+            "test-play-note",
+            [700.0, 408.0, 50.0],
+            "Play",
+            crate::hit::Hit::ModsButton,
+            true,
+            burst,
+        );
+        c
+    }
+
+    #[test]
+    fn the_lane_end_holds_the_menus_play_note_which_grows_under_the_pointer() {
+        let ([mx, my], r) = lane_end_disc([700.0, 408.0, 50.0]);
+        let away = note_box(&lane_end((0.0, 0.0), None));
+        let mid = [away[0] + away[2] / 2.0, away[1] + away[3] / 2.0];
+        assert!(
+            (mid[0] - mx).abs() < 2.0 && (mid[1] - my).abs() < 2.0,
+            "{away:?} round {mx},{my}"
+        );
+        // The white of its rim is 0.9 of the note across.
+        assert!((away[2] - 1.8 * r).abs() < 3.0, "{} across, r {r}", away[2]);
+        let over = note_box(&lane_end((760.0, 430.0), None));
+        let grown = over[2] / away[2];
+        assert!(
+            (grown - (1.0 + LANE_END_HOVER_GROW)).abs() < 0.06,
+            "under the pointer: {grown}"
+        );
+        let c = lane_end((0.0, 0.0), None);
+        let [_, label] = c
+            .texts
+            .iter()
+            .find(|(_, t)| t == "Play")
+            .map(|(r, _)| [c.shapes[r.start].center[0], c.shapes[r.start].center[0]])
+            .expect("its label");
+        assert!(label > away[0] + away[2], "the label after the note");
+    }
+
+    #[test]
+    fn the_lane_ends_play_note_swells_on_the_beat() {
+        let theme = |pulse: f32| render::Theme {
+            accent: 0x13c4a7,
+            animations: true,
+            legacy_menu: false,
+            pulse,
+            kiai: 0.0,
+        };
+        render::set_frame_theme(Some(theme(0.0)));
+        let rest = note_box(&lane_end((0.0, 0.0), None));
+        render::set_frame_theme(Some(theme(1.0)));
+        let beat = note_box(&lane_end((0.0, 0.0), None));
+        render::set_frame_theme(None);
+        let grown = beat[2] / rest[2];
+        assert!(
+            grown > 1.0 + LANE_END_BEAT_GROW / 2.0 && grown < 1.0 + LANE_END_BEAT_GROW * 2.0,
+            "on the beat: {grown}"
+        );
+    }
+
+    #[test]
+    fn a_press_bursts_great_round_the_play_note() {
+        let says = |c: &Canvas| c.texts.iter().any(|(_, t)| t == "GREAT");
+        assert!(!says(&lane_end((0.0, 0.0), None)));
+        assert!(says(&lane_end((0.0, 0.0), Some(0.3))));
+        assert!(!says(&lane_end((0.0, 0.0), Some(1.0))), "over");
+    }
+
     #[test]
     fn the_lane_end_lights_up_under_the_pointer_with_no_frame() {
         let draw = |mouse: (f32, f32)| {
@@ -1125,6 +1325,7 @@ mod tests {
                 "Play",
                 crate::hit::Hit::ModsButton,
                 true,
+                None,
             );
             c
         };

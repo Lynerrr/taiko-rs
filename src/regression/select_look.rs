@@ -959,3 +959,91 @@ fn the_strip_shows_the_online_board_greyed_out_until_it_comes() {
         "mine in the accent"
     );
 }
+
+/// `menu_look` with the interface's animations on.
+fn animated(tag: &str) -> (State, Songs, Instant) {
+    let (mut s, songs, now) = menu_look(tag);
+    s.cfg.animations = true;
+    (s, songs, now)
+}
+
+#[test]
+fn play_is_the_menus_play_note_and_its_map_starts_after_a_great_burst() {
+    let (mut s, _songs, mut now) = animated("select-look-play-note");
+    let c = settled(&mut s, &mut now);
+    let play = hit_rect(&c, |h| matches!(h, Hit::Key(KeyCode::Enter))).expect("Play");
+    let (at, r) = s.play_icon_at.expect("where the menu's note lands");
+    assert!(inside(at, play, 0.0) && r > 10.0, "{at:?} {r} in {play:?}");
+    // The note itself: its white rim round where the flying note lands.
+    let rim = c
+        .shapes
+        .iter()
+        .filter(|sh| same_rgb(sh.fill, render::rgba(0xffffff, 1.0)) && inside(sh.center, play, 0.0))
+        .filter(|sh| (sh.center[0] - at[0]).hypot(sh.center[1] - at[1]) <= r * 1.2)
+        .count();
+    assert!(rim > 20, "the Play note's pixels: {rim}");
+    press(&mut s, KeyCode::Enter, now);
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Select", "not yet: the burst first");
+    assert!(shows(&c, "GREAT"), "the menu's hit burst");
+    press(&mut s, KeyCode::Enter, now);
+    now += Duration::from_millis(200);
+    frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Loading", "then the map");
+}
+
+#[test]
+fn without_animations_play_starts_the_map_at_once() {
+    let (mut s, _songs, mut now) = menu_look("select-look-play-cut");
+    settled(&mut s, &mut now);
+    press(&mut s, KeyCode::Enter, now);
+    assert_eq!(scene_name(&s), "Loading");
+}
+
+#[test]
+fn the_mods_on_show_as_coloured_badges_after_the_word() {
+    let (mut s, _songs, mut now) = menu_look("select-look-mod-badges");
+    s.cfg.mods = crate::mods::Mods::parse("HD,HR");
+    s.select.mods_label = s.cfg.mods.label();
+    let c = settled(&mut s, &mut now);
+    let [wx, wy] = text_at(&c, "Mods").expect("the word alone");
+    let [rx, _] = text_at(&c, "Random").expect("Random");
+    for m in ["HD", "HR"] {
+        let [x, y] = text_at(&c, m).unwrap_or_else(|| panic!("{m}"));
+        assert!(x > wx && x < rx && (y - wy).abs() < 4.0, "{m} between: {x}");
+        let badge = c.shapes.iter().any(|sh| {
+            let [bx, by, bw, bh] = rect(sh);
+            sh.params[1] > 0.0 && bx < x && bx + bw > x && by < y + 3.0 && by + bh > y + 3.0
+        });
+        assert!(badge, "{m} on a badge");
+        let opens = c
+            .hits
+            .iter()
+            .any(|b| b.hit == Hit::ModsButton && inside([x + 2.0, y + 3.0], b.rect, 0.0));
+        assert!(opens, "a click on {m} opens the mod select");
+    }
+}
+
+#[test]
+fn randoms_die_rolls_when_pressed_and_rests_on_five() {
+    let (mut s, _songs, mut now) = animated("select-look-dice");
+    let die = |c: &Canvas| {
+        let r = hit_rect(c, |h| matches!(h, Hit::Key(KeyCode::F2))).expect("Random");
+        let mut shapes: Vec<[i32; 4]> = c
+            .shapes
+            .iter()
+            .filter(|sh| inside(sh.center, [r[0], r[1], 24.0, r[3]], 0.0))
+            .map(|sh| rect(sh).map(|v| (v * 4.0).round() as i32))
+            .collect();
+        shapes.sort_unstable();
+        shapes
+    };
+    let rest = die(&settled(&mut s, &mut now));
+    press(&mut s, KeyCode::F2, now);
+    now += Duration::from_millis(16);
+    let rolling = die(&frame(&mut s, now));
+    assert_ne!(rolling, rest, "another face while it rolls");
+    let rolled = die(&settled(&mut s, &mut now));
+    assert_eq!(rolled, rest, "back on five");
+}

@@ -176,6 +176,7 @@ impl Screen for SongSelect {
                     state.select.random_back();
                 } else {
                     state.select.random(&state.library);
+                    state.dice_roll = Some(at);
                 }
             }
             () if state.modifiers_ctrl
@@ -234,7 +235,7 @@ impl Screen for SongSelect {
                     state.pick_to_edit = false;
                     state.open_editor(i);
                 }
-                SelectAction::Play(i) => state.start_loading(i),
+                SelectAction::Play(i) => press_play(state, i, at),
                 SelectAction::Settings => state.open_settings(),
                 SelectAction::Mods => state.open_mod_select(),
                 SelectAction::Quit if state.cfg.main_menu => state.back_to_menu(),
@@ -279,6 +280,7 @@ impl Screen for SongSelect {
                 state.song_routes_drain = None;
             }
         }
+        let on_songs = shift.is_none() && !frame.on_menu;
         match shift {
             Some((t, into, flying)) => draw_shift(state, canvas, frame, t, into, flying),
             None if frame.on_menu => {
@@ -296,6 +298,16 @@ impl Screen for SongSelect {
             None => {
                 draw_crowd(state, canvas, frame.now, true, 1.0, 1.0);
                 draw_songs(state, canvas, frame, None, false);
+            }
+        }
+        // Play's burst is over: its map starts. Song select gone meanwhile (to the menu), it's
+        // dropped.
+        if let Some((at, i)) = state.play_burst {
+            if !on_songs || i >= state.library.len() {
+                state.play_burst = None;
+            } else if burst_progress(at, render::frame_now()) >= 1.0 {
+                state.play_burst = None;
+                state.start_loading(i);
             }
         }
         None
@@ -405,6 +417,45 @@ fn draw_menu(state: &mut State, canvas: &mut Canvas, frame: &Frame, layer: Layer
 /// its height, and how much of the screen's width its Play end takes.
 const ACTIONS_H: f32 = 50.0;
 const PLAY_SHARE: f32 = 0.16;
+/// How long Play's GREAT burst plays before the map starts (ms), and how long the die rolls
+/// when Random is pressed, a face to each `style::DICE_ROLL` step.
+pub(crate) const PLAY_BURST_MS: f32 = 180.0;
+pub(crate) const DICE_ROLL_MS: f32 = 300.0;
+/// The mods' badges on the lane of actions: their height (`multiplayer::mod_badges`), and the
+/// least room they are drawn in.
+const MOD_BADGE_H: f32 = 11.0;
+const MOD_BADGES_MIN: f32 = 24.0;
+
+/// How far (0 to 1) Play's burst pressed `at` is by `now`.
+fn burst_progress(at: Instant, now: Instant) -> f32 {
+    now.saturating_duration_since(at).as_secs_f32() * 1000.0 / PLAY_BURST_MS
+}
+
+/// The face Random's die shows `now`, pressed `at`: it rolls through a few, then rests on five.
+fn dice_face(at: Option<Instant>, now: Instant) -> &'static style::Icon {
+    let rolled = at.map_or(f32::INFINITY, |at| {
+        now.saturating_duration_since(at).as_secs_f32() * 1000.0 / DICE_ROLL_MS
+    });
+    if !render::animations() || !(0.0..1.0).contains(&rolled) {
+        return &style::DICE;
+    }
+    style::DICE_ROLL
+        [((rolled * style::DICE_ROLL.len() as f32) as usize).min(style::DICE_ROLL.len() - 1)]
+}
+
+/// Play pressed `at` (Enter, or a click on it): in the main menu's look the menu's GREAT burst plays on
+/// its note first and the map starts once it's over (`SongSelect::draw`); without animations,
+/// and in the Legacy and phone layouts, the map starts at once. Pressed again meanwhile, nothing.
+fn press_play(state: &mut State, i: usize, at: Instant) {
+    if state.play_burst.is_some() {
+        return;
+    }
+    if state.select.legacy || crate::mobile::active() || !render::animations() {
+        state.start_loading(i);
+        return;
+    }
+    state.play_burst = Some((at, i));
+}
 
 /// Song select itself. `shift`: the camera's on its way from or to the menu; `play_away`: the
 /// Play ▶ is still flying to its button.
@@ -770,36 +821,37 @@ fn draw_songs(
             let play_x = w - (w * PLAY_SHARE).clamp(120.0, 200.0);
             let mid = by + bh / 2.0;
             let mods_word = tr!("Mods", "Mod", "Моды");
-            // The mods that are on, two letters each, after the word.
-            let on: Vec<&str> = (0..mods.len() / 2)
-                .filter_map(|i| mods.get(i * 2..i * 2 + 2))
-                .collect();
-            let mods_label = if on.is_empty() {
-                mods_word.to_string()
-            } else {
-                format!("{mods_word} {}", on.join(" "))
-            };
+            let random = tr!("Random", "ランダム", "Случайная");
+            let random_w = 18.0 + style::icon_button_width(random, None, 8.0);
             let mut bx = panel_x + 16.0;
             let room = play_x - bx - style::icon_button_width("", None, 8.0) - 6.0;
-            let mods_label = Canvas::fit(8.0, room, &mods_label);
+            let mods_word = Canvas::fit(8.0, room, mods_word);
             bx += style::icon_button(
                 canvas,
                 [bx, mid],
                 &style::SPARK,
-                &mods_label,
+                &mods_word,
                 None,
                 8.0,
                 !mods.is_empty(),
                 hit::Hit::ModsButton,
             );
-            let random = tr!("Random", "ランダム", "Случайная");
-            if bx + 18.0 + style::icon_button_width(random, None, 8.0) < play_x {
+            // The mods that are on as badges after the word, each in its mod select column's
+            // colour, leaving Random its room; a click on them opens the mod select too.
+            let room = play_x - bx - random_w - 6.0;
+            if !state.cfg.mods.is_empty() && room >= MOD_BADGES_MIN {
+                let top = mid - MOD_BADGE_H / 2.0;
+                let w = crate::multiplayer::mod_badges(canvas, bx, top, state.cfg.mods, room);
+                canvas.hit(bx - 2.0, mid - 12.0, w + 4.0, 24.0, hit::Hit::ModsButton);
+                bx += w + 6.0;
+            }
+            if bx + random_w < play_x {
                 // The menu's small mark between two notes.
                 canvas.rect(bx + 4.0, mid - 2.0, 4.0, 4.0, render::rgba(0x6a6a88, 0.8));
                 style::icon_button(
                     canvas,
                     [bx + 18.0, mid],
-                    &style::DICE,
+                    dice_face(state.dice_roll, render::frame_now()),
                     random,
                     None,
                     8.0,
@@ -809,8 +861,11 @@ fn draw_songs(
             }
             let hit = hit::Hit::Key(KeyCode::Enter);
             let bar = [play_x, by, bh];
-            state.play_icon_at = Some(style::lane_end_icon(bar));
-            style::lane_end_button(canvas, "select-play", bar, play, hit, !play_away);
+            state.play_icon_at = Some(style::lane_end_disc(bar));
+            let burst = state
+                .play_burst
+                .map(|(at, _)| burst_progress(at, render::frame_now()));
+            style::lane_end_button(canvas, "select-play", bar, play, hit, !play_away, burst);
         }
         // The song list's right edge: the gap between the list's box (`ui`, ending
         // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
