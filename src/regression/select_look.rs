@@ -13,13 +13,22 @@ use crate::*;
 const ACCENT: u32 = 0x13c4a7;
 
 fn menu_look(tag: &str) -> (State, Songs, Instant) {
-    let songs = Songs::new(tag, &maps::all());
+    menu_look_with(tag, &maps::all())
+}
+
+/// `menu_look` with these charts, each a set of its own, every one naming a picture.
+fn menu_look_with(tag: &str, charts: &[maps::Chart]) -> (State, Songs, Instant) {
+    let songs = Songs::new(tag, charts);
     let cfg = Config {
         main_menu: true,
         accent: ACCENT,
         ..harness::config()
     };
-    let mut s = state_with(cfg, songs.entries());
+    let mut entries = songs.entries();
+    for e in &mut entries {
+        e.meta.background = Some("bg.png".into());
+    }
+    let mut s = state_with(cfg, entries);
     let mut now = Instant::now();
     ready(&mut s, &mut now);
     assert!(!s.select.legacy && s.main_menu.is_none());
@@ -77,14 +86,49 @@ fn hit_rect(c: &Canvas, want: impl Fn(&Hit) -> bool) -> Option<[f32; 4]> {
     c.hits.iter().find(|h| want(&h.hit)).map(|h| h.rect)
 }
 
+/// Where the selected set's card is (its row's hit).
+fn open_card(c: &Canvas, s: &State) -> [f32; 4] {
+    let cursor = s.select.cursor();
+    let start = s
+        .select
+        .song_groups()
+        .iter()
+        .find(|g| g.contains(&cursor))
+        .map(|g| g.start);
+    hit_rect(c, |h| matches!(h, Hit::SongHeader(i) if Some(*i) == start)).expect("the open set")
+}
+
+/// The sets' cards drawn: first row and where.
+fn cards(c: &Canvas) -> Vec<(usize, [f32; 4])> {
+    c.hits
+        .iter()
+        .filter_map(|h| match h.hit {
+            Hit::SongHeader(i) => Some((i, h.rect)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Twenty sets: more than the list shows.
+fn many() -> Vec<maps::Chart> {
+    (0..20)
+        .map(|i| maps::Chart {
+            name: Box::leak(format!("set-{i:02}").into_boxed_str()),
+            ..maps::basics()
+        })
+        .collect()
+}
+
 #[test]
 fn surfaces_have_no_edge_and_rows_no_lines_under_them() {
     let (mut s, _songs, mut now) = menu_look("select-look-edges");
     let c = settled(&mut s, &mut now);
+    // The selection's outline round the open set's card is the one edge.
+    let open = open_card(&c, &s);
     let edged: Vec<[f32; 4]> = c
         .shapes
         .iter()
-        .filter(|sh| plain(sh) && on_select(sh, &c, &s))
+        .filter(|sh| plain(sh) && on_select(sh, &c, &s) && !inside(sh.center, open, 1.0))
         .filter(|sh| sh.params[1] > 0.0 && sh.border[3] > 0.01)
         .filter(|sh| !same_rgb(sh.border, sh.fill) || sh.fill[3] < sh.border[3])
         .map(rect)
@@ -170,4 +214,99 @@ fn the_selected_difficulty_is_in_its_ratings_colour() {
             && same_rgb(sh.fill, colour)),
         "the difficulty's name in the details is in its rating's colour"
     );
+}
+
+#[test]
+fn every_set_card_on_screen_asks_for_its_own_picture() {
+    let (mut s, _songs, mut now) = menu_look("select-look-pictures");
+    let c = settled(&mut s, &mut now);
+    let shown = cards(&c);
+    assert!(shown.len() >= 5, "the sets are cards: {shown:?}");
+    for (row, _) in shown {
+        let e = &s.library[s.select.row_map(row).expect("a set's map")];
+        let bg = preview::background_path(e).expect("it names a picture");
+        assert!(
+            c.picture_paths
+                .iter()
+                .any(|(k, p)| *p == bg && *k == render::path_picture_key(&bg)),
+            "{} asks for its picture",
+            e.meta.title
+        );
+    }
+}
+
+#[test]
+fn the_open_set_slides_out_the_rest_sit_in_and_one_under_the_pointer_comes_out() {
+    let (mut s, _songs, mut now) = menu_look("select-look-cards");
+    let c = settled(&mut s, &mut now);
+    let open = open_card(&c, &s);
+    assert_eq!(open[0], 24.0, "the open set's card at the list's edge");
+    let others: Vec<[f32; 4]> = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r)
+        .filter(|r| *r != open)
+        .collect();
+    assert!(!others.is_empty());
+    assert!(
+        others.iter().all(|r| r[0] == 36.0),
+        "the rest sit in: {others:?}"
+    );
+    // The others are dimmed: none of their shapes is at full strength.
+    let first = others[0];
+    let strong = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && inside(sh.center, first, 0.0))
+        .any(|sh| sh.fill[3] > 0.71);
+    assert!(!strong, "a set not open is dimmed");
+    // The pointer on one: it comes out 4 units (animations are off: at once).
+    let k = (s.window_h / render::VIRTUAL_HEIGHT) as f64;
+    let (px, py) = (first[0] + first[2] / 2.0, first[1] + 10.0);
+    let (px, py) = (px as f64 * k, py as f64 * k);
+    s.mouse_moved(px, py);
+    s.mouse = (px, py);
+    // Two frames: a frame's hits come back with the next one.
+    for _ in 0..2 {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    let moved = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r)
+        .find(|r| (r[1] - first[1]).abs() < 0.5)
+        .expect("the card under the pointer");
+    assert_eq!(moved[0], 32.0, "it comes out under the pointer");
+}
+
+#[test]
+fn the_last_card_fades_out_at_the_lists_bottom() {
+    let (mut s, _songs, mut now) = menu_look_with("select-look-bottom", &many());
+    let c = settled(&mut s, &mut now);
+    let [_, end] = s.select.frame_span();
+    let bottom = end - 4.0;
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let cut = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r)
+        .find(|r| r[1] < bottom && r[1] + r[3] > bottom)
+        .expect("a card runs past the list's bottom");
+    // What of it is drawn just above the bottom is all but gone.
+    let near: Vec<f32> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && sh.center[0] > 20.0 && sh.center[0] < 28.0 + lw)
+        .filter(|sh| {
+            // Reaching into the last 3 units above the bottom.
+            let [_, y, _, h] = rect(sh);
+            y < bottom && y + h > bottom - 3.0
+        })
+        .map(|sh| sh.fill[3])
+        .collect();
+    assert!(
+        !near.is_empty(),
+        "the card at {cut:?} is drawn down to the bottom"
+    );
+    assert!(near.iter().all(|a| *a < 0.3), "faded out: {near:?}");
 }

@@ -506,8 +506,9 @@ pub fn layout_problems(c: &crate::hit::Canvas) -> Vec<String> {
             ));
         }
         // The box under the text's start and under its middle (centred labels): the topmost
-        // visible rounded box drawn before it.
-        let mid_y = (ink[1] + ink[3]) / 2.0;
+        // visible rounded box drawn before it, where the text is seen (a row scrolled half under
+        // the top of a list shows only its lower part, over its own card, not over what's above).
+        let mid_y = (seen[1] + seen[3]) / 2.0;
         for x in [ink[0] + 1.0, (ink[0] + ink[2]) / 2.0] {
             let holder = c
                 .boxes
