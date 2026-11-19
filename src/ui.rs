@@ -383,7 +383,7 @@ pub struct Select {
 }
 
 /// A play's letter in its colour, the same as on the website.
-fn grade_colour(grade: &str) -> u32 {
+pub(crate) fn grade_colour(grade: &str) -> u32 {
     match grade {
         "SS" | "S" => 0xFFD34D,
         "A" => 0x86E05A,

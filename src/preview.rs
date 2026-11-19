@@ -207,6 +207,8 @@ pub struct Preview {
     pub mods: crate::mods::Mods,
     /// Bottom of the song select panel as last drawn (virtual units).
     pub panel_bottom: f32,
+    /// Bare: where the strip of the map's board goes under the timeline (song select draws it).
+    pub mini_board: Option<[f32; 4]>,
     /// Room kept free at the right of the title line, for a button over the panel's corner
     /// (song select's way to the leaderboard); 0 elsewhere.
     pub title_room: f32,
@@ -881,6 +883,7 @@ impl Preview {
     pub fn hide_panel(&mut self) {
         self.graph_rect = None;
         self.play_rect = None;
+        self.mini_board = None;
     }
 
     /// The map whose music plays, and where it is (map ms).
@@ -1330,8 +1333,8 @@ impl Preview {
         let (band_top, band_h) = game::lane_only();
         // Bare, the timeline's bars are lower: quieter, and room under them.
         let graph_h = if self.bare { BARE_GRAPH_H } else { 40.0 };
-        // Under the preview box: the timeline and its button.
-        let after_box = 8.0 + graph_h + 44.0;
+        // Under the preview box: the timeline and its button, and bare, the board's strip.
+        let after_box = 8.0 + graph_h + 44.0 + if self.bare { MINI_BOARD_H } else { 0.0 };
         // The preview's height per unit of its size. Smaller, it shows more of the lane ahead in
         // a shorter box: as small as dragged, and smaller still where the panel would otherwise
         // be taller than `h` (the details above it being `head` tall).
@@ -1352,6 +1355,7 @@ impl Preview {
         self.graph_rect = None;
         self.play_rect = None;
         self.box_rect = None;
+        self.mini_board = None;
         let Some(i) = self.seen.filter(|&i| i < library.len()) else {
             (self.size_cap, self.size_shown) = (fitted(110.0), wanted.min(fitted(110.0)));
             let below = unit * self.size_shown + 12.0 + after_box;
@@ -1704,15 +1708,20 @@ impl Preview {
         }
         self.box_rect = Some([bx, by, bw, bh]);
         c.hit(bx, by, lane_end.min(c.width) - bx, bh, Hit::Preview);
+        // Bare, the timeline is as wide as the lane over it, short of its fading end.
+        let gw = if self.bare {
+            lane_end - LANE_FADE[1] / 2.0 - bx
+        } else {
+            bw
+        };
+        if self.bare {
+            // Under the timeline's button (17 tall, 17 under the bars).
+            let top = by + bh + 8.0 + graph_h + 17.0 + 17.0 + 4.0;
+            self.mini_board = Some([bx, top, gw, MINI_BOARD_H]);
+        }
         let loaded = is_loaded;
         if loaded {
             let graph_start = c.shapes.len();
-            // Bare, as wide as the lane over it, short of its fading end.
-            let gw = if self.bare {
-                lane_end - LANE_FADE[1] / 2.0 - bx
-            } else {
-                bw
-            };
             self.draw_timeline(c, e, [bx, by + bh + 8.0, gw, graph_h], button);
             // Seeking goes by the music: until this map's plays, a click would move the last one.
             if !playing {
@@ -1824,6 +1833,8 @@ const STAT_GAP: f32 = 10.0;
 /// right (where the notes come in), and how tall the timeline's bars are.
 const LANE_FADE: [f32; 2] = [10.0, 28.0];
 const BARE_GRAPH_H: f32 = 28.0;
+/// Bare: the height of the strip of the map's board under the timeline.
+pub const MINI_BOARD_H: f32 = 18.0;
 /// Bare: the timeline's bars, a neutral ink (the accent is Play's and the selection's), kiai's in
 /// gold; how strong they are ahead of the playhead and behind it.
 const KIAI_GOLD: u32 = 0xFFD34D;

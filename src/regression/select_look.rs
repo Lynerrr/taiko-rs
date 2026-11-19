@@ -818,3 +818,144 @@ fn the_timeline_is_quiet_and_its_kiai_in_gold() {
         "its kiai in gold"
     );
 }
+
+/// The texts drawn inside `r`.
+fn texts_in(c: &Canvas, [x, y, w, h]: [f32; 4]) -> Vec<String> {
+    c.texts
+        .iter()
+        .filter(|(range, _)| {
+            c.shapes.get(range.start).is_some_and(|sh| {
+                let [sx, sy, ..] = rect(sh);
+                sx >= x - 0.5 && sx <= x + w && sy >= y - 0.5 && sy <= y + h
+            })
+        })
+        .map(|(_, t)| t.clone())
+        .collect()
+}
+
+/// A local play on the selected map.
+fn local_play(s: &State, player: &str, score: u64, accuracy: f64) -> crate::scores::ScoreRow {
+    let i = s.select.selected().expect("a map selected");
+    crate::scores::ScoreRow {
+        map_hash: s.library[i].hash(),
+        date: 1_700_000_000 + score,
+        score,
+        accuracy,
+        max_combo: 100,
+        miss: 0,
+        rate: 1.0,
+        player: player.into(),
+        file: std::path::PathBuf::new(),
+        mods: String::new(),
+        pp: None,
+    }
+}
+
+#[test]
+fn the_details_show_the_maps_top_three_and_my_best_under_the_timeline() {
+    let (mut s, _songs, mut now) = menu_look("select-look-mini-board");
+    for (k, name) in ["Ann", "Bo", "Cy", "Di"].iter().enumerate() {
+        let play = local_play(&s, name, 900_000 - k as u64 * 1000, 0.99 - k as f64 * 0.01);
+        s.scores.push(play);
+    }
+    let c = settled(&mut s, &mut now);
+    let strip = s.preview.mini_board.expect("a strip under the timeline");
+    let [_, ty] = text_at(&c, "0:00 / ").expect("the timeline");
+    assert!(strip[1] > ty, "under the timeline: {strip:?}");
+    let shown = texts_in(&c, strip);
+    for name in ["Ann", "Bo", "Cy"] {
+        assert!(shown.iter().any(|t| t == name), "{name} in {shown:?}");
+    }
+    assert!(
+        !shown.iter().any(|t| t == "Di"),
+        "only the top three: {shown:?}"
+    );
+    // The best of the player's own plays at its right: what it is, its grade and accuracy.
+    for part in ["best", "S", "99.00%"] {
+        assert!(shown.iter().any(|t| t == part), "{part} in {shown:?}");
+    }
+    let opens = c.hits.iter().any(|b| {
+        let r = b.rect;
+        b.hit == Hit::BoardPage
+            && r[0] <= strip[0] + 1.0
+            && r[1] <= strip[1] + 1.0
+            && r[2] >= strip[2] - 1.0
+    });
+    assert!(opens, "a click on it opens the whole board");
+    // Above the lane of actions.
+    let play = c
+        .hits
+        .iter()
+        .find(|b| b.hit == Hit::Key(KeyCode::Enter))
+        .expect("Play")
+        .rect;
+    assert!(
+        strip[1] + strip[3] <= play[1],
+        "{strip:?} over Play {play:?}"
+    );
+}
+
+#[test]
+fn with_no_plays_the_strip_says_so_quietly() {
+    let (mut s, _songs, mut now) = menu_look("select-look-mini-board-empty");
+    let c = settled(&mut s, &mut now);
+    let strip = s.preview.mini_board.expect("a strip under the timeline");
+    assert_eq!(texts_in(&c, strip), vec!["no scores yet".to_string()]);
+}
+
+#[test]
+fn the_strip_shows_the_online_board_greyed_out_until_it_comes() {
+    let (mut s, _songs, mut now) = menu_look("select-look-mini-board-online");
+    settled(&mut s, &mut now);
+    // The board tab turned online: the strip waits a moment on the map, then asks the server.
+    s.board_online = true;
+    s.cfg.online_user = "Bo".into();
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    let strip = s.preview.mini_board.expect("a strip");
+    let grey = render::rgba(style::ink::SECONDARY, 0.12);
+    let bars = c
+        .shapes
+        .iter()
+        .filter(|sh| same_rgb(sh.fill, grey) && (sh.fill[3] - grey[3]).abs() < 0.01)
+        .filter(|sh| {
+            let [x, y, ..] = rect(sh);
+            x >= strip[0] && y >= strip[1] && y <= strip[1] + strip[3]
+        })
+        .count();
+    assert_eq!(bars, 3, "grey bars in the rows' places");
+    assert!(texts_in(&c, strip).is_empty());
+    let i = s.select.selected().unwrap();
+    let hash = s.library[i].hash();
+    let score = |player: &str, accuracy: f64| crate::online::OnlineScore {
+        player: player.into(),
+        accuracy,
+        ..Default::default()
+    };
+    let rows = vec![
+        score("Ann", 0.99),
+        score("Bo", 0.98),
+        score("Cy", 0.97),
+        score("Di", 0.96),
+    ];
+    s.online_boards
+        .insert((hash, false), (Instant::now(), Ok(rows)));
+    let c = settled(&mut s, &mut now);
+    let shown = texts_in(&c, strip);
+    assert!(
+        ["Ann", "Bo", "Cy"]
+            .iter()
+            .all(|n| shown.iter().any(|t| t == n)),
+        "{shown:?}"
+    );
+    // The player's own row in the accent.
+    let bo = c
+        .texts
+        .iter()
+        .find(|(r, t)| t == "Bo" && texts_in(&c, strip).contains(t) && !r.is_empty())
+        .unwrap();
+    assert!(
+        same_rgb(c.shapes[bo.0.start].fill, render::rgba(ACCENT, 1.0)),
+        "mine in the accent"
+    );
+}

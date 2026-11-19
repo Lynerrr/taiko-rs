@@ -55,6 +55,7 @@ text   57,298  Regression  |  mapped by tests
 text  490,353  0:00 / 0:10
 text  661,353  peak 7.0 notes/s at 0:01
 text  501,369  click / drag / wheel to scroll - play from where you stop
+text  499,392  no scores yet
 text  751,428  Play
 text  513,429  Mods HR HD
 text  628,429  Random
@@ -73,6 +74,7 @@ hit     4,52     20x402  SongScrollbar
 hit   712,118    16x13   SelectLike
 hit   490,251   330x61   Preview
 hit   488,318   320x32   Preview
+hit   490,386   316x18   BoardPage
 hit   716,56     95x24   BoardPage
 hit   490,421    98x24   ModsButton
 hit   605,421    70x24   Key(F2)
