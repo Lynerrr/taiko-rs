@@ -609,6 +609,68 @@ fn an_account_from_before_the_terms_agrees_once_or_is_logged_out() {
 }
 
 #[test]
+fn an_account_that_agreed_to_version_1_is_asked_again_for_version_2() {
+    let (server, _rx) = terms_server();
+    let mut cfg = harness::config();
+    cfg.online_server = server;
+    cfg.online_user = "me".into();
+    cfg.online_token = "t".into();
+    cfg.terms_version = 1;
+    let mut s = state_with(cfg, Vec::new());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.mp_menu.account_request.is_none()
+            && s.mp_menu.online.is_some()),
+        "the saved login is checked"
+    );
+    assert_eq!(terms::VERSION, 2);
+    assert_eq!(
+        s.terms.as_ref().map(|t| t.purpose),
+        Some(terms::Purpose::Account),
+        "version 1 isn't enough any more"
+    );
+    press(&mut s, KeyCode::Enter, now);
+    assert!(s.terms.is_none());
+    assert_eq!(s.cfg.terms_version, 2);
+    assert_eq!(s.mp_menu.account.as_deref(), Some("me"));
+}
+
+#[test]
+fn every_translation_of_the_terms_says_players_answer_for_what_they_share() {
+    for (text, heading, affiliation) in [
+        (
+            terms::ALL[0],
+            "## What you share",
+            "isn't affiliated with ppy (osu!), Bandai Namco (Taiko no Tatsujin) or OpenTaiko",
+        ),
+        (
+            terms::ALL[1],
+            "## 共有するもの",
+            "OpenTaiko とは関係ありません",
+        ),
+        (
+            terms::ALL[2],
+            "## Что ты отправляешь",
+            "не связана с ppy (osu!), Bandai Namco (Taiko no Tatsujin) и OpenTaiko",
+        ),
+    ] {
+        assert!(
+            text.lines().nth(1).is_some_and(|l| l.contains('2')),
+            "version 2"
+        );
+        let section = text.split(heading).nth(1).expect("the section is there");
+        let section = section.split("\n## ").next().unwrap();
+        assert_eq!(section.lines().filter(|l| l.starts_with("- ")).count(), 4);
+        assert!(
+            section.contains("postmaster@auneu.space"),
+            "where rights holders write"
+        );
+        assert!(text.contains(affiliation));
+    }
+}
+
+#[test]
 fn a_server_that_keeps_the_terms_hears_of_the_agreement_and_it_counts_on_every_install() {
     let is_accept = |r: &online::Request| matches!(r, online::Request::AcceptTerms { .. });
     let start = |kept: Option<u32>, version: u32| {

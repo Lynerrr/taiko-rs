@@ -1,7 +1,7 @@
 # taiko.rs: terms and your data
-Version 1, 13 November 2026
+Version 2, 19 November 2026
 
-taiko.rs is a free game made by a small team. You only need an account to play online. By signing up you agree to these terms.
+taiko.rs is a free game made by a small team. You only need an account to play online. By signing up you agree to these terms. taiko.rs isn't affiliated with ppy (osu!), Bandai Namco (Taiko no Tatsujin) or OpenTaiko.
 
 ## What we keep
 - Account: your name, email and password. The password is stored only as a hash; we never see the password itself.
@@ -23,6 +23,12 @@ Your data is stored on our server in Poland.
 
 ## Deleting your data
 Write to postmaster@auneu.space and we'll delete your account and everything tied to it.
+
+## What you share
+- You're responsible for what you upload or send through taiko.rs: maps, avatars, screenshots, chat messages, and the charts and music you send to other players in a lobby. Only share what you have the right to share.
+- We don't check what players send each other. A lobby host's map goes to the room's players through our server, which passes it on and keeps none of it.
+- Rights holders: write to postmaster@auneu.space saying what it is and where, and we'll take it down or stop it.
+- We can remove what was shared, and close the accounts of players who keep sharing what they have no right to.
 
 ## Behaviour
 Don't cheat, don't harass people, and don't pass off someone else's maps or replays as yours. Breaking this can get your scores hidden or your account banned.
