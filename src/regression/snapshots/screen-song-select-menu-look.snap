@@ -57,7 +57,7 @@ text  490,353  0:00 / 0:10
 text  661,353  peak 7.0 notes/s at 0:01
 text  501,369  click / drag / wheel to scroll - play from where you stop
 text  499,392  no scores yet
-text  773,428  Play
+text  749,428  Play
 text  513,429  Mods
 text  587,429  Random
 hit    26,20     56x24   ToMenu
@@ -79,7 +79,7 @@ hit   490,386   316x18   BoardPage
 hit   716,56     95x24   BoardPage
 hit   490,421    56x24   ModsButton
 hit   564,421    70x24   Key(F2)
-hit   717,408   137x50   Key(Enter)
+hit   693,408   137x50   Key(Enter)
 hit   472,229     8x48   SplitList
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account

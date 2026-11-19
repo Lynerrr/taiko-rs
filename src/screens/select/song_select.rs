@@ -815,12 +815,13 @@ fn draw_songs(
             let hit = hit::Hit::Key(KeyCode::Enter);
             canvas.button(panel_x, by, panel_w, bh, &label, 8.0, hit, true);
         } else {
-            // The main menu's look: a lane of its own from beside the list off the screen's
-            // right edge (a raised surface, no lines round it), Mods and Random bare icons on
-            // it, and Play its end, filled with the accent and running off the screen.
+            // The main menu's look: a lane of its own from beside the list to the screen's
+            // margin, level with the panel's right edge (a raised surface, no lines round it),
+            // Mods and Random bare icons on it, and Play its end, filled with the accent.
             let w = canvas.width;
-            style::lane_surface(canvas, [panel_x, by, w - panel_x + 2.0, bh]);
-            let play_x = w - (w * PLAY_SHARE).clamp(120.0, 200.0);
+            let right = panel_x + panel_w;
+            style::lane_surface(canvas, [panel_x, by, right - panel_x, bh]);
+            let play_x = right - (w * PLAY_SHARE).clamp(120.0, 200.0);
             let mid = by + bh / 2.0;
             let mods_word = tr!("Mods", "Mod", "Моды");
             let random = tr!("Random", "ランダム", "Случайная");
@@ -862,8 +863,8 @@ fn draw_songs(
                 );
             }
             let hit = hit::Hit::Key(KeyCode::Enter);
-            let bar = [play_x, by, bh];
-            state.play_icon_at = Some(style::lane_end_disc(bar));
+            let bar = [play_x, by, right - play_x, bh];
+            state.play_icon_at = Some(style::lane_end_disc([play_x, by, bh]));
             let burst = state
                 .play_burst
                 .map(|(at, _)| burst_progress(at, render::frame_now()));

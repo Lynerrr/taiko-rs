@@ -1335,3 +1335,28 @@ fn the_map_s_picture_behind_song_select_is_blurred_to_a_field_of_colour() {
     assert!(legacy.select.legacy);
     assert_eq!(legacy.background_blur(), 0.0);
 }
+
+#[test]
+fn play_and_the_lane_of_actions_keep_the_screen_s_margin() {
+    let (mut s, _songs, mut now) = menu_look("select-look-play-margin");
+    let c = settled(&mut s, &mut now);
+    let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
+    let margin = c.width - (play[0] + play[2]);
+    assert!(
+        (margin - 24.0).abs() < 0.5,
+        "Play ends 24 in from the right, as the panel above it: {margin}"
+    );
+    // And the lane under Mods and Random ends with it, both ends round.
+    let lane = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, style::surface_fill(style::Surface::Raised)))
+        .map(|sh| (rect(sh), sh.params[0]))
+        .find(|(r, _)| (r[1] - play[1]).abs() < 0.5 && (r[3] - play[3]).abs() < 0.5)
+        .expect("the lane of actions");
+    assert!(
+        (lane.0[0] + lane.0[2] - (play[0] + play[2])).abs() < 0.5,
+        "{lane:?}"
+    );
+    assert_eq!(lane.1, style::radius::CARD);
+}

@@ -1160,7 +1160,7 @@ impl Preview {
             crate::style::skeleton(c, [x + w - 14.0 - pw, cy + 3.0, pw, ph], ph / 2.0);
             pw
         } else {
-            crate::style::map_pill(c, x + w - 14.0, cy + 3.0, text::HEADING, level, stars)
+            crate::style::star_chip(c, x + w - 14.0, cy + 3.0, text::HEADING, level, stars)
         };
         let chip = role::rating(level, stars);
         let luma = 0.299 * (chip >> 16 & 0xff) as f32
@@ -1171,7 +1171,14 @@ impl Preview {
         let name = Canvas::fit(text::BODY, room, &e.meta.version);
         let cw = Canvas::text_width(text::BODY, &name) + 16.0;
         let fill = rgba(chip, 1.0);
-        c.round_rect([lx, cy], [cw, CHIP_H], 5.0, fill, fill, 0.0);
+        c.round_rect(
+            [lx, cy],
+            [cw, CHIP_H],
+            crate::style::radius::SMALL,
+            fill,
+            fill,
+            0.0,
+        );
         let ty = cy + (CHIP_H - Canvas::text_height(text::BODY)) / 2.0;
         c.text(lx + 8.0, ty, text::BODY, rgba(chip_ink, 1.0), &name);
         cy += CHIP_H + BLOCK_GAP;
