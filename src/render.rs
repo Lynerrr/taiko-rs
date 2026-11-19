@@ -4153,7 +4153,14 @@ impl<H> Canvas<H> {
     /// Fades every shape drawn since `start` to `alpha` of its opacity and darkens it to `dim`
     /// of its brightness (the Multiverse playfields out of focus).
     pub fn fade_since(&mut self, start: usize, alpha: f32, dim: f32) {
-        for sh in &mut self.shapes[start..] {
+        let end = self.shapes.len();
+        self.fade_between(start, end, alpha, dim);
+    }
+
+    /// As `fade_since`, for the shapes from `start` up to (not including) `end` only.
+    pub fn fade_between(&mut self, start: usize, end: usize, alpha: f32, dim: f32) {
+        let end = end.min(self.shapes.len());
+        for sh in &mut self.shapes[start.min(end)..end] {
             for col in [&mut sh.fill, &mut sh.border] {
                 col[0] *= dim;
                 col[1] *= dim;

@@ -1,9 +1,10 @@
 //! The way between the main menu and song select. The menu's lane doesn't end at the screen's
 //! right edge: it runs on to where song select already stands. Play moves the camera right along
 //! it; on the way the part of the lane that comes into view rises and folds up into song select's
-//! search row, the song list drops down out of that row as one window with it, and the Play note
-//! flies to the Play button, shedding its disc on the way. Everything goes at once. Back to the
-//! menu runs it all the other way, a little faster.
+//! search row, taking on the row's tone and losing its edges so it lands as the row itself; the
+//! song list's cards drop out of that row one after another, and the Play note flies to the Play
+//! button, shedding its disc on the way. Everything goes at once. Back to the menu runs it all the
+//! other way, a little faster, the list going up into the row as one window.
 
 use crate::hit::Canvas;
 use crate::menu::{self, Item};
@@ -133,8 +134,12 @@ pub struct Phases {
     pub fold: f32,
     /// The search row's own things coming on over the folded lane (0 to 1).
     pub landed: f32,
-    /// How far the list has dropped out of the search row (past 1 as it bounces).
+    /// How far the list has dropped out of the search row (past 1 as it bounces): the way back
+    /// draws it as one window.
     pub drop: f32,
+    /// The same, straight (0 to 1): the way in drops the list's cards one by one along it
+    /// (`card_drop`).
+    pub cascade: f32,
     /// The hit note on its way to its button (0 to 1).
     pub flight: f32,
 }
@@ -150,8 +155,42 @@ pub fn phases(t: f32) -> Phases {
         fold,
         landed: clamp01((last - 0.8) / 0.2),
         drop: if drop > 0.0 { out_back(drop) } else { 0.0 },
+        cascade: drop,
         flight: in_out_cubic(clamp01((t - FLIGHT_FROM) / FLIGHT_LEN)),
     }
+}
+
+/// How long the list takes to drop in (ms), and each card's own drop in it, the next card
+/// starting CARD_STAGGER_MS after the one above it (no later than the `CARD_STAGGER_MAX`th, so
+/// the last cards are in place by the end).
+const CASCADE_MS: f32 = (1.0 - DROP_FROM) * MS;
+const CARD_DROP_MS: f32 = 240.0;
+const CARD_STAGGER_MS: f32 = 30.0;
+const CARD_STAGGER_MAX: usize = 10;
+/// How far above its place a card starts (units), under the search row.
+const CARD_FALL: f32 = 16.0;
+/// Of a card's drop, how much it takes to come fully on.
+const CARD_FADE: f32 = 0.35;
+
+/// The `k`th card from the top of the list (as drawn), `cascade` of the way the list has come in
+/// (`Phases::cascade`): how far it is off its place (units, down; above it as it falls, a little
+/// below as it bounces) and how opaque it is.
+pub fn card_drop(cascade: f32, k: usize) -> (f32, f32) {
+    let ms = clamp01(cascade) * CASCADE_MS - k.min(CARD_STAGGER_MAX) as f32 * CARD_STAGGER_MS;
+    let f = clamp01(ms / CARD_DROP_MS);
+    if f <= 0.0 {
+        return (-CARD_FALL, 0.0);
+    }
+    ((out_back(f) - 1.0) * CARD_FALL, clamp01(f / CARD_FADE))
+}
+
+/// How opaque the folded lane is as the search row comes on over it (`landed`, 0 to 1): the two
+/// are the same tone, so the lane gives way exactly as much as the row covers, the pair going
+/// from the lane's solid fill to the row's own see-through one with no step.
+pub fn lane_alpha(landed: f32) -> f32 {
+    let l = clamp01(landed);
+    let row = style::SURFACE_1_ALPHA;
+    ((1.0 - l) / (1.0 - row * l)).clamp(0.0, 1.0)
 }
 
 /// A point of the lane: its middle, its height, and how far it has folded (0 to 1).
@@ -196,32 +235,35 @@ pub fn lane(t: f32, width: f32, row: [f32; 4]) -> Vec<LanePoint> {
 /// The kiai's gold, as the menu lights its panel.
 const KIAI_GOLD: u32 = 0xFFD34D;
 
+/// The lane's fill and edge where it has folded `p` of the way into the search row: the menu
+/// panel's fill turning into the row's tone, the edges going out, so it lands as the row.
+fn lane_colours(p: f32, alpha: f32) -> ([f32; 4], [f32; 4]) {
+    let p = clamp01(p);
+    let (from, to) = (rgba(style::PANEL, 1.0), rgba(style::SURFACE_1, 1.0));
+    let mut fill = [0.0; 4];
+    for (i, v) in fill.iter_mut().enumerate() {
+        *v = from[i] + (to[i] - from[i]) * p;
+    }
+    fill[3] = alpha;
+    (fill, rgba(style::PANEL_EDGE, alpha * (1.0 - p)))
+}
+
 /// The lane as a ribbon through `points`, as the prototype draws it: across it at each point is
 /// the way between its neighbours turned a quarter, so it bends smoothly and comes to a point
 /// where it folds back on itself; the panel's fill, an edge along both sides with a faint second
-/// line just inside each, its left end closed and its right end closing as it lands. `kiai`: how
+/// line just inside each, its left end closed and its right end closing as it lands. Where it has
+/// folded into the search row it has the row's tone and no edges (`lane_colours`). `kiai`: how
 /// gold its edges and fill are (0 to 1 each, as `menu::Menu::kiai_glow`), the menu's kiai carried
 /// along with it.
 pub fn draw_lane(c: &mut Canvas, points: &[LanePoint], alpha: f32, kiai: (f32, f32)) {
     if alpha <= 0.0 || points.len() < 2 {
         return;
     }
-    band(
-        c,
-        points,
-        rgba(style::PANEL, alpha),
-        rgba(style::PANEL_EDGE, alpha),
-        false,
-    );
+    band(c, points, &|p| lane_colours(p, alpha), false);
     let (edge, fill) = (kiai.0 * alpha, kiai.1 * alpha);
     if edge > 0.003 || fill > 0.003 {
-        band(
-            c,
-            points,
-            rgba(KIAI_GOLD, fill),
-            rgba(KIAI_GOLD, edge),
-            true,
-        );
+        let gold = (rgba(KIAI_GOLD, fill), rgba(KIAI_GOLD, edge));
+        band(c, points, &|_| gold, true);
     }
 }
 
@@ -229,9 +271,12 @@ pub fn draw_lane(c: &mut Canvas, points: &[LanePoint], alpha: f32, kiai: (f32, f
 /// a stretch is cut into as many pieces as keep the gaps on the outside of the turn this small.
 const RIBBON_STEP: f32 = 1.0;
 
-/// `over`: laid over the lane, see-through, so its pieces mustn't overdraw where it's straight,
-/// or the seams would show brighter.
-fn band(c: &mut Canvas, points: &[LanePoint], fill: [f32; 4], edge: [f32; 4], over: bool) {
+/// `colours`: the fill and the edge where the lane has folded `p` of the way. `over`: laid over
+/// the lane, see-through, so its pieces mustn't overdraw where it's straight, or the seams would
+/// show brighter (as nor must the lane's own where it's see-through, landing).
+type Colours<'a> = &'a dyn Fn(f32) -> ([f32; 4], [f32; 4]);
+
+fn band(c: &mut Canvas, points: &[LanePoint], colours: Colours, over: bool) {
     let n = points.len();
     // The way along the lane at each point (an angle), from its neighbours.
     let along: Vec<f32> = (0..n)
@@ -240,7 +285,6 @@ fn band(c: &mut Canvas, points: &[LanePoint], fill: [f32; 4], edge: [f32; 4], ov
             (b.y - a.y).atan2(b.x - a.x)
         })
         .collect();
-    let faint = [edge[0], edge[1], edge[2], edge[3] * 0.25];
     // A line from `a` to `b`, `w` thick.
     let line = |c: &mut Canvas, a: [f32; 2], b: [f32; 2], w: f32, colour: [f32; 4]| {
         let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
@@ -253,6 +297,8 @@ fn band(c: &mut Canvas, points: &[LanePoint], fill: [f32; 4], edge: [f32; 4], ov
         c.rect(mid[0] - len / 2.0, mid[1] - w / 2.0, len, w, colour);
         c.rotate_since(start, mid, dy.atan2(dx), 1.0, mid);
     };
+    // How far the ribbon has folded `f` of the way from point `i` to the next.
+    let folded = |i: usize, f: f32| points[i].p + (points[i + 1].p - points[i].p) * f;
     // A point of the ribbon `f` of the way from point `i` to the next: its middle, half its
     // height and the way along it.
     let at = |i: usize, f: f32| {
@@ -287,13 +333,15 @@ fn band(c: &mut Canvas, points: &[LanePoint], fill: [f32; 4], edge: [f32; 4], ov
     for &(i, f0, f1, turn) in &pieces {
         let (p0, p1) = (at(i, f0), at(i, f1));
         let (mid, h, ang) = at(i, (f0 + f1) / 2.0);
+        let fill = colours(folded(i, (f0 + f1) / 2.0)).0;
+        let clear = over || fill[3] < 0.999;
         // Along the lane, the piece is as long as its middle runs; where the lane turns, longer
         // by as much as its sides spread from the next piece's, so none of the background shows
         // through between them (inside the turn, the overlap is under the lane anyway).
         let run = (p1.0[0] - p0.0[0]).hypot(p1.0[1] - p0.0[1]);
         let spread = h * wrap(p1.2 - p0.2).abs();
         let w = run
-            + if over && turn < 0.02 {
+            + if clear && turn < 0.02 {
                 0.0
             } else {
                 spread + 1.5
@@ -305,6 +353,11 @@ fn band(c: &mut Canvas, points: &[LanePoint], fill: [f32; 4], edge: [f32; 4], ov
     for &(i, f0, f1, _) in &pieces {
         let (p0, p1) = (at(i, f0), at(i, f1));
         let ang = at(i, (f0 + f1) / 2.0).2;
+        let edge = colours(folded(i, (f0 + f1) / 2.0)).1;
+        if edge[3] <= 0.003 {
+            continue;
+        }
+        let faint = [edge[0], edge[1], edge[2], edge[3] * 0.25];
         // On the inside of a turn tighter than the lane is wide, an edge would run backwards,
         // over the lane folded there: it's left out, as the lane covers it.
         let forwards =
@@ -320,8 +373,11 @@ fn band(c: &mut Canvas, points: &[LanePoint], fill: [f32; 4], edge: [f32; 4], ov
     }
     // The left end, closed: the drum's side. The right end closes as it lands in the search row.
     let end = |c: &mut Canvas, i: usize, f: f32, a: f32| {
-        let (t, b) = side(at(i, f), 0.0);
-        line(c, t, b, 1.5, [edge[0], edge[1], edge[2], edge[3] * a]);
+        let edge = colours(folded(i, f)).1;
+        if edge[3] * a > 0.003 {
+            let (t, b) = side(at(i, f), 0.0);
+            line(c, t, b, 1.5, [edge[0], edge[1], edge[2], edge[3] * a]);
+        }
     };
     end(c, 0, 0.0, 1.0);
     let last = points[n - 1];
@@ -425,7 +481,14 @@ mod tests {
             "the camera and the note set off together"
         );
         let end = phases(1.0);
-        for v in [end.cam, end.fold, end.landed, end.flight, end.drop] {
+        for v in [
+            end.cam,
+            end.fold,
+            end.landed,
+            end.flight,
+            end.drop,
+            end.cascade,
+        ] {
             assert!((v - 1.0).abs() < 1e-4, "{end:?}");
         }
         // The list bounces past its place on the way down.
@@ -500,7 +563,9 @@ mod tests {
         let ends: Vec<[f32; 2]> = c
             .shapes
             .iter()
-            .filter(|s| s.fill == edge && (s.half[1] - 0.75).abs() < 1e-3)
+            .filter(|s| {
+                s.fill[..3] == edge[..3] && s.fill[3] > 0.0 && (s.half[1] - 0.75).abs() < 1e-3
+            })
             .flat_map(|s| {
                 let (cos, sin) = (s.angle.cos() * s.half[0], s.angle.sin() * s.half[0]);
                 [
@@ -540,6 +605,70 @@ mod tests {
         assert!(checked > 2 * (pts.len() - 2) * 9 / 10, "{checked}");
         // And nothing round in it: a fold comes to a point, not a knob.
         assert!(c.shapes.iter().all(|s| s.params[0] == 0.0));
+    }
+
+    #[test]
+    fn the_lane_lands_in_the_search_row_s_tone_with_no_edges_left() {
+        let row = [20.0, 14.0, 452.0, 34.0];
+        let landed = lane(1.0, 853.3, row);
+        let mut c = Canvas::default();
+        draw_lane(&mut c, &landed, 1.0, (0.0, 0.0));
+        let tone = rgba(style::SURFACE_1, 1.0);
+        assert!(!c.shapes.is_empty());
+        for s in &c.shapes {
+            let visible = s.fill[3] > 0.003;
+            assert!(
+                !visible || s.fill[..3] == tone[..3],
+                "only the row's tone, no edge: {:?}",
+                s.fill
+            );
+        }
+        // Still folding, it has the menu panel's edges.
+        let mut folding = Canvas::default();
+        draw_lane(&mut folding, &lane(0.2, 853.3, row), 1.0, (0.0, 0.0));
+        let edge = rgba(style::PANEL_EDGE, 1.0);
+        assert!(
+            folding
+                .shapes
+                .iter()
+                .any(|s| s.fill[..3] == edge[..3] && s.fill[3] > 0.5)
+        );
+    }
+
+    #[test]
+    fn the_lane_gives_way_to_the_search_row_with_no_step_in_the_tone() {
+        let row = style::SURFACE_1_ALPHA;
+        // The two together, the row over the lane, as opaque as they come out.
+        let both = |l: f32| 1.0 - (1.0 - lane_alpha(l)) * (1.0 - row * l);
+        assert!((lane_alpha(0.0) - 1.0).abs() < 1e-6 && lane_alpha(1.0).abs() < 1e-6);
+        let steps: Vec<f32> = (0..=20).map(|k| both(k as f32 / 20.0)).collect();
+        assert!((steps[0] - 1.0).abs() < 1e-5 && (steps[20] - row).abs() < 1e-5);
+        for w in steps.windows(2) {
+            assert!(w[1] <= w[0] + 1e-6 && w[0] - w[1] < 0.02, "{steps:?}");
+        }
+    }
+
+    #[test]
+    fn the_list_s_cards_drop_in_one_after_another_and_are_all_in_by_the_end() {
+        assert_eq!(card_drop(0.0, 0), (-CARD_FALL, 0.0));
+        // Early on the top card is on its way, the ones under it not yet.
+        let early = 0.15;
+        assert!(card_drop(early, 0).1 > 0.5);
+        assert_eq!(card_drop(early, 4).1, 0.0);
+        // Each card is behind the one above it.
+        for f in [0.2, 0.4, 0.6] {
+            for k in 0..CARD_STAGGER_MAX {
+                assert!(card_drop(f, k + 1).1 <= card_drop(f, k).1, "{f} {k}");
+            }
+        }
+        // It falls from under the search row and bounces once past its place.
+        let ys: Vec<f32> = (0..=100)
+            .map(|i| card_drop(i as f32 / 100.0, 0).0)
+            .collect();
+        assert!(ys.iter().any(|&y| y > 0.0));
+        for k in 0..40 {
+            assert_eq!(card_drop(1.0, k), (0.0, 1.0), "card {k} in place");
+        }
     }
 
     #[test]
