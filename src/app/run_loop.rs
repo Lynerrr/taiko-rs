@@ -437,6 +437,7 @@ pub(super) fn render_loop(
                 .map(|(range, r)| (range, to_fraction(r))),
         );
         renderer.disc = canvas.disc.map(|d| (d, vw));
+        renderer.blur = canvas.blur.clone();
         renderer.glitch = canvas.glitch;
         // Before the present, which may wait while the window is still hidden.
         if !first_frame_sent {

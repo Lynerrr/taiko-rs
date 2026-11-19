@@ -455,6 +455,14 @@ pub struct Renderer {
     upscale_capture: wgpu::RenderPipeline,
     /// TAIKO_PROFILE: how long the GPU spends on each frame (None if it can't tell).
     gpu_timer: Option<GpuTimer>,
+    /// The shapes this frame to draw through the blur, and how far (`Canvas::blur_since`).
+    pub blur: Option<(std::ops::Range<usize>, f32)>,
+    blur_fx: Option<BlurFx>,
+    blur_layout: wgpu::BindGroupLayout,
+    blur_down: wgpu::RenderPipeline,
+    blur_gauss: wgpu::RenderPipeline,
+    /// Indexed [capture].
+    blur_composite: [wgpu::RenderPipeline; 2],
 }
 
 /// GPU time of the frame's passes from timestamp queries, read back a few frames later so
@@ -712,6 +720,113 @@ struct Target<'a> {
     size: (u32, u32),
     clips: &'a [(std::ops::Range<usize>, [u32; 4])],
     hole: Option<[u32; 4]>,
+    /// Shapes drawn through the blur (`Canvas::blur_since`, already in `BlurFx`): the blurred
+    /// image goes in their place among the others.
+    blur: Option<std::ops::Range<u32>>,
+}
+
+/// How soft song select's note routes are behind it (`Canvas::blur_since`): the blur's spread
+/// (sigma) in virtual units, as soft as the map's picture reads behind them.
+pub const ROUTES_BLUR: f32 = 8.0;
+/// How many times the routes' image is halved before it is blurred (to 1/8 of the screen).
+const BLUR_HALVINGS: usize = 3;
+
+/// The blur's passes, each a full-screen triangle: `down` halves an image (one bilinear read
+/// between four texels averages them), `gauss` blurs along one axis (15 reads, `u.xy` apart,
+/// weights `exp(-k² u.z)`), `composite` puts the sharp image (`a`) or the blurred one (`b`),
+/// `u.x` of the way to it, over what is drawn (premultiplied, as the shapes are).
+const BLUR_SHADER: &str = r#"
+@group(0) @binding(0) var a: texture_2d<f32>;
+@group(0) @binding(1) var b: texture_2d<f32>;
+@group(0) @binding(2) var s: sampler;
+@group(0) @binding(3) var<uniform> u: vec4<f32>;
+
+struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> V {
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    var o: V;
+    o.pos = vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+    o.uv = vec2<f32>(p.x, 1.0 - p.y);
+    return o;
+}
+
+@fragment
+fn down(in: V) -> @location(0) vec4<f32> {
+    return textureSampleLevel(a, s, in.uv, 0.0);
+}
+
+@fragment
+fn gauss(in: V) -> @location(0) vec4<f32> {
+    var sum = vec4<f32>(0.0);
+    var total = 0.0;
+    for (var i = -7; i <= 7; i += 1) {
+        let k = f32(i);
+        let w = exp(-k * k * u.z);
+        sum += w * textureSampleLevel(a, s, in.uv + u.xy * k, 0.0);
+        total += w;
+    }
+    return sum / total;
+}
+
+@fragment
+fn composite(in: V) -> @location(0) vec4<f32> {
+    let sharp = textureSampleLevel(a, s, in.uv, 0.0);
+    let soft = textureSampleLevel(b, s, in.uv, 0.0);
+    return mix(sharp, soft, u.x);
+}
+"#;
+
+/// The images the blur goes through, sized for the image drawn to.
+struct BlurFx {
+    size: (u32, u32),
+    /// The blurred shapes drawn sharp, as big as the image.
+    sharp: wgpu::TextureView,
+    /// Halved copies of it; the last is blurred in place (through `across`).
+    halves: Vec<(wgpu::TextureView, (u32, u32))>,
+    across: wgpu::TextureView,
+    /// sharp -> halves[0] -> ... -> the last.
+    down: Vec<wgpu::BindGroup>,
+    /// The last half -> across (sideways), across -> the last half (up and down).
+    gauss: [wgpu::BindGroup; 2],
+    composite: wgpu::BindGroup,
+    /// The sideways and the up-and-down pass's steps and the composite's strength.
+    uniforms: [wgpu::Buffer; 3],
+}
+
+/// A pass of the blur's into `view`, cleared first.
+fn blur_pass<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+) -> wgpu::RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("blur"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    })
+}
+
+/// The blur's sideways and up-and-down passes over an image `small` big, a `div`th of the
+/// screen: per pass, its step (uv) and the weight's `1 / (2 sigma²)` in steps, for a spread of
+/// `sigma_px` screen pixels.
+fn gauss_steps(small: (u32, u32), div: f32, sigma_px: f32) -> [[f32; 4]; 2] {
+    let sigma = (sigma_px / div).max(0.5);
+    // 15 reads cover about three sigmas each way.
+    let spacing = (sigma * 3.0 / 7.0).max(1.0);
+    let k = 1.0 / (2.0 * (sigma / spacing).powi(2));
+    [
+        [spacing / small.0.max(1) as f32, 0.0, k, 0.0],
+        [0.0, spacing / small.1.max(1) as f32, k, 0.0],
+    ]
 }
 
 /// A background image on the GPU.
@@ -1696,6 +1811,84 @@ impl Renderer {
         };
         let upscale_pipeline = make_upscale(format);
         let upscale_capture = make_upscale(wgpu::TextureFormat::Rgba8Unorm);
+        let texture_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let blur_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blur"),
+            entries: &[
+                texture_entry(0),
+                texture_entry(1),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blur"),
+            source: wgpu::ShaderSource::Wgsl(BLUR_SHADER.into()),
+        });
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&blur_layout)],
+            immediate_size: 0,
+        });
+        let make_blur = |entry: &str, format: wgpu::TextureFormat, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("blur"),
+                layout: Some(&blur_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &blur_shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &blur_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let blur_down = make_blur("down", format, None);
+        let blur_gauss = make_blur("gauss", format, None);
+        let blur_composite = [format, wgpu::TextureFormat::Rgba8Unorm].map(|f| {
+            make_blur(
+                "composite",
+                f,
+                Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            )
+        });
 
         let gpu_timer = time_gpu.then(|| GpuTimer::new(&device, &queue));
         let mut r = Renderer {
@@ -1745,6 +1938,12 @@ impl Renderer {
             upscale_pipeline,
             upscale_capture,
             gpu_timer,
+            blur: None,
+            blur_fx: None,
+            blur_layout,
+            blur_down,
+            blur_gauss,
+            blur_composite,
         };
         r.set_present(present);
         Ok(r)
@@ -2400,6 +2599,15 @@ impl Renderer {
             }
         }
         self.write_disc();
+        // Shapes to draw through the blur: drawn and blurred first, put in their place after.
+        let blur = self
+            .blur
+            .take()
+            .filter(|(r, s)| r.start < r.end && r.end <= shapes.len() && *s > 0.0)
+            .map(|(r, s)| (r.start as u32..r.end as u32, s));
+        if blur.is_some() {
+            self.ensure_blur(w, h);
+        }
         // The pixels wholly inside the opaque rect (its anti-aliased edge still shows what is
         // under it).
         let hole = opaque.and_then(|[x, y, rw, rh]| {
@@ -2421,11 +2629,15 @@ impl Renderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        if let Some((range, strength)) = &blur {
+            self.encode_blur(&mut encoder, range.clone(), *strength, ah / VIRTUAL_HEIGHT);
+        }
         let timer = self.gpu_timer.as_ref();
         let into = Target {
             size: (w, h),
             clips: &clip,
             hole,
+            blur: blur.map(|(r, _)| r),
         };
         match self.low.as_ref().filter(|_| through_image) {
             Some(low) => {
@@ -2660,6 +2872,7 @@ impl Renderer {
                 size: (w, h),
                 clips: &clip,
                 hole: None,
+                blur: None,
             },
             None,
         );
@@ -2704,6 +2917,144 @@ impl Renderer {
     }
 
     /// (Re)creates the half-resolution image when the screen size changed.
+    /// The blur's images for an image `width` x `height` (`BlurFx`).
+    fn ensure_blur(&mut self, width: u32, height: u32) {
+        if self
+            .blur_fx
+            .as_ref()
+            .is_some_and(|b| b.size == (width, height))
+        {
+            return;
+        }
+        let image = |label: &str, (w, h): (u32, u32)| {
+            self.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    // The screen's format, so the shape pipeline draws into it.
+                    format: self.config.format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let sharp = image("blur sharp", (width, height));
+        let mut halves = Vec::new();
+        let mut size = (width, height);
+        for _ in 0..BLUR_HALVINGS {
+            size = (size.0.div_ceil(2).max(1), size.1.div_ceil(2).max(1));
+            halves.push((image("blur half", size), size));
+        }
+        let across = image("blur across", size);
+        let uniforms = [0, 1, 2].map(|_| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("blur"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        let group = |a: &wgpu::TextureView, b: &wgpu::TextureView, u: &wgpu::Buffer| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blur"),
+                layout: &self.blur_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(b),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.bg_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: u.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let mut down = Vec::new();
+        let mut from = &sharp;
+        for (half, _) in &halves {
+            down.push(group(from, from, &uniforms[2]));
+            from = half;
+        }
+        let last = &halves[halves.len() - 1].0;
+        let gauss = [
+            group(last, last, &uniforms[0]),
+            group(&across, &across, &uniforms[1]),
+        ];
+        let composite = group(&sharp, last, &uniforms[2]);
+        self.blur_fx = Some(BlurFx {
+            size: (width, height),
+            sharp,
+            halves,
+            across,
+            down,
+            gauss,
+            composite,
+            uniforms,
+        });
+    }
+
+    /// Draws shapes `range` (in the instance buffer) into the blur's sharp image, then halves
+    /// and blurs it, `ROUTES_BLUR` units (`ppu` pixels each) soft, for `encode_pass` to put in
+    /// their place `strength` of the way from sharp to blurred.
+    fn encode_blur(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        range: std::ops::Range<u32>,
+        strength: f32,
+        ppu: f32,
+    ) {
+        let Some(fx) = &self.blur_fx else { return };
+        let (last, small) = &fx.halves[fx.halves.len() - 1];
+        let div = fx.size.1 as f32 / small.1.max(1) as f32;
+        let [across, up] = gauss_steps(*small, div, ROUTES_BLUR * ppu);
+        self.queue
+            .write_buffer(&fx.uniforms[0], 0, bytemuck::cast_slice(&across));
+        self.queue
+            .write_buffer(&fx.uniforms[1], 0, bytemuck::cast_slice(&up));
+        self.queue.write_buffer(
+            &fx.uniforms[2],
+            0,
+            bytemuck::cast_slice(&[strength.clamp(0.0, 1.0), 0.0, 0.0, 0.0]),
+        );
+        let begin = blur_pass;
+        {
+            let mut pass = begin(encoder, &fx.sharp);
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_vertex_buffer(0, self.instances.slice(..));
+            pass.draw(0..4, range);
+        }
+        for ((half, _), group) in fx.halves.iter().zip(&fx.down) {
+            let mut pass = begin(encoder, half);
+            pass.set_pipeline(&self.blur_down);
+            pass.set_bind_group(0, group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        for (view, group) in [(&fx.across, &fx.gauss[0]), (last, &fx.gauss[1])] {
+            let mut pass = begin(encoder, view);
+            pass.set_pipeline(&self.blur_gauss);
+            pass.set_bind_group(0, group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
     fn ensure_low(&mut self, width: u32, height: u32) {
         if self
             .low
@@ -2883,30 +3234,67 @@ impl Renderer {
             pass.set_bind_group(0, &l.disc_bind_group, &[]);
             pass.draw(0..4, 0..1);
         }
-        pass.set_pipeline(if capture {
-            &self.capture_pipeline
-        } else {
-            &self.pipeline
-        });
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.set_vertex_buffer(0, self.instances.slice(..));
+        let shapes = |pass: &mut wgpu::RenderPass<'_>| {
+            pass.set_pipeline(if capture {
+                &self.capture_pipeline
+            } else {
+                &self.pipeline
+            });
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_vertex_buffer(0, self.instances.slice(..));
+        };
+        shapes(&mut pass);
         // Unclipped runs between the clipped ranges.
+        let mut runs: Vec<(std::ops::Range<u32>, Option<[u32; 4]>)> = Vec::new();
         let mut at = 0u32;
         for (range, [x, y, w, h]) in target.clips {
             if (range.start as u32) > at {
-                pass.draw(0..4, at..range.start as u32);
+                runs.push((at..range.start as u32, None));
             }
             at = range.end as u32;
             if *w == 0 || *h == 0 {
                 continue;
             }
-            pass.set_scissor_rect(*x, *y, *w, *h);
-            pass.draw(0..4, range.start as u32..range.end as u32);
-            pass.set_scissor_rect(0, 0, size.0, size.1);
+            runs.push((range.start as u32..range.end as u32, Some([*x, *y, *w, *h])));
         }
         if (count as u32) > at {
-            pass.draw(0..4, at..count as u32);
+            runs.push((at..count as u32, None));
         }
+        let draw =
+            |pass: &mut wgpu::RenderPass<'_>, span: std::ops::Range<u32>, cut: Option<[u32; 4]>| {
+                if span.start >= span.end {
+                    return;
+                }
+                if let Some([x, y, w, h]) = cut {
+                    pass.set_scissor_rect(x, y, w, h);
+                }
+                pass.draw(0..4, span);
+                if cut.is_some() {
+                    pass.set_scissor_rect(0, 0, size.0, size.1);
+                }
+            };
+        // The blurred shapes aren't drawn themselves: their blurred image goes where they start.
+        let blur = target.blur.clone().zip(self.blur_fx.as_ref());
+        let (from, to) = blur
+            .as_ref()
+            .map_or((u32::MAX, u32::MAX), |(r, _)| (r.start, r.end));
+        let mut composite = blur.as_ref().map(|(_, fx)| &fx.composite);
+        let mut put_blur = |pass: &mut wgpu::RenderPass<'_>| {
+            if let Some(group) = composite.take() {
+                pass.set_pipeline(&self.blur_composite[capture as usize]);
+                pass.set_bind_group(0, group, &[]);
+                pass.draw(0..3, 0..1);
+                shapes(pass);
+            }
+        };
+        for (span, cut) in runs {
+            draw(&mut pass, span.start..span.end.min(from), cut);
+            if span.end > from {
+                put_blur(&mut pass);
+            }
+            draw(&mut pass, span.start.max(to)..span.end, cut);
+        }
+        put_blur(&mut pass);
     }
 }
 
@@ -3216,6 +3604,8 @@ pub struct Canvas<H> {
     /// A plain opaque rect (shape index) that hides the background under it, so the renderer
     /// needn't draw the background there (`opaque_rect`).
     pub opaque: Option<usize>,
+    /// Shapes drawn through a blur, and how far from sharp (0) to blurred (1) (`blur_since`).
+    pub blur: Option<(std::ops::Range<usize>, f32)>,
     /// Which profile pictures the renderer has, by lowercased name: their slots.
     pub avatar_slots: std::sync::Arc<std::collections::HashMap<String, u32>>,
     /// Pictures asked for this frame (lowercased names), so they get fetched.
@@ -3258,6 +3648,7 @@ impl<H> Default for Canvas<H> {
             texts: Default::default(),
             boxes: Default::default(),
             opaque: Default::default(),
+            blur: None,
             avatar_slots: Default::default(),
             avatars_wanted: Default::default(),
             picture_slots: Default::default(),
@@ -3474,7 +3865,22 @@ impl<H> Canvas<H> {
         self.texts.clear();
         self.boxes.clear();
         self.opaque = None;
+        self.blur = None;
         self.width = width;
+    }
+
+    /// Draws the shapes since `start` through a blur (`ROUTES_BLUR` soft), `strength` of the way
+    /// from sharp (0, as drawn) to blurred (1), in their place among the others. One run of
+    /// shapes a frame: a later call starting at or before the earlier run's end takes it in.
+    pub fn blur_since(&mut self, start: usize, strength: f32) {
+        let end = self.shapes.len();
+        let start = match &self.blur {
+            Some((r, _)) if start <= r.end && start >= r.start => r.start,
+            _ => start,
+        };
+        // Kept even with nothing drawn yet (the routes before the music starts): how far is
+        // known; the renderer leaves an empty run out.
+        self.blur = (strength > 0.0).then(|| (start..end.max(start), strength.min(1.0)));
     }
 
     /// Marks the shape just drawn (a `rect` with alpha 1) as hiding the background under it.
@@ -4810,6 +5216,53 @@ mod tests {
     }
 
     #[test]
+    fn blurring_takes_one_run_of_shapes_a_frame() {
+        use super::Canvas;
+        let mut c = Canvas::<()>::default();
+        c.clear(854.0);
+        let square = |c: &mut Canvas<()>| {
+            c.round_rect([0.0, 0.0], [4.0, 4.0], 0.0, [1.0; 4], [1.0; 4], 0.0);
+        };
+        square(&mut c);
+        c.blur_since(0, 0.0);
+        assert_eq!(c.blur, None, "no strength, nothing");
+        c.blur_since(1, 1.0);
+        assert_eq!(
+            c.blur,
+            Some((1..1, 1.0)),
+            "no shapes yet: how far, nothing to draw"
+        );
+        square(&mut c);
+        c.blur_since(0, 0.5);
+        assert_eq!(c.blur, Some((0..2, 0.5)));
+        // A later call from inside it takes the shapes since in.
+        square(&mut c);
+        c.blur_since(2, 2.0);
+        assert_eq!(c.blur, Some((0..3, 1.0)), "strength at most 1");
+        c.clear(854.0);
+        assert_eq!(c.blur, None, "a new frame starts sharp");
+    }
+
+    #[test]
+    fn the_blur_s_reads_cover_its_spread_at_any_size() {
+        use super::gauss_steps;
+        for (small, div, sigma_px) in [
+            ((240, 135), 8.0, 18.0),
+            ((60, 34), 8.0, 4.5),
+            ((480, 270), 8.0, 64.0),
+        ] {
+            let [across, up] = gauss_steps(small, div, sigma_px);
+            assert_eq!((across[1], up[0]), (0.0, 0.0), "one axis each");
+            assert_eq!(across[2], up[2]);
+            // 7 steps each way reach about 3 sigmas, and steps are at least a texel.
+            let sigma_steps = (1.0 / (2.0 * across[2])).sqrt();
+            assert!(7.0 / sigma_steps >= 2.0, "{small:?}: {sigma_steps}");
+            assert!(across[0] * small.0 as f32 >= 1.0 - 1e-5);
+            assert!(up[1] * small.1 as f32 >= 1.0 - 1e-5);
+        }
+    }
+
+    #[test]
     fn shaders_compile() {
         let shapes = super::shape_shader();
         for (name, src) in [
@@ -4817,6 +5270,7 @@ mod tests {
             ("background", super::BG_SHADER),
             ("disc", super::DISC_SHADER),
             ("upscale", super::UPSCALE_SHADER),
+            ("blur", super::BLUR_SHADER),
         ] {
             let module = naga::front::wgsl::parse_str(src)
                 .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
