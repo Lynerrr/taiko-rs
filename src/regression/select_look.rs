@@ -1551,40 +1551,21 @@ fn the_pp_button_shows_every_number_whole_and_its_simulator_overlaps_nothing() {
 }
 
 #[test]
-fn song_select_s_panels_frost_the_routes_behind_them() {
-    let (mut s, _songs, mut now) = menu_look("select-look-glass");
+fn song_select_s_routes_are_plain_shapes_with_no_frosted_glass_over_them() {
+    // #643 tagged the routes as frosted (`params[3]` 5) and softened them under panes of
+    // glass; that look was dropped. The routes are drawn as on the menu, sharp everywhere.
+    let (mut s, _songs, mut now) = menu_look("select-look-no-glass");
     let c = settled(&mut s, &mut now);
-    let panes = c.glass_rects();
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
-    let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
-    let is = |want: &dyn Fn(&[f32; 6]) -> bool| panes.iter().any(want);
+    let frosted = c
+        .shapes
+        .iter()
+        .filter(|sh| sh.params[3] > 4.5 && sh.params[3] < 5.5)
+        .count();
+    assert_eq!(frosted, 0, "no shape carries the old frost tag");
     assert!(
-        is(&|p| p[0] - p[2] > 24.0 + lw && p[3] * 2.0 > 200.0),
-        "the details' panel: {panes:?}"
+        c.shapes.iter().any(|sh| sh.params[3] == 0.0),
+        "plain shapes are drawn"
     );
-    assert!(
-        is(&|p| p[1] - p[3] < 20.0 && p[0] - p[2] < 24.0),
-        "the search row: {panes:?}"
-    );
-    assert!(
-        is(&|p| inside(
-            [play[0] + play[2] / 2.0, play[1] + play[3] / 2.0],
-            [p[0] - p[2], p[1] - p[3], p[2] * 2.0, p[3] * 2.0],
-            0.0
-        )),
-        "the lane of actions: {panes:?}"
-    );
-    assert!(
-        panes.iter().all(|p| p[5] == 1.0),
-        "settled, wholly: {panes:?}"
-    );
-    // Legacy has none.
-    let songs = Songs::new("select-look-glass-legacy", &maps::all());
-    let mut legacy = state_with(harness::config(), songs.entries());
-    let mut now = Instant::now();
-    ready(&mut legacy, &mut now);
-    let c = settled(&mut legacy, &mut now);
-    assert!(c.glass_rects().is_empty(), "{:?}", c.glass_rects());
 }
 
 #[test]
