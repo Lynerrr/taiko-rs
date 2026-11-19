@@ -24,6 +24,8 @@ const QUIET: Duration = Duration::from_millis(300);
 /// of its place it starts.
 const ENTER_MS: f32 = 180.0;
 const ENTER_SHIFT: f32 = 8.0;
+/// When the pp row (and the Leaderboard chip ending it) comes in after a song is picked.
+const PP_ENTER_MS: f32 = 260.0;
 /// The details of the song before a change go out as the new ones come in: `LEAVE_SHIFT`
 /// to the left and faded out over `LEAVE_MS`.
 const LEAVE_MS: f32 = 80.0;
@@ -1535,7 +1537,7 @@ impl Preview {
         if self.sim.is_some() {
             cy += SIM_GAP + PP_H;
         }
-        self.enter(c, part, 260.0);
+        self.enter(c, part, PP_ENTER_MS);
         cy += PP_H;
         if let (true, Some(what)) = (l.left_out, shown.left_out) {
             cy += 4.0;
@@ -1573,6 +1575,15 @@ impl Preview {
         }
         c.transform_since(start, [0.0, 0.0], 1.0, ENTER_SHIFT * (1.0 - p), 0.0);
         c.fade_since(start, p, 1.0);
+    }
+
+    /// Song select's Leaderboard chip, drawn since shape `start` after the details (at
+    /// `board_at`): it comes in with the pp row it ends and goes out with the details.
+    pub(crate) fn enter_board(&mut self, c: &mut Canvas, start: usize) {
+        self.enter(c, start, PP_ENTER_MS);
+        if let (true, Some(drawn)) = (crate::render::animations(), c.shapes.get(start..)) {
+            self.drawn.shapes.extend_from_slice(drawn);
+        }
     }
 
     /// The map's picture over `[x, y, w, h]` (cover-cropped), whole down to `BANNER_WHOLE` of
