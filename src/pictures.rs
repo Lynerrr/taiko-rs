@@ -180,6 +180,12 @@ impl Pictures {
         let stop = Arc::new(AtomicBool::new(false));
         self.prewarm = Some(stop.clone());
         std::thread::spawn(move || {
+            // The copies made as JPEGs (`THUMB_VERSION` 1) are no longer read.
+            for old in std::fs::read_dir(&thumbs).into_iter().flatten().flatten() {
+                if old.path().extension().is_some_and(|e| e == "jpg") {
+                    let _ = std::fs::remove_file(old.path());
+                }
+            }
             for path in paths {
                 if stop.load(Ordering::Relaxed) {
                     return;
@@ -378,6 +384,10 @@ fn read(dir: &Path, name: &str) -> Result<Image, String> {
 
 /// Where the small copy of the picture at `path` goes in `thumbs` (by the file, its size and
 /// when it was changed, and the cell's size), and the copy if it's there.
+/// The small copies' kind, in their names: 1 were JPEGs (blocky, their colours in squares on a
+/// card's dark shade), 2 are PNGs, exactly the picture as squeezed.
+const THUMB_VERSION: u32 = 2;
+
 fn thumb_path(path: &Path, thumbs: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
     use std::hash::{Hash, Hasher};
     let meta = std::fs::metadata(path).ok()?;
@@ -387,18 +397,16 @@ fn thumb_path(path: &Path, thumbs: &Path) -> Option<(PathBuf, Option<PathBuf>)> 
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_secs());
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (path, meta.len(), changed, PICTURE_CELL).hash(&mut h);
+    (path, meta.len(), changed, PICTURE_CELL, THUMB_VERSION).hash(&mut h);
     let stem = thumbs.join(format!("{:016x}", h.finish()));
-    let found = ["jpg", "png"]
-        .into_iter()
-        .map(|ext| stem.with_extension(ext))
-        .find(|p| p.is_file());
+    let found = Some(stem.with_extension("png")).filter(|p| p.is_file());
     Some((stem, found))
 }
 
 /// `read`, for a picture read by path (song select's backgrounds), through a small copy of it
 /// in `thumbs`: the copy is the picture no wider or taller than a cell (its own shape kept, so
-/// its aspect too), a JPEG (a PNG when it's see-through). Reading that takes a few ms where the
+/// its aspect too), a PNG: lossless, as a JPEG's blocks show over the cards' shade. Reading that
+/// takes a few ms where the
 /// whole picture, decoded and squeezed, takes tens of them. Animations aren't copied.
 fn read_by_path(dir: &Path, name: &str, thumbs: Option<&Path>) -> Result<Image, String> {
     let path = locate(dir, name);
@@ -428,17 +436,20 @@ fn read_by_path(dir: &Path, name: &str, thumbs: Option<&Path>) -> Result<Image, 
     if let Some(parent) = stem.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // Written beside and moved in, so a half-written copy is never read.
-    let see_through = small.color().has_alpha() && small.to_rgba8().pixels().any(|p| p[3] < 255);
-    let (ext, format, copy) = if see_through {
-        ("png", image::ImageFormat::Png, small.clone())
+    // Written beside and moved in, so a half-written copy is never read. Opaque ones without
+    // their alpha: a third smaller.
+    let opaque = !small.color().has_alpha() || small.to_rgba8().pixels().all(|p| p[3] == 255);
+    let copy = if opaque {
+        image::DynamicImage::ImageRgb8(small.to_rgb8())
     } else {
-        let rgb = image::DynamicImage::ImageRgb8(small.to_rgb8());
-        ("jpg", image::ImageFormat::Jpeg, rgb)
+        small.clone()
     };
-    let part = stem.with_extension(format!("{ext}.part"));
-    if copy.save_with_format(&part, format).is_ok() {
-        let _ = std::fs::rename(&part, stem.with_extension(ext));
+    let part = stem.with_extension("png.part");
+    if copy
+        .save_with_format(&part, image::ImageFormat::Png)
+        .is_ok()
+    {
+        let _ = std::fs::rename(&part, stem.with_extension("png"));
     }
     Ok(still(small))
 }
@@ -878,11 +889,7 @@ mod tests {
         let first = read_by_path(&dir, "bg.png", Some(&thumbs)).unwrap();
         let (_, made) = thumb_path(&locate(&dir, "bg.png"), &thumbs).unwrap();
         let made = made.expect("a small copy is kept");
-        assert_eq!(
-            made.extension().unwrap(),
-            "jpg",
-            "an opaque picture as a JPEG"
-        );
+        assert_eq!(made.extension().unwrap(), "png", "lossless");
         let small = image::open(&made).unwrap();
         assert_eq!(small.width(), PICTURE_CELL, "a cell wide");
         assert!(
@@ -901,6 +908,40 @@ mod tests {
         std::fs::write(dir.join("BG.png"), png(big, big, [0, 0, 200, 255])).unwrap();
         let changed = read_by_path(&dir, "bg.png", Some(&thumbs)).unwrap();
         assert!((changed.aspect - 1.0).abs() < 0.01, "{}", changed.aspect);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_pictures_small_copy_keeps_its_colours_exactly() {
+        let base =
+            std::env::temp_dir().join(format!("taiko-rs-pictures-exact-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (dir, thumbs) = (base.join("set"), base.join("thumbs"));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Dark red over its left half, dark blue over its right: a card's shade over a picture.
+        let (w, h) = (PICTURE_CELL * 2, PICTURE_CELL);
+        let img = image::RgbaImage::from_fn(w, h, |x, _| {
+            if x < w / 2 {
+                image::Rgba([40, 12, 16, 255])
+            } else {
+                image::Rgba([10, 14, 52, 255])
+            }
+        });
+        img.save(dir.join("bg.png")).unwrap();
+        read_by_path(&dir, "bg.png", Some(&thumbs)).unwrap();
+        let (_, made) = thumb_path(&locate(&dir, "bg.png"), &thumbs).unwrap();
+        let bytes = std::fs::read(made.expect("a copy")).unwrap();
+        let copy = image::load_from_memory(&bytes).unwrap().to_rgb8();
+        // Away from where the two meet (the squeeze blends just there), every pixel as it was:
+        // a lossy copy would shift them, in blocks.
+        let edge = copy.width() / 2;
+        for (x, _, p) in copy.enumerate_pixels() {
+            if x + 3 < edge {
+                assert_eq!(p.0, [40, 12, 16], "at {x}");
+            } else if x > edge + 3 {
+                assert_eq!(p.0, [10, 14, 52], "at {x}");
+            }
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 
