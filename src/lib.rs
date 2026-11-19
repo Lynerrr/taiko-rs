@@ -554,8 +554,6 @@ struct State {
     /// rows or why not), and the one being fetched.
     online_boards: std::collections::HashMap<(u64, bool), (Instant, Board)>,
     board_fetch: Option<BoardFetch>,
-    /// When song select's strip of the map's board under the details last changed.
-    mini_board: crate::screens::select::leaderboard::MiniSeen,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
     /// Mods of the play being loaded.

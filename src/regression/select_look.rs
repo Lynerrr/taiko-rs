@@ -1045,116 +1045,6 @@ fn local_play(s: &State, player: &str, score: u64, accuracy: f64) -> crate::scor
     }
 }
 
-#[test]
-fn the_details_show_the_maps_top_three_and_my_best_under_the_timeline() {
-    let (mut s, _songs, mut now) = menu_look("select-look-mini-board");
-    for (k, name) in ["Ann", "Bo", "Cy", "Di"].iter().enumerate() {
-        let play = local_play(&s, name, 900_000 - k as u64 * 1000, 0.99 - k as f64 * 0.01);
-        s.scores.push(play);
-    }
-    let c = settled(&mut s, &mut now);
-    let strip = s.preview.mini_board.expect("a strip under the timeline");
-    let [_, ty] = text_at(&c, "0:00 / ").expect("the timeline");
-    assert!(strip[1] > ty, "under the timeline: {strip:?}");
-    let shown = texts_in(&c, strip);
-    for name in ["Ann", "Bo", "Cy"] {
-        assert!(shown.iter().any(|t| t == name), "{name} in {shown:?}");
-    }
-    assert!(
-        !shown.iter().any(|t| t == "Di"),
-        "only the top three: {shown:?}"
-    );
-    // The best of the player's own plays at its right: what it is, its grade and accuracy.
-    for part in ["best", "S", "99.00%"] {
-        assert!(shown.iter().any(|t| t == part), "{part} in {shown:?}");
-    }
-    let opens = c.hits.iter().any(|b| {
-        let r = b.rect;
-        b.hit == Hit::BoardPage
-            && r[0] <= strip[0] + 1.0
-            && r[1] <= strip[1] + 1.0
-            && r[2] >= strip[2] - 1.0
-    });
-    assert!(opens, "a click on it opens the whole board");
-    // Above the lane of actions.
-    let play = c
-        .hits
-        .iter()
-        .find(|b| b.hit == Hit::Key(KeyCode::Enter))
-        .expect("Play")
-        .rect;
-    assert!(
-        strip[1] + strip[3] <= play[1],
-        "{strip:?} over Play {play:?}"
-    );
-}
-
-#[test]
-fn with_no_plays_the_strip_says_so_quietly() {
-    let (mut s, _songs, mut now) = menu_look("select-look-mini-board-empty");
-    let c = settled(&mut s, &mut now);
-    let strip = s.preview.mini_board.expect("a strip under the timeline");
-    assert_eq!(texts_in(&c, strip), vec!["no scores yet".to_string()]);
-}
-
-#[test]
-fn the_strip_shows_the_online_board_greyed_out_until_it_comes() {
-    let (mut s, _songs, mut now) = menu_look("select-look-mini-board-online");
-    settled(&mut s, &mut now);
-    // The board tab turned online: the strip waits a moment on the map, then asks the server.
-    s.board_online = true;
-    s.cfg.online_user = "Bo".into();
-    now += Duration::from_millis(16);
-    let c = frame(&mut s, now);
-    let strip = s.preview.mini_board.expect("a strip");
-    let grey = render::rgba(style::ink::SECONDARY, 0.12);
-    let bars = c
-        .shapes
-        .iter()
-        .filter(|sh| same_rgb(sh.fill, grey) && (sh.fill[3] - grey[3]).abs() < 0.01)
-        .filter(|sh| {
-            let [x, y, ..] = rect(sh);
-            x >= strip[0] && y >= strip[1] && y <= strip[1] + strip[3]
-        })
-        .count();
-    assert_eq!(bars, 3, "grey bars in the rows' places");
-    assert!(texts_in(&c, strip).is_empty());
-    let i = s.select.selected().unwrap();
-    let hash = s.library[i].hash();
-    let score = |player: &str, accuracy: f64| crate::online::OnlineScore {
-        player: player.into(),
-        accuracy,
-        ..Default::default()
-    };
-    let rows = vec![
-        score("Ann", 0.99),
-        score("Bo", 0.98),
-        score("Cy", 0.97),
-        score("Di", 0.96),
-    ];
-    s.online_boards
-        .insert((hash, false), (Instant::now(), Ok(rows)));
-    let c = settled(&mut s, &mut now);
-    let shown = texts_in(&c, strip);
-    assert!(
-        ["Ann", "Bo", "Cy"]
-            .iter()
-            .all(|n| shown.iter().any(|t| t == n)),
-        "{shown:?}"
-    );
-    // The player's own row in the accent.
-    let bo = c
-        .texts
-        .iter()
-        .find(|(r, t)| t == "Bo" && texts_in(&c, strip).contains(t) && !r.is_empty())
-        .unwrap();
-    assert!(
-        same_rgb(c.shapes[bo.0.start].fill, render::rgba(ACCENT, 1.0)),
-        "mine in the accent"
-    );
-}
-
-/// `menu_look` with the interface's animations on.
 fn animated(tag: &str) -> (State, Songs, Instant) {
     let (mut s, songs, now) = menu_look(tag);
     s.cfg.animations = true;
@@ -1248,7 +1138,7 @@ fn nothing_in_the_details_stretches_on_the_way_to_the_leaderboard() {
     s.cfg.animations = true;
     let c = settled(&mut s, &mut now);
     let preview = |c: &Canvas| hit_rect(c, |h| *h == Hit::Preview).expect("the lane");
-    let (lane, strip) = (preview(&c), s.preview.mini_board.expect("the strip"));
+    let lane = preview(&c);
     s.mob.flip_board();
     let mut on_the_way = 0;
     for _ in 0..12 {
@@ -1263,19 +1153,12 @@ fn nothing_in_the_details_stretches_on_the_way_to_the_leaderboard() {
             continue;
         }
         on_the_way += 1;
-        let m = s.preview.mini_board.expect("the strip");
         let shown = |r: [f32; 4]| r[0] + r[2];
         assert!(
             (l[2] - lane[2]).abs() < 0.5 || shown(l) >= c.width - 0.5,
             "the lane as long on the way ({t}): {} vs {}",
             l[2],
             lane[2]
-        );
-        assert!(
-            (m[2] - strip[2]).abs() < 0.5,
-            "the board strip as wide on the way ({t}): {} vs {}",
-            m[2],
-            strip[2]
         );
     }
     assert!(on_the_way > 0, "caught on the way");
@@ -1397,5 +1280,49 @@ fn the_details_sit_on_a_panel_of_their_own_and_nothing_of_them_runs_off_it() {
     assert!(
         lane[0] + lane[2] <= panel[0] + panel[2],
         "{lane:?} in {panel:?}"
+    );
+}
+
+#[test]
+fn the_details_leave_the_plays_to_the_leaderboard_s_page() {
+    let (mut s, _songs, mut now) = menu_look("select-look-no-strip");
+    for (k, name) in ["Ann", "Bo"].iter().enumerate() {
+        let play = local_play(&s, name, 900_000 - k as u64 * 1000, 0.99);
+        s.scores.push(play);
+    }
+    let c = settled(&mut s, &mut now);
+    let shown = texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT]);
+    assert!(
+        !shown.iter().any(|t| t == "Ann" || t == "Bo"),
+        "no strip of the board under the timeline: {shown:?}"
+    );
+    assert!(
+        hit_rect(&c, |h| *h == Hit::BoardPage).is_some(),
+        "the way to the board"
+    );
+}
+
+#[test]
+fn a_map_whose_bpm_changes_shows_its_whole_range() {
+    let chart = maps::Chart {
+        name: "bpm-range",
+        timing: vec![
+            "1000,600,4,1,0,100,1,0".into(),
+            "5000,240,4,1,0,100,1,0".into(),
+        ],
+        ..maps::basics()
+    };
+    let (mut s, _songs, mut now) = menu_look_with("select-look-bpm-range", &[chart]);
+    let c = settled(&mut s, &mut now);
+    let shown = texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT]);
+    assert!(
+        shown.iter().any(|t| t == "100-250"),
+        "the range whole: {shown:?}"
+    );
+    assert!(
+        !shown
+            .iter()
+            .any(|t| t.starts_with('1') && t.ends_with("...")),
+        "nothing cut: {shown:?}"
     );
 }

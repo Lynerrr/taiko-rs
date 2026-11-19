@@ -3,9 +3,6 @@
 
 use super::super::lobby::Lobby;
 use super::super::screen::{Frame, Key, Screen};
-use crate::screens::select::leaderboard::{
-    MINI_ROWS, MiniBest, MiniBoard, MiniRow, draw_mini_board,
-};
 use crate::*;
 
 /// Song select (and the main menu over it).
@@ -473,66 +470,6 @@ fn press_play(state: &mut State, i: usize, at: Instant) {
     state.play_burst = Some((at, i));
 }
 
-/// Song select itself. `shift`: the camera's on its way from or to the menu; `play_away`: the
-/// Play ▶ is still flying to its button.
-/// How long song select stays on a map before its strip asks the server for its board (not every
-/// map scrolled past).
-const MINI_BOARD_ASK: Duration = Duration::from_millis(250);
-
-/// The strip of library entry `i`'s board under the details: its online board's top plays when
-/// the board tab is online (as the board page), else the local ones; the player's best (their
-/// local plays) at the right.
-fn draw_mini_board_of(state: &mut State, canvas: &mut Canvas, rect: [f32; 4], i: usize) {
-    let hash = state.library[i].hash();
-    let relax = state.cfg.mods.relax();
-    let online = state.board_online && state.has_online_board(&state.library[i]);
-    let now = render::frame_now();
-    let on = state.mini_board.on((hash, relax, online), now);
-    let board = if !online {
-        let rows = scores::top(&state.scores, hash, MINI_ROWS, relax);
-        MiniBoard::Rows(
-            rows.iter()
-                .map(|r| MiniRow {
-                    player: r.player.clone(),
-                    accuracy: r.accuracy,
-                    mine: false,
-                })
-                .collect(),
-        )
-    } else if on < MINI_BOARD_ASK {
-        MiniBoard::Loading
-    } else {
-        let me = state.cfg.online_user.clone();
-        match state.online_board(hash, relax) {
-            None => MiniBoard::Loading,
-            Some(Err(_)) => MiniBoard::Unavailable,
-            Some(Ok(rows)) => MiniBoard::Rows(
-                rows.iter()
-                    .take(MINI_ROWS)
-                    .map(|r| MiniRow {
-                        player: r.player.clone(),
-                        accuracy: r.accuracy,
-                        mine: !me.is_empty() && r.player.eq_ignore_ascii_case(&me),
-                    })
-                    .collect(),
-            ),
-        }
-    };
-    // The local plays are the player's own: the best of them, graded as the results screen does
-    // (all greats only at 100% with no misses).
-    let best = scores::top(&state.scores, hash, 1, relax)
-        .first()
-        .map(|r| MiniBest {
-            grade: crate::online::grade(1, u32::from(r.accuracy < 1.0), r.miss, r.accuracy),
-            accuracy: r.accuracy,
-            date: r.date,
-        });
-    let alpha = state
-        .mini_board
-        .fade(!matches!(board, MiniBoard::Loading), now);
-    draw_mini_board(canvas, rect, &board, best.as_ref(), alpha);
-}
-
 fn draw_songs(
     state: &mut State,
     canvas: &mut Canvas,
@@ -697,9 +634,6 @@ fn draw_songs(
             state.preview.title_room = 0.0;
             state.preview.bare = false;
             state.preview.slid = 0.0;
-            if let (Some(rect), Some(i)) = (state.preview.mini_board, state.select.selected()) {
-                draw_mini_board_of(state, canvas, rect, i);
-            }
             // An EPIC map: the music's spectrum round its pill, and on landing on it a
             // glint across the panel and sparks out of the pill.
             if let Some([ex, ey]) = state.preview.epic_at {
