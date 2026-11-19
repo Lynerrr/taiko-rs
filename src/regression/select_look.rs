@@ -1672,3 +1672,69 @@ fn set_cards_carry_no_difficulty_count_over_their_pictures() {
     let c = settled(&mut legacy, &mut now);
     assert!(counts(&c) > 0, "Legacy's cards");
 }
+
+#[test]
+fn the_leaderboard_chip_comes_in_with_the_pp_row_on_a_song_change() {
+    let (mut s, _songs, mut now) = menu_look_moving("select-look-board-enter");
+    let label = |c: &Canvas| {
+        let board = hit_rect(c, |h| *h == Hit::BoardPage).expect("Leaderboard");
+        let (range, _) = c
+            .texts
+            .iter()
+            .find(|(r, t)| {
+                t.trim() == "Leaderboard" && inside(c.shapes[r.start].center, board, 2.0)
+            })
+            .cloned()
+            .expect("its label");
+        c.shapes[range.start]
+    };
+    let rest = label(&settled(&mut s, &mut now));
+    press(&mut s, KeyCode::ArrowRight, now);
+    // Just after the pp row starts in (260 ms on): right of its place and faint.
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    now += Duration::from_millis(270);
+    let coming = label(&frame(&mut s, now));
+    assert!(
+        coming.center[0] > rest.center[0] + 1.0 && coming.center[0] <= rest.center[0] + 8.5,
+        "shifted right: {} vs {}",
+        coming.center[0],
+        rest.center[0]
+    );
+    assert!(coming.fill[3] < rest.fill[3] - 0.1, "fading in");
+    assert_eq!(coming.center[1], rest.center[1]);
+    let landed = label(&settled(&mut s, &mut now));
+    assert_eq!(landed.center, rest.center, "in place after");
+    assert_eq!(landed.fill[3], rest.fill[3]);
+}
+
+#[test]
+fn the_leaderboard_chip_goes_out_with_the_old_details() {
+    let (mut s, _songs, mut now) = menu_look_moving("select-look-board-leave");
+    let c = settled(&mut s, &mut now);
+    let chip = hit_rect(&c, |h| *h == Hit::BoardPage).expect("Leaderboard");
+    let (range, _) = c
+        .texts
+        .iter()
+        .find(|(r, t)| t.trim() == "Leaderboard" && inside(c.shapes[r.start].center, chip, 2.0))
+        .cloned()
+        .expect("its label");
+    let letter = c.shapes[range.start];
+    press(&mut s, KeyCode::ArrowRight, now);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    now += Duration::from_millis(32);
+    let going = frame(&mut s, now);
+    // The old one's first letter, a little left and fainter.
+    assert!(
+        going.shapes.iter().any(|sh| {
+            sh.half == letter.half
+                && sh.params == letter.params
+                && (sh.center[1] - letter.center[1]).abs() < 0.01
+                && sh.center[0] < letter.center[0] - 0.01
+                && sh.center[0] > letter.center[0] - 6.5
+                && sh.fill[3] < letter.fill[3]
+        }),
+        "the old chip going out with the details"
+    );
+}

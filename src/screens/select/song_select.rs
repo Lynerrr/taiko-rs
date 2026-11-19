@@ -696,12 +696,17 @@ fn draw_songs(
             if state.select.legacy {
                 canvas.button(bx, by, bw, 20.0, &legacy_label, 7.0, hit, false);
             } else {
-                if let Some(chip) = state.preview.board_at.filter(|_| bare) {
+                let chip_start = canvas.shapes.len();
+                let chip = state.preview.board_at.filter(|_| bare);
+                if let Some(chip) = chip {
                     // As tall as the pp button it ends the row of.
                     style::surface(canvas, chip, style::radius::SMALL, style::Surface::Lifted);
                 }
                 let at = [bx + 6.0, by + 10.0];
                 style::icon_button(canvas, at, &style::PODIUM, label, None, 7.0, false, hit);
+                if chip.is_some() {
+                    state.preview.enter_board(canvas, chip_start);
+                }
             }
             canvas.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
         } else {
