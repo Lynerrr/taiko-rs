@@ -2872,6 +2872,17 @@ impl State {
         keys::clashes(&bound)
     }
 
+    /// `settings_ui.clashes` for the keys as they are now; worked out again only after a key
+    /// setting changed (each settings frame doing it made them half as fast again).
+    pub(crate) fn refresh_key_clashes(&mut self) {
+        let c = &self.cfg;
+        let now = (c.keys, c.preset_keys, c.interface_key, c.hotkeys.clone());
+        if self.settings_ui.clashes_for.as_ref() != Some(&now) {
+            self.settings_ui.clashes = self.key_clashes();
+            self.settings_ui.clashes_for = Some(now);
+        }
+    }
+
     fn setting_value(&self, item: Item) -> String {
         let c = &self.cfg;
         let on = |b: bool| if b { on_text() } else { off_text() }.to_string();

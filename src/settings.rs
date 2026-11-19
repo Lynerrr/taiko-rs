@@ -1386,8 +1386,10 @@ pub struct SettingsUi {
     pub choices: Option<Choices>,
     /// Typing a value for a setting.
     pub editing: Option<Edit>,
-    /// Key settings whose key does two jobs (`State::key_clashes`), drawn in red.
+    /// Key settings whose key does two jobs (`State::key_clashes`), drawn in red, and the keys
+    /// they were worked out for: they're worked out again only when one of those changes.
     pub clashes: Vec<(Item, crate::keys::Clash<Item>)>,
+    pub clashes_for: Option<KeySettings>,
     /// What's typed into the search box, and the rows it finds (`ITEMS` indices, best first).
     pub search: String,
     results: Vec<usize>,
@@ -1403,6 +1405,14 @@ pub struct SettingsUi {
     /// Where the bars of `Control::Level` were drawn (x, width).
     track: Cell<(f32, f32)>,
 }
+
+/// Every key setting's key: the drums, the preset keys, the interface key and the hotkeys.
+pub type KeySettings = (
+    [winit::keyboard::KeyCode; 4],
+    [crate::keys::Chord; 2],
+    crate::keys::Chord,
+    crate::keys::Bindings,
+);
 
 /// The red of a key that does two jobs.
 const CLASH: u32 = 0xff6b6b;
