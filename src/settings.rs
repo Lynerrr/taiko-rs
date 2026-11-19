@@ -92,6 +92,8 @@ pub enum Item {
     HalfResolution,
     FpsCap,
     ShowFps,
+    /// Song select's library counts and device line in the main menu's look.
+    SelectInfo,
     Animations,
     Splash,
     /// The flashing-lights warning at startup (`Config::epilepsy_warning`).
@@ -136,11 +138,12 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 143] = [
+pub const ITEMS: [(&str, Item); 144] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::TjaFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
+    ("LIBRARY", Item::SelectInfo),
     ("LIBRARY", Item::SongSelectLayout),
     ("LIBRARY", Item::DataFolder),
     ("LIBRARY", Item::CustomFolder),
@@ -669,6 +672,7 @@ impl Item {
             Item::HalfResolution => tr!("Half resolution", "半分の解像度", "Половинное разрешение"),
             Item::FpsCap => tr!("FPS cap", "FPSの上限", "Ограничение FPS"),
             Item::ShowFps => tr!("FPS overlay", "FPSの表示", "Счётчик FPS"),
+            Item::SelectInfo => tr!("Library info", "ライブラリ情報", "Инфо о библиотеке"),
             Item::Animations => tr!("UI animations", "UIのアニメーション", "Анимации интерфейса"),
             Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
             Item::EpilepsyWarning => tr!(
@@ -831,6 +835,7 @@ impl Item {
             | Item::MenuVsync
             | Item::HalfResolution
             | Item::ShowFps
+            | Item::SelectInfo
             | Item::Animations
             | Item::Splash
             | Item::EpilepsyWarning
@@ -1181,6 +1186,11 @@ impl Item {
                 "mailbox/immediate only. A few times your refresh rate is plenty.",
                 "mailbox/immediateのみ。リフレッシュレートの数倍で十分です。",
                 "Только mailbox/immediate. Хватит нескольких частот обновления экрана."
+            ),
+            Item::SelectInfo => tr!(
+                "Song select shows how many songs and maps there are, and the graphics and audio devices at the bottom.",
+                "選曲画面に曲と譜面の数、下にグラフィックとオーディオのデバイスを表示。",
+                "Выбор песни показывает число песен и карт, а внизу видеокарту и аудиоустройство."
             ),
             Item::ShowFps => tr!(
                 "Frame rate and frame time in the corner. Shortcut: F10.",

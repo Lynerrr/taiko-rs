@@ -3,9 +3,6 @@
 
 use super::super::lobby::Lobby;
 use super::super::screen::{Frame, Key, Screen};
-use crate::screens::select::leaderboard::{
-    MINI_ROWS, MiniBest, MiniBoard, MiniRow, draw_mini_board,
-};
 use crate::*;
 
 /// Song select (and the main menu over it).
@@ -253,9 +250,9 @@ impl Screen for SongSelect {
         // The camera between the menu and song select, a frame on.
         let dt = canvas.dt_ms;
         let shift = match state.menu_shift.as_mut() {
-            Some(s) if menu_shift::animated() => {
-                s.step(dt).then(|| (s.t(), s.into_songs, s.flying))
-            }
+            Some(s) if menu_shift::animated() => s
+                .step(dt)
+                .then(|| (s.t(), s.into_songs, s.flying.map(|i| (i, s.flight())))),
             _ => None,
         };
         if shift.is_none() {
@@ -473,66 +470,6 @@ fn press_play(state: &mut State, i: usize, at: Instant) {
     state.play_burst = Some((at, i));
 }
 
-/// Song select itself. `shift`: the camera's on its way from or to the menu; `play_away`: the
-/// Play ▶ is still flying to its button.
-/// How long song select stays on a map before its strip asks the server for its board (not every
-/// map scrolled past).
-const MINI_BOARD_ASK: Duration = Duration::from_millis(250);
-
-/// The strip of library entry `i`'s board under the details: its online board's top plays when
-/// the board tab is online (as the board page), else the local ones; the player's best (their
-/// local plays) at the right.
-fn draw_mini_board_of(state: &mut State, canvas: &mut Canvas, rect: [f32; 4], i: usize) {
-    let hash = state.library[i].hash();
-    let relax = state.cfg.mods.relax();
-    let online = state.board_online && state.has_online_board(&state.library[i]);
-    let now = render::frame_now();
-    let on = state.mini_board.on((hash, relax, online), now);
-    let board = if !online {
-        let rows = scores::top(&state.scores, hash, MINI_ROWS, relax);
-        MiniBoard::Rows(
-            rows.iter()
-                .map(|r| MiniRow {
-                    player: r.player.clone(),
-                    accuracy: r.accuracy,
-                    mine: false,
-                })
-                .collect(),
-        )
-    } else if on < MINI_BOARD_ASK {
-        MiniBoard::Loading
-    } else {
-        let me = state.cfg.online_user.clone();
-        match state.online_board(hash, relax) {
-            None => MiniBoard::Loading,
-            Some(Err(_)) => MiniBoard::Unavailable,
-            Some(Ok(rows)) => MiniBoard::Rows(
-                rows.iter()
-                    .take(MINI_ROWS)
-                    .map(|r| MiniRow {
-                        player: r.player.clone(),
-                        accuracy: r.accuracy,
-                        mine: !me.is_empty() && r.player.eq_ignore_ascii_case(&me),
-                    })
-                    .collect(),
-            ),
-        }
-    };
-    // The local plays are the player's own: the best of them, graded as the results screen does
-    // (all greats only at 100% with no misses).
-    let best = scores::top(&state.scores, hash, 1, relax)
-        .first()
-        .map(|r| MiniBest {
-            grade: crate::online::grade(1, u32::from(r.accuracy < 1.0), r.miss, r.accuracy),
-            accuracy: r.accuracy,
-            date: r.date,
-        });
-    let alpha = state
-        .mini_board
-        .fade(!matches!(board, MiniBoard::Loading), now);
-    draw_mini_board(canvas, rect, &board, best.as_ref(), alpha);
-}
-
 fn draw_songs(
     state: &mut State,
     canvas: &mut Canvas,
@@ -576,6 +513,7 @@ fn draw_songs(
     if phone {
         state.draw_mobile_select(canvas);
     } else {
+        state.select.show_info = state.cfg.select_info;
         state.select.draw(
             canvas,
             &state.library,
@@ -634,6 +572,10 @@ fn draw_songs(
         ),
         None => None,
     };
+    state.preview.sim_pp = match (state.preview.sim, state.select.selected()) {
+        (Some(sim), Some(i)) => state.simulated_pp(i, sim, rate),
+        _ => None,
+    };
     // The map the panel shows, and whether it's marked EPIC (its pill by the status).
     let shown_path = state
         .preview_target()
@@ -671,12 +613,7 @@ fn draw_songs(
         const PAGE_BUTTON_H: f32 = 22.0;
         let actions_h = if bare { ACTIONS_H } else { PAGE_BUTTON_H };
         let panel_h = panel_end - panel_top - actions_h - style::space::SECTION;
-        let clip_w = if bare {
-            canvas.width - x + 4.0
-        } else {
-            pw + 4.0
-        };
-        let clip = [x - 2.0, panel_top - 2.0, clip_w, panel_h + 4.0];
+        let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
         if t < 1.0 {
             let start = canvas.shapes.len();
             // The way to the leaderboard is where the way back is on the board (its
@@ -688,7 +625,14 @@ fn draw_songs(
             } else {
                 style::icon_button_width(label, None, 7.0)
             };
+            // The main menu's look: the details on a panel of their own, as the board's page
+            // beside them, so nothing on the right floats over the map's picture.
+            if bare {
+                let page = [x - t * step, panel_top, pw, panel_h];
+                style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
+            }
             state.preview.title_room = bw + 10.0;
+            state.preview.board_w = if bare { bw } else { 0.0 };
             state.preview.bare = bare;
             state.preview.slid = t * step;
             if let Some(clip) = state.preview.draw_panel(
@@ -707,11 +651,9 @@ fn draw_songs(
                 state.frame_clip = Some(clip);
             }
             state.preview.title_room = 0.0;
+            state.preview.board_w = 0.0;
             state.preview.bare = false;
             state.preview.slid = 0.0;
-            if let (Some(rect), Some(i)) = (state.preview.mini_board, state.select.selected()) {
-                draw_mini_board_of(state, canvas, rect, i);
-            }
             // An EPIC map: the music's spectrum round its pill, and on landing on it a
             // glint across the panel and sparks out of the pill.
             if let Some([ex, ey]) = state.preview.epic_at {
@@ -738,11 +680,20 @@ fn draw_songs(
             fx.burst.draw(canvas, panel, canvas.dt_ms);
             // As the board's back button: 10 in from the frame, then the rows' scroll
             // bar room (`board_tabs`, inside `pw - 28`).
-            let (bx, by) = (x - t * step + pw - 18.0 - bw, panel_top + 10.0);
+            // Bare, it ends the row of the full-combo pp instead (where the details left it
+            // room), on a chip as the other buttons are.
+            let (bx, by) = match state.preview.board_at.filter(|_| bare) {
+                Some([bx, by, _, bh]) => (bx, by + bh / 2.0 - 10.0),
+                None => (x - t * step + pw - 18.0 - bw, panel_top + 10.0),
+            };
             let hit = hit::Hit::BoardPage;
             if state.select.legacy {
                 canvas.button(bx, by, bw, 20.0, &legacy_label, 7.0, hit, false);
             } else {
+                if let Some(chip) = state.preview.board_at.filter(|_| bare) {
+                    // As tall as the pp button it ends the row of.
+                    style::surface(canvas, chip, style::radius::SMALL, style::Surface::Lifted);
+                }
                 let at = [bx + 6.0, by + 10.0];
                 style::icon_button(canvas, at, &style::PODIUM, label, None, 7.0, false, hit);
             }
@@ -755,7 +706,7 @@ fn draw_songs(
         if t > 0.0 {
             if bare {
                 let page = [page_x, panel_top, pw, panel_h];
-                style::surface(canvas, page, 10.0, style::Surface::Raised);
+                style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
             } else {
                 style::panel(canvas, page_x, panel_top, pw, panel_h);
             }
@@ -844,12 +795,13 @@ fn draw_songs(
             let hit = hit::Hit::Key(KeyCode::Enter);
             canvas.button(panel_x, by, panel_w, bh, &label, 8.0, hit, true);
         } else {
-            // The main menu's look: a lane of its own from beside the list off the screen's
-            // right edge (a raised surface, no lines round it), Mods and Random bare icons on
-            // it, and Play its end, filled with the accent and running off the screen.
+            // The main menu's look: a lane of its own from beside the list to the screen's
+            // margin, level with the panel's right edge (a raised surface, no lines round it),
+            // Mods and Random bare icons on it, and Play its end, filled with the accent.
             let w = canvas.width;
-            style::lane_surface(canvas, [panel_x, by, w - panel_x + 2.0, bh]);
-            let play_x = w - (w * PLAY_SHARE).clamp(120.0, 200.0);
+            let right = panel_x + panel_w;
+            style::lane_surface(canvas, [panel_x, by, right - panel_x, bh]);
+            let play_x = right - (w * PLAY_SHARE).clamp(120.0, 200.0);
             let mid = by + bh / 2.0;
             let mods_word = tr!("Mods", "Mod", "Моды");
             let random = tr!("Random", "ランダム", "Случайная");
@@ -891,8 +843,8 @@ fn draw_songs(
                 );
             }
             let hit = hit::Hit::Key(KeyCode::Enter);
-            let bar = [play_x, by, bh];
-            state.play_icon_at = Some(style::lane_end_disc(bar));
+            let bar = [play_x, by, right - play_x, bh];
+            state.play_icon_at = Some(style::lane_end_disc([play_x, by, bh]));
             let burst = state
                 .play_burst
                 .map(|(at, _)| burst_progress(at, render::frame_now()));
@@ -1064,7 +1016,7 @@ fn draw_shift(
     frame: &Frame,
     t: f32,
     into: bool,
-    flying: Option<menu::Item>,
+    flying: Option<(menu::Item, f32)>,
 ) {
     let w = canvas.width;
     let ph = menu_shift::phases(t);
@@ -1091,12 +1043,13 @@ fn draw_shift(
         let alpha = menu_shift::lane_alpha(ph.landed);
         menu_shift::draw_lane(canvas, &menu_shift::lane(t, w, row), alpha, kiai);
     }
-    let in_air = flying.filter(|_| ph.flight > 0.0 && ph.flight < 1.0);
+    let (flying, flight) = flying.map_or((None, 0.0), |(i, f)| (Some(i), f));
+    let in_air = flying.filter(|_| flight > 0.0 && flight < 1.0);
     let songs_hits = canvas.hits.len();
-    let play_away = flying.is_some() && ph.flight < 1.0;
+    let play_away = flying.is_some() && flight < 1.0;
     draw_songs(state, canvas, frame, Some((ph, into)), play_away);
     let menu_hits = canvas.hits.len();
-    let away = flying.filter(|_| ph.flight > 0.0);
+    let away = flying.filter(|_| flight > 0.0);
     draw_menu(state, canvas, frame, Layer::Front { cam: ph.cam, away });
     // Only the screen being gone to takes clicks.
     if into {
@@ -1111,7 +1064,7 @@ fn draw_shift(
         .map(|m| m.spot(w));
     if let (Some(item), Some(from), Some((to, size))) = (in_air, from, state.play_icon_at) {
         let to = [to[0] + (1.0 - ph.cam) * w, to[1]];
-        menu_shift::draw_flight(canvas, item, from, (to, size), ph.flight);
+        menu_shift::draw_flight(canvas, item, from, (to, size), flight);
     }
 }
 

@@ -162,6 +162,8 @@ custom_move_asked = false
 show_converts = false
 # song select groups songs under headings (false: one list, by difficulty each difficulty on its own)
 song_headings = true
+# song select (main menu look) shows the library's counts and the device line
+select_info = true
 # song select's order under each heading (sort, title, artist, stars, length, bpm, added, played; desc after it: the other way round)
 song_order = sort
 # the source song select lists: all, osu, tja or own (taiko.rs's maps)

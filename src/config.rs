@@ -233,6 +233,9 @@ pub struct Config {
     pub show_converts: bool,
     /// Song select lists songs under headings (`ui::Select::headings`).
     pub song_headings: bool,
+    /// Song select in the main menu's look shows the library's counts by the search row and the
+    /// device line at the bottom (as the classic look always does).
+    pub select_info: bool,
     /// Whether moving taiko.rs's maps out of osu!'s Songs folder was offered already (it's
     /// offered once; Settings > Library does it any time).
     pub custom_move_asked: bool,
@@ -516,6 +519,7 @@ impl Default for Config {
             wheel_resizes_playfield: false,
             show_converts: false,
             song_headings: false,
+            select_info: false,
             custom_move_asked: false,
             bg_dim_black: true,
             interface_hidden: false,
@@ -1394,6 +1398,7 @@ impl Config {
                 "custom_move_asked" => cfg.custom_move_asked = v == "true",
                 "show_converts" => cfg.show_converts = v == "true",
                 "song_headings" => cfg.song_headings = v == "true",
+                "select_info" => cfg.select_info = v == "true",
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
                 "interface_hidden" => cfg.interface_hidden = v == "true",
                 "interface_hides" => cfg.interface_hides = crate::hud::Parts::parse_saved(v),
@@ -1923,6 +1928,7 @@ impl Config {
             self.show_converts
         ));
         out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
+        out.push_str(&format!("# song select (main menu look) shows the library's counts and the device line\nselect_info = {}\n", self.select_info));
         out.push_str(&format!(
             "# song select's order under each heading (sort, title, artist, stars, length, bpm, added, played; desc after it: the other way round)\nsong_order = {}\n# the source song select lists: all, osu, tja or own (taiko.rs's maps)\nsong_source = {}\n# each source's sort, order, direction and headings (empty: the one it starts with)\nlens_osu = {}\nlens_tja = {}\nlens_own = {}\n",
             self.song_order, self.song_source, self.lens_osu, self.lens_tja, self.lens_own

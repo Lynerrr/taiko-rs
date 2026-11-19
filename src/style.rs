@@ -92,6 +92,13 @@ pub fn skeleton(c: &mut Canvas, [x, y, w, h]: [f32; 4], radius: f32) {
     c.clip_since(start, x, y, w, h);
 }
 
+/// Corners, one scale for every surface of the main menu's look: the small things (key caps,
+/// chips' insides, tiles) and everything a card or strip big.
+pub mod radius {
+    pub const SMALL: f32 = 4.0;
+    pub const CARD: f32 = 8.0;
+}
+
 /// Room, on a grid of 4 units.
 pub mod space {
     /// The grid every gap and inset is a step of.
@@ -329,6 +336,9 @@ pub fn selector_colour() -> u32 {
 }
 
 /// Corner brackets round `[x, y, w, h]`, `alpha` of their strength, brighter on the beat.
+/// No fill: an outline alone.
+const CLEAR_FILL: [f32; 4] = [0.0; 4];
+
 pub fn brackets(c: &mut Canvas, [x, y, w, h]: [f32; 4], alpha: f32) {
     // Bolder on a phone, to be seen from arm's length.
     let t = pixel_size(crate::mobile::pick(2.0, 3.0));
@@ -340,12 +350,16 @@ pub fn brackets(c: &mut Canvas, [x, y, w, h]: [f32; 4], alpha: f32) {
         snap_to_grid(y + h),
     );
     let col = rgba(selector_colour(), alpha * (0.75 + 0.25 * pulse()));
+    // Each corner a piece of one outline as round as the cards' (a little more, as it's round
+    // them), cut to the corner: the brackets turn their corners round as everything else does.
+    let round = (radius::SMALL + 3.0).min(arm);
     for (cx, sx) in [(l, 1.0), (r, -1.0)] {
         for (cy, sy) in [(top, 1.0), (bot, -1.0)] {
             let hx = if sx > 0.0 { cx } else { cx - arm };
             let vy = if sy > 0.0 { cy } else { cy - arm };
-            c.rect(hx, if sy > 0.0 { cy } else { cy - t }, arm, t, col);
-            c.rect(if sx > 0.0 { cx } else { cx - t }, vy, t, arm, col);
+            let start = c.shapes.len();
+            c.round_rect([l, top], [r - l, bot - top], round, CLEAR_FILL, col, t);
+            c.clip_since(start, hx, vy, arm, arm);
         }
     }
 }
@@ -904,37 +918,10 @@ thread_local! {
     static LIGHTS: RefCell<HashMap<&'static str, f32>> = RefCell::new(HashMap::new());
 }
 
-/// A lane's strip with no lines round it, fading out over `[left, right]` units at its ends
-/// (song select's autoplay preview in the main menu's look), `alpha` of its full strength. The
-/// fades are nested layers, each from one end's step to the other's, so no edge is shared by two
-/// of them (bands side by side would show seams).
-pub fn lane_fade_strip(
-    c: &mut Canvas,
-    [x, y, w, h]: [f32; 4],
-    [left, right]: [f32; 2],
-    alpha: f32,
-) {
-    const STEPS: usize = 8;
-    let full = 0.95 * alpha;
-    // How strong the strip is `d + 1` steps in from its ends.
-    let want = |d: usize| {
-        let t = (d + 1) as f32 / STEPS as f32;
-        full * t * t * (3.0 - 2.0 * t)
-    };
-    for d in 0..STEPS {
-        let before = if d == 0 { 0.0 } else { want(d - 1) };
-        let layer = 1.0 - (1.0 - want(d)) / (1.0 - before);
-        let k = d as f32 / STEPS as f32;
-        let (l, r) = (snap_to_grid(x + left * k), snap_to_grid(x + w - right * k));
-        c.rect(l, y, r - l, h, rgba(PANEL, layer.max(0.0)));
-    }
-}
-
-/// A strip in the menu lane's place as a surface: the raised tone alone, no lines round it (song
-/// select's lane of actions in the main menu's look).
-pub fn lane_surface(c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
-    let fill = surface_fill(Surface::Raised);
-    c.rect(x, y, w, h, fill);
+/// A strip in the menu lane's place as a surface: the raised tone alone, no lines round it, its
+/// corners as round as the cards' (song select's lane of actions in the main menu's look).
+pub fn lane_surface(c: &mut Canvas, rect: [f32; 4]) {
+    surface(c, rect, radius::CARD, Surface::Raised);
 }
 
 /// The middle and radius at rest of the main menu's Play note at the end of a lane `[x, y, h]`
@@ -948,8 +935,8 @@ pub fn lane_end_disc([x, y, h]: [f32; 3]) -> ([f32; 2], f32) {
 pub const LANE_END_BEAT_GROW: f32 = 0.06;
 pub const LANE_END_HOVER_GROW: f32 = 0.12;
 
-/// The main action as the end of a lane: a bar of the accent colour from `x` to the screen's
-/// right edge, the main menu's Play note and `label` on it in white. The note swells a little on
+/// The main action as the end of a lane: a bar of the accent colour over `[x, y, w, h]` (rounded
+/// as the cards), the main menu's Play note and `label` on it in white. The note swells a little on
 /// the beat; under the pointer it grows and the bar lights up and glows (no frame round it),
 /// easing in and out. `disc_shown`: the note is in its place (not on its way). `burst`: how far
 /// (0 to 1) a press's GREAT burst is, as the menu's notes have when hit.
@@ -957,14 +944,13 @@ pub const LANE_END_HOVER_GROW: f32 = 0.12;
 pub fn lane_end_button(
     c: &mut Canvas,
     key: &'static str,
-    [x, y, h]: [f32; 3],
+    [x, y, w, h]: [f32; 4],
     label: &str,
     hit: crate::hit::Hit,
     disc_shown: bool,
     burst: Option<f32>,
 ) {
     use crate::menu::tint;
-    let w = c.width - x;
     let hover = c.hovered(x, y, w, h);
     let dt = c.dt_ms;
     let g = LIGHTS.with(|l| {
@@ -986,15 +972,16 @@ pub fn lane_end_button(
         );
     }
     let fill = tint(col, 0x000000, 0.5 - 0.5 * g);
-    c.rect(x, y, w, h, rgba(fill, 0.9 + 0.1 * pulse()));
+    // Rounded as the lane it ends (its right end is off the screen).
+    let r = radius::CARD;
+    let fill = rgba(fill, 0.9 + 0.1 * pulse());
+    c.round_rect([x, y], [w, h], r, fill, fill, 0.0);
     // Its edge only lights under the pointer: at rest the fill alone tells it apart.
     let edge = rgba(tint(col, 0xffffff, 0.35 * g), g);
-    c.rect(x, y, w, 1.5, edge);
-    c.rect(x, y + h - 1.5, w, 1.5, edge);
-    c.rect(x, y, 1.5, h, edge);
+    c.round_rect([x, y], [w, h], r, rgba(0, 0.0), edge, 1.5);
     let line = rgba(tint(col, 0xffffff, 0.3), 0.6 * g);
-    c.rect(x, y + 4.0, w, 1.0, line);
-    c.rect(x, y + h - 5.0, w, 1.0, line);
+    c.rect(x + r, y + 4.0, w - 2.0 * r, 1.0, line);
+    c.rect(x + r, y + h - 5.0, w - 2.0 * r, 1.0, line);
     let size = (h * 0.42).clamp(8.0, 11.0);
     let (at, r) = lane_end_disc([x, y, h]);
     if disc_shown {
@@ -1118,6 +1105,48 @@ pub fn map_pill_lit(
     }
 }
 
+/// The selected difficulty's rating in the details of the main menu's look: a chip of the lifted
+/// surface as round as the stat tiles, a diamond of its rating's colour, the value in the primary
+/// ink (the difficulty's own chip beside it has the colour; two filled blocks of it would shout).
+/// Drawn ending at `right`, as `map_pill` and as tall; gives its width.
+pub fn star_chip(
+    c: &mut Canvas,
+    right: f32,
+    y: f32,
+    size: f32,
+    level: Option<f32>,
+    stars: Option<f32>,
+) -> f32 {
+    let text = match level {
+        Some(level) => level_text(level),
+        None => stars.map_or_else(|| "...".into(), |s| format!("{s:.2}")),
+    };
+    let tw = Canvas::text_width(size, &text);
+    let (w, h) = (tw + size * 1.6 + 6.0, size + 6.0);
+    let x = right - w;
+    surface(c, [x, y - 3.0, w, h], radius::SMALL, Surface::Lifted);
+    let col = role::rating(level, stars);
+    let d = size * 0.32;
+    let (dx, dy) = (x + size * 0.6 + 2.0, y - 3.0 + h / 2.0);
+    let fill = rgba(col, 1.0);
+    c.round_rect(
+        [dx - d, dy - d],
+        [d * 2.0, d * 2.0],
+        d * 0.4,
+        fill,
+        fill,
+        0.0,
+    );
+    c.text(
+        x + size * 1.3 + 4.0,
+        y,
+        size,
+        rgba(ink::PRIMARY, 1.0),
+        &text,
+    );
+    w
+}
+
 /// A TJA level as charters write it: whole, or with the fraction it was given.
 pub fn level_text(level: f32) -> String {
     let text = format!("{level:.2}");
@@ -1174,6 +1203,50 @@ fn rating_pill(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_details_rating_is_a_quiet_chip_with_its_colour_on_a_diamond_only() {
+        let mut c = Canvas::default();
+        let w = star_chip(&mut c, 400.0, 100.0, 10.0, None, Some(5.36));
+        let mut pill = Canvas::default();
+        assert_eq!(
+            w,
+            map_pill(&mut pill, 400.0, 100.0, 10.0, None, Some(5.36)),
+            "as wide"
+        );
+        let col = rgba(role::rating(None, Some(5.36)), 1.0);
+        assert_eq!(c.shapes[0].fill, surface_fill(Surface::Lifted), "the chip");
+        let coloured: Vec<_> = c.shapes.iter().filter(|s| s.fill == col).collect();
+        assert_eq!(coloured.len(), 1, "only the diamond");
+        assert!(coloured[0].half[0] < 5.0);
+    }
+
+    #[test]
+    fn the_lane_of_actions_and_its_play_end_are_as_round_as_the_cards() {
+        let mut c = Canvas {
+            width: 853.3,
+            ..Canvas::default()
+        };
+        lane_surface(&mut c, [480.0, 400.0, 375.0, 50.0]);
+        let strip = c.shapes.len();
+        lane_end_button(
+            &mut c,
+            "round-test",
+            [700.0, 400.0, 129.3, 50.0],
+            "Play",
+            crate::hit::Hit::Key(winit::keyboard::KeyCode::Enter),
+            true,
+            None,
+        );
+        assert_eq!(c.shapes[0].params[0], radius::CARD, "the lane");
+        // The Play bar: the widest shape from its left edge.
+        let bar = c.shapes[strip..]
+            .iter()
+            .filter(|s| (s.center[0] - s.half[0] - 700.0).abs() < 0.01)
+            .max_by(|a, b| a.half[0].total_cmp(&b.half[0]))
+            .expect("the Play bar");
+        assert_eq!(bar.params[0], radius::CARD, "Play");
+    }
+
     use super::*;
 
     #[test]
@@ -1298,7 +1371,7 @@ mod tests {
         lane_end_button(
             &mut c,
             "test-play-note",
-            [700.0, 408.0, 50.0],
+            [700.0, 408.0, 129.3, 50.0],
             "Play",
             crate::hit::Hit::ModsButton,
             true,
@@ -1375,7 +1448,7 @@ mod tests {
             lane_end_button(
                 &mut c,
                 "test-play",
-                [700.0, 440.0, 26.0],
+                [700.0, 440.0, 129.3, 26.0],
                 "Play",
                 crate::hit::Hit::ModsButton,
                 true,
@@ -1391,8 +1464,8 @@ mod tests {
         assert!(lum(&over) > lum(&away), "lit under the pointer");
         assert_eq!(over.hits.len(), 1);
         assert!(
-            over.hits[0].rect[0] == 700.0 && over.hits[0].rect[2] > 150.0,
-            "to the screen's edge"
+            over.hits[0].rect[0] == 700.0 && over.hits[0].rect[2] == 129.3,
+            "as wide as it's given (to the screen's margin), not to the edge"
         );
     }
 

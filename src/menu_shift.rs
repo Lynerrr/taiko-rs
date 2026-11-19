@@ -23,6 +23,9 @@ const MORPH_TO: f32 = 0.6;
 const DROP_FROM: f32 = 0.38;
 const FLIGHT_FROM: f32 = 0.05;
 const FLIGHT_LEN: f32 = 0.42;
+/// How far off the screen (of its width) a menu coming back can be for Play on it to throw its
+/// note again.
+const FLY_CAM_MAX: f32 = 0.5;
 /// How much later the lane's left end folds up than its right (of the fold): what's under the
 /// menu's notes stays under them until they're gone.
 const STAGGER: f32 = 0.3;
@@ -44,27 +47,35 @@ pub struct Shift {
     pub menu: Option<Box<menu::Menu>>,
     /// The note that was hit, flying to its button (the way to song select only).
     pub flying: Option<Item>,
+    /// Where (`t`) the way was when the note set off: its flight is timed from there.
+    flight_from: f32,
 }
 
 impl Shift {
     /// Off to song select from the menu `left` (hit on `item`), from wherever a way back was.
     pub fn into_songs(left: Option<menu::Menu>, item: Item, from: Option<&Shift>) -> Shift {
+        let t = from.map_or(0.0, |s| s.t).max(0.0);
         Shift {
             into_songs: true,
-            t: from.map_or(0.0, |s| s.t),
+            t,
             menu: left.map(Box::new),
-            // Only from the start: a note that's halfway back doesn't fly out again.
-            flying: from.is_none().then_some(item),
+            // From a menu on the screen, or nearly back on it (Play pressed again as it slides
+            // in), the note flies out whole; one that's halfway back doesn't fly out again.
+            flying: (phases(t).cam < FLY_CAM_MAX).then_some(item),
+            flight_from: t,
         }
     }
 
-    /// Back to the menu, from wherever a way to song select was.
+    /// Back to the menu, from wherever a way to song select was. Past the lane's fold (`MORPH_TO`)
+    /// the way in only drops the cards, which the way back doesn't play: it starts there, so the
+    /// camera and the lane move at once, not after a pause with nothing moving.
     pub fn back(from: Option<&Shift>) -> Shift {
         Shift {
             into_songs: false,
-            t: from.map_or(1.0, |s| s.t),
+            t: from.map_or(MORPH_TO, |s| s.t.min(MORPH_TO)),
             menu: None,
             flying: None,
+            flight_from: 0.0,
         }
     }
 
@@ -81,6 +92,17 @@ impl Shift {
 
     pub fn t(&self) -> f32 {
         self.t.clamp(0.0, 1.0)
+    }
+
+    /// How far the hit note has flown, 0 to 1 (0 with none flying), timed from where it set
+    /// off as the way from the menu's start would be.
+    pub fn flight(&self) -> f32 {
+        if self.flying.is_none() {
+            return 0.0;
+        }
+        in_out_cubic(clamp01(
+            (self.t - self.flight_from - FLIGHT_FROM) / FLIGHT_LEN,
+        ))
     }
 }
 
@@ -657,9 +679,35 @@ mod tests {
         assert!((back.t() - 0.5).abs() < 1e-4);
         assert!(back.flying.is_none());
         let mut back = back;
-        assert!(back.step(MS * BACK * 0.25));
-        assert!(!back.step(MS * BACK * 0.3), "back is quicker");
+        assert!(back.step(MS * BACK * 0.1));
         let again = Shift::into_songs(None, Item::Play, Some(&back));
         assert!(again.flying.is_none(), "a note doesn't fly out halfway");
+    }
+
+    #[test]
+    fn play_on_a_menu_nearly_back_throws_its_note_whole() {
+        let mut into = Shift::into_songs(None, Item::Play, None);
+        assert!(into.step(MS * 0.7));
+        let mut back = Shift::back(Some(&into));
+        // The menu slides in; Play again with it a little short of its place.
+        while phases(back.t()).cam > 0.15 {
+            assert!(back.step(16.0));
+        }
+        let mut again = Shift::into_songs(None, Item::Play, Some(&back));
+        assert_eq!(again.flying, Some(Item::Play), "the note flies");
+        assert_eq!(again.flight(), 0.0, "from its start");
+        let mut seen = Vec::new();
+        while again.step(16.0) {
+            seen.push(again.flight());
+        }
+        assert!(
+            seen.iter().any(|f| *f > 0.0 && *f < 0.2),
+            "set off: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|f| *f > 0.8 && *f < 1.0),
+            "came down: {seen:?}"
+        );
+        assert!(seen.windows(2).all(|w| w[1] >= w[0]), "one way: {seen:?}");
     }
 }

@@ -59,6 +59,10 @@ pub enum Hit {
     ChatMedals(u64),
     /// Song select's heart on the song it's showing.
     SelectLike,
+    /// Song select's full-combo pp: opens the pp simulator in its place, or closes it; a step of
+    /// one of its fields (0: accuracy, 1: misses) down or up.
+    PpSim,
+    PpSimStep(u8, i32),
     /// The song preview's autoplay box, seek graph and play button. It only marks the preview as
     /// the topmost thing there, so whatever is drawn over it takes the click instead.
     Preview,

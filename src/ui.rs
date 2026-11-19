@@ -387,6 +387,9 @@ pub struct Select {
     pub to_menu: bool,
     /// A mod's customization is open over the top of the screen: no way back to show.
     pub covered: bool,
+    /// The main menu's look shows the library's counts and the status line (`Config::select_info`);
+    /// the classic look always does.
+    pub show_info: bool,
     /// On the way from the main menu (`menu_shift`): how far the list has come in
     /// (`Phases::cascade`), its cards dropping out of the search row one after another.
     pub arriving: Option<f32>,
@@ -490,7 +493,9 @@ pub const SONG_ROW_H: f32 = 34.0;
 const CARD_INSET: f32 = 12.0;
 const CARD_HOVER: f32 = 4.0;
 const CARD_DIM: f32 = 0.7;
-const CARD_RADIUS: f32 = 4.0;
+const CARD_RADIUS: f32 = crate::style::radius::CARD;
+/// How bright the faint edge round a card is (not the open one, which has the selection's).
+const CARD_EDGE: f32 = 0.1;
 /// A set opening: its difficulties drop in from this far above, this many ms apart.
 const DIFF_DROP: f32 = 8.0;
 const DIFF_CASCADE_MS: f32 = 30.0;
@@ -575,6 +580,7 @@ impl Select {
             legacy: false,
             to_menu: true,
             covered: false,
+            show_info: false,
             arriving: None,
             list_shapes: [0, 0],
             filter: String::new(),
@@ -2251,10 +2257,15 @@ impl Select {
             }
             // On a small chip beside the search row, over the panel's side, where there is one.
             let (x, right) = (24.0 + lw + 12.0, w - 24.0);
-            if right - x > 60.0 {
+            if self.show_info && right - x > 60.0 {
                 let text = Canvas::fit(6.0, right - x - 16.0, &summary);
                 let chip = [x, row + 4.0, Canvas::text_width(6.0, &text) + 16.0, 16.0];
-                crate::style::surface(c, chip, 8.0, crate::style::Surface::Raised);
+                crate::style::surface(
+                    c,
+                    chip,
+                    crate::style::radius::CARD,
+                    crate::style::Surface::Raised,
+                );
                 c.text(
                     x + 8.0,
                     row + 12.0 - Canvas::text_height(6.0) / 2.0,
@@ -3536,13 +3547,15 @@ impl Select {
             7.0,
             2.0 * (469.5 - (455.5 + Canvas::text_height(7.0) / 2.0) - 3.0),
         );
-        c.text(
-            24.0,
-            466.0 + (7.0 - status_size) / 2.0,
-            status_size,
-            rgba(0x55556a, 1.0),
-            &Canvas::fit(status_size, w - 48.0, status),
-        );
+        if legacy || self.show_info {
+            c.text(
+                24.0,
+                466.0 + (7.0 - status_size) / 2.0,
+                status_size,
+                rgba(0x55556a, 1.0),
+                &Canvas::fit(status_size, w - 48.0, status),
+            );
+        }
     }
 
     /// A set's card in the main menu's look over `[x, y, w, h]`: a surface (lifted when open or
@@ -3582,12 +3595,22 @@ impl Select {
             // Until its picture is in, the card shows the picture's average colour (once known),
             // and the picture fades in over it: nothing on the card pops.
             let colour = c.card_colour(&bg);
+            // Everything on the card is as round as it, 1 in.
+            let round = CARD_RADIUS - 1.0;
             if let Some([r, g, b]) = colour
                 && (!shown || a < 1.0)
             {
-                c.rect(inner[0], inner[1], inner[2], inner[3], [r, g, b, 1.0]);
+                let col = [r, g, b, 1.0];
+                c.round_rect(
+                    [inner[0], inner[1]],
+                    [inner[2], inner[3]],
+                    round,
+                    col,
+                    col,
+                    0.0,
+                );
             }
-            let drawn = c.card_picture(&bg, inner, [1.0, 1.0, 1.0, a]);
+            let drawn = c.card_picture(&bg, inner, [1.0, 1.0, 1.0, a], round);
             if drawn && since.is_none() {
                 covers.insert(key, crate::render::frame_now());
             }
@@ -3595,30 +3618,19 @@ impl Select {
                 // Over the colour the shade is there at once; over the bare surface it comes in
                 // with the picture.
                 let base = if colour.is_some() { 1.0 } else { a };
-                const BANDS: usize = 16;
-                let bw = inner[2] / BANDS as f32;
-                let shade = |b: usize| {
-                    let t = b as f32 / (BANDS - 1) as f32;
-                    (COVER_SHADE.0 + (COVER_SHADE.1 - COVER_SHADE.0) * t) * base
-                };
-                // Layers from the card's left edge to the end of each band, so band `b` is
-                // under layers `b..`: every edge belongs to one layer alone (bands side by side
-                // meet on shared edges, which show as light seams at some pixel sizes). Layer `b`
-                // adds what band `b` needs over the layers right of it.
-                for b in 0..BANDS {
-                    let below = if b + 1 < BANDS {
-                        1.0 - shade(b + 1)
-                    } else {
-                        1.0
-                    };
-                    let alpha = 1.0 - (1.0 - shade(b)) / below;
-                    let r = crate::render::snap_to_grid(inner[0] + (b + 1) as f32 * bw);
-                    let col = rgba(style::SURFACE_1, alpha.max(0.0));
-                    c.rect(inner[0], inner[1], r - inner[0], inner[3], col);
-                }
+                // One sweep from dark under the title to lighter on the right, as round as the
+                // card.
+                let shade = |s: f32| rgba(style::SURFACE_1, s * base);
+                let (left, right) = (shade(COVER_SHADE.0), shade(COVER_SHADE.1));
+                c.shade_across(
+                    [inner[0], inner[1]],
+                    [inner[2], inner[3]],
+                    round,
+                    left,
+                    right,
+                );
             }
         }
-        let clear = rgba(0, 0.0);
         if open {
             // On the beat its edge and tone light a little; in a kiai the edge turns gold.
             let kiai = style::kiai();
@@ -3632,9 +3644,12 @@ impl Select {
                 rgba(col, 0.8 + 0.2 * beat),
                 1.0,
             );
-        } else if light > 0.0 {
+        } else {
+            // A faint edge round every card, so neighbouring pictures of like colours don't run
+            // into each other; brighter under the pointer.
             let lift = rgba(0xffffff, 0.06 * light);
-            c.round_rect([x, y], [w, h], CARD_RADIUS, lift, clear, 0.0);
+            let edge = rgba(0xffffff, CARD_EDGE + 0.08 * light);
+            c.round_rect([x, y], [w, h], CARD_RADIUS, lift, edge, 1.0);
         }
     }
 

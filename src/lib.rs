@@ -385,6 +385,9 @@ type HostTransfer = (
     Arc<std::sync::atomic::AtomicU64>,
 );
 
+/// What the pp simulator's answer is for: the map, accuracy and misses, speed, mods, scroll speed.
+type SimKey = (std::path::PathBuf, u64, u32, u64, mods::Mods, u64);
+
 /// Everything the input and render threads share. The render thread holds the lock only while
 /// building a frame (well under a millisecond) and never across a GPU wait, so key presses are
 /// handled — and timestamped — immediately no matter how the swapchain paces frames.
@@ -554,8 +557,8 @@ struct State {
     /// rows or why not), and the one being fetched.
     online_boards: std::collections::HashMap<(u64, bool), (Instant, Board)>,
     board_fetch: Option<BoardFetch>,
-    /// When song select's strip of the map's board under the details last changed.
-    mini_board: crate::screens::select::leaderboard::MiniSeen,
+    /// The pp simulator's last answer: for which map, pick, speed and mods, and the pp.
+    sim_pp: Option<(SimKey, Option<f64>)>,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
     /// Mods of the play being loaded.
@@ -2554,6 +2557,42 @@ impl State {
 
     /// Play on the menu: the camera moves on along its lane to song select (`shifts`), or song
     /// select is simply there.
+    /// The pp a play picked in the simulator would give on library entry `i` at speed `rate`
+    /// with the mods on (None until the map is read, or for no pp with these mods); worked out
+    /// again only when any of it changes.
+    pub(crate) fn simulated_pp(&mut self, i: usize, sim: preview::PpSim, rate: f64) -> Option<f64> {
+        let notes = self.preview.notes()?;
+        let e = self.library.get(i)?;
+        let key: SimKey = (
+            e.path.clone(),
+            sim.accuracy.to_bits(),
+            sim.misses,
+            rate.to_bits(),
+            self.cfg.mods,
+            self.cfg.scroll_speed.to_bits(),
+        );
+        if let Some((k, pp)) = &self.sim_pp
+            && *k == key
+        {
+            return *pp;
+        }
+        let (great, ok, miss) = sim.counts(notes);
+        let play = pp::Play {
+            great,
+            ok,
+            miss,
+            max_combo: great + ok,
+            rate,
+            mods: self.cfg.mods,
+            scroll_speed: self.cfg.scroll_speed,
+            seed: 0,
+            half: Default::default(),
+        };
+        let pp = pp::play_pp(&e.path, &play);
+        self.sim_pp = Some((key, pp));
+        pp
+    }
+
     fn leave_menu_for_songs(&mut self, shifts: bool) {
         let left = self.main_menu.take();
         if !shifts {
@@ -3101,6 +3140,7 @@ impl State {
                 }
             }
             Item::ShowFps => on(c.show_fps),
+            Item::SelectInfo => on(c.select_info),
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
             Item::EpilepsyWarning => on(c.epilepsy_warning),
@@ -3446,6 +3486,7 @@ impl State {
                 self.cfg.fps_cap = FPS_CAPS[(i + dir).rem_euclid(FPS_CAPS.len() as i32) as usize];
             }
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
+            Item::SelectInfo => self.cfg.select_info = !self.cfg.select_info,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::EpilepsyWarning => self.cfg.epilepsy_warning = !self.cfg.epilepsy_warning,
@@ -10620,6 +10661,20 @@ impl State {
         (!covered).then_some(middle)
     }
 
+    /// How far the background is into its blurred copy: the idle screen's, and all of it on song
+    /// select in the main menu's look, where the map's picture is a field of colour under the
+    /// cards and the banner (they show it sharp). On the way between the menu and song select it
+    /// blurs and clears with the camera. Legacy and the phone layout keep it sharp.
+    pub(crate) fn background_blur(&self) -> f32 {
+        let look = !self.select.legacy && !mobile::active() && self.scene.is_select();
+        let select = match &self.menu_shift {
+            Some(shift) if look => menu_shift::phases(shift.t()).cam,
+            _ if look && !self.on_menu() => 1.0,
+            _ => 0.0,
+        };
+        self.idle.amount().max(select)
+    }
+
     /// Song select, or a screen that is part of it (its fullscreen preview, the download tab):
     /// the song list's pointer, the preview panel and the map's stars work there.
     fn in_song_select(&self) -> bool {
@@ -14957,6 +15012,12 @@ impl State {
             Hit::SelectLike => {
                 if let Some(e) = self.preview_target().and_then(|i| self.library.get(i)) {
                     self.select.toggle_like(e);
+                }
+            }
+            Hit::PpSim => self.preview.toggle_sim(),
+            Hit::PpSimStep(field, dir) => {
+                if let Some(sim) = &mut self.preview.sim {
+                    sim.step(field, dir);
                 }
             }
             Hit::PlayerFolders => {

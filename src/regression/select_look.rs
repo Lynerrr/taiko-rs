@@ -123,17 +123,32 @@ fn many() -> Vec<maps::Chart> {
 fn surfaces_have_no_edge_and_rows_no_lines_under_them() {
     let (mut s, _songs, mut now) = menu_look("select-look-edges");
     let c = settled(&mut s, &mut now);
-    // The selection's outline round the open set's card is the one edge.
+    // The selection's outline round the open set's card is the one strong edge; the other set
+    // cards have a faint white one each, so neighbouring pictures of like colours stay apart.
     let open = open_card(&c, &s);
+    let set_cards = cards(&c);
+    let faint_card_edge = |sh: &Shape| {
+        same_rgb(sh.border, render::rgba(0xffffff, 1.0))
+            && sh.border[3] <= 0.2
+            && set_cards.iter().any(|(_, r)| inside(sh.center, *r, 0.5))
+    };
     let edged: Vec<[f32; 4]> = c
         .shapes
         .iter()
         .filter(|sh| plain(sh) && on_select(sh, &c, &s) && !inside(sh.center, open, 1.0))
         .filter(|sh| sh.params[1] > 0.0 && sh.border[3] > 0.01)
         .filter(|sh| !same_rgb(sh.border, sh.fill) || sh.fill[3] < sh.border[3])
+        .filter(|sh| !faint_card_edge(sh))
+        // The selector's brackets round the selected difficulty: corners of one outline.
+        .filter(|sh| !same_rgb(sh.border, render::rgba(style::selector_colour(), 1.0)))
         .map(rect)
         .collect();
     assert!(edged.is_empty(), "boxes with an edge round them: {edged:?}");
+    let parted = c.shapes.iter().filter(|sh| faint_card_edge(sh)).count();
+    assert!(
+        parted + 1 >= set_cards.len(),
+        "every set card but the open one parted: {parted}"
+    );
     // No line under the search row or a row of the list: rows are parted by room.
     let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
     let lines: Vec<[f32; 4]> = c
@@ -418,7 +433,7 @@ fn don_and_kat_are_one_bar_split_in_proportion() {
 }
 
 #[test]
-fn a_cards_shade_has_no_seams() {
+fn a_cards_shade_is_one_sweep_as_round_as_the_card_over_its_rounded_picture() {
     let (mut s, _songs, mut now) = menu_look("select-look-shade");
     let i = s.select.selected().expect("a map is selected");
     let bg = preview::background_path(&s.library[i]).expect("it names a picture");
@@ -426,53 +441,36 @@ fn a_cards_shade_has_no_seams() {
         .pretend_loaded(&render::path_picture_key(&bg), [0.5, 0.5, 0.5]);
     let c = settled(&mut s, &mut now);
     let open = open_card(&c, &s);
-    // The shade over the open card's picture: plain shapes in the card's dark surface colour.
+    // The shade over the open card's picture: one shape (no seams between bands), from the
+    // card's dark surface colour under the title to lighter on the right.
     let dark = render::rgba(style::SURFACE_1, 1.0);
-    let layers: Vec<[f32; 4]> = c
+    let shades: Vec<&Shape> = c
         .shapes
         .iter()
-        .filter(|sh| plain(sh) && same_rgb(sh.fill, dark) && inside(sh.center, open, 0.0))
-        .filter(|sh| sh.half[1] * 2.0 > open[3] * 0.8)
-        .map(rect)
+        .filter(|sh| sh.params[3] == render::SHADE_ACROSS && inside(sh.center, open, 0.0))
         .collect();
-    assert!(layers.len() >= 8, "a shade in layers: {layers:?}");
-    // All from the card's left, each to its own right edge: no edge shared by two of them (a
-    // light seam at some pixel sizes).
-    let left = layers[0][0];
+    assert_eq!(shades.len(), 1, "one sweep");
+    let shade = shades[0];
+    assert!(same_rgb(shade.fill, dark) && same_rgb(shade.border, dark));
     assert!(
-        layers.iter().all(|r| (r[0] - left).abs() < 0.01),
-        "{layers:?}"
-    );
-    let rights: Vec<f32> = layers.iter().map(|r| r[0] + r[2]).collect();
-    for (k, r) in rights.iter().enumerate() {
-        assert!(
-            rights.iter().skip(k + 1).all(|o| (o - r).abs() > 0.01),
-            "two layers end alike: {rights:?}"
-        );
-    }
-    // Darkest at the left, under the title, lighter to the right.
-    let through = |x: f32| {
-        layers
-            .iter()
-            .zip(c.shapes.iter().filter(|sh| {
-                plain(sh)
-                    && same_rgb(sh.fill, dark)
-                    && inside(sh.center, open, 0.0)
-                    && sh.half[1] * 2.0 > open[3] * 0.8
-            }))
-            .filter(|(r, _)| x >= r[0] && x < r[0] + r[2])
-            .map(|(_, sh)| 1.0 - sh.fill[3])
-            .product::<f32>()
-    };
-    let (l, r) = (
-        through(left + 2.0),
-        through(rights.iter().fold(0.0, |m: f32, v| m.max(*v)) - 2.0),
-    );
-    assert!(
-        1.0 - l > 0.8 && (1.0 - r - 0.4).abs() < 0.05,
+        shade.fill[3] > 0.8 && (shade.border[3] - 0.4).abs() < 0.05,
         "shade {} to {}",
-        1.0 - l,
-        1.0 - r
+        shade.fill[3],
+        shade.border[3]
+    );
+    // Over the picture, both as round as the card (1 in from its edge): no square corner pokes
+    // out of it.
+    let picture = c
+        .shapes
+        .iter()
+        .find(|sh| card_picture(sh) && inside(sh.center, open, 0.0))
+        .expect("the card's picture");
+    assert_eq!(rect(picture), rect(shade), "the shade covers the picture");
+    assert!(picture.params[0] > 0.0 && picture.params[0] == shade.params[0]);
+    let [_, _, w, h] = rect(picture);
+    assert!(
+        w < open[2] && h < open[3],
+        "inside the card, not a cover crop past it"
     );
 }
 
@@ -907,36 +905,29 @@ fn text_at(c: &Canvas, s: &str) -> Option<[f32; 2]> {
 }
 
 #[test]
-fn the_preview_lane_has_no_lines_round_it_and_fades_in_at_its_ends() {
+fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
     let (mut s, _songs, mut now) = menu_look("select-look-lane");
     let c = settled(&mut s, &mut now);
     let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
     let right_of_list = |sh: &&Shape| plain(sh) && sh.center[0] > 28.0 + lw;
-    // The strip: layers of the panel's fill, each from one end's step to the other's.
-    let fill = render::rgba(style::PANEL, 1.0);
-    let layers: Vec<([f32; 4], f32)> = c
+    let lane_hit = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
+    // The strip: a tile as the stats' are (not a dark box), as round as them.
+    let fill = style::surface_fill(style::Surface::Raised);
+    let strips: Vec<&Shape> = c
         .shapes
         .iter()
         .filter(right_of_list)
-        .filter(|sh| same_rgb(sh.fill, fill) && sh.half[0] * 2.0 > 100.0)
-        .map(|sh| (rect(sh), sh.fill[3]))
+        .filter(|sh| {
+            same_rgb(sh.fill, fill) && sh.half[0] * 2.0 > 100.0 && inside(sh.center, lane_hit, 1.0)
+        })
         .collect();
-    assert!(layers.len() >= 4, "a strip in layers: {layers:?}");
-    let [_, y, _, h] = layers[0].0;
-    assert!(
-        layers.iter().all(|(r, _)| r[1] == y && r[3] == h),
-        "{layers:?}"
-    );
-    for (k, (a, _)) in layers.iter().enumerate() {
-        for (b, _) in &layers[k + 1..] {
-            assert!(
-                (a[0] - b[0]).abs() > 0.01 && (a[0] + a[2] - b[0] - b[2]).abs() > 0.01,
-                "two layers share an edge: {a:?} {b:?}"
-            );
-        }
-    }
-    let left = layers.iter().map(|(r, _)| r[0]).fold(f32::MAX, f32::min);
-    let right = layers.iter().map(|(r, _)| r[0] + r[2]).fold(0.0, f32::max);
+    let found: Vec<[f32; 4]> = strips.iter().map(|sh| rect(sh)).collect();
+    assert_eq!(strips.len(), 1, "one strip: {found:?}");
+    let strip = strips[0];
+    assert_eq!(strip.params[0], style::radius::SMALL, "its corners round");
+    assert_eq!(strip.params[1], 0.0, "no edge round it");
+    let [left, y, w, h] = rect(strip);
+    let right = left + w;
     // No lines along it or across its ends.
     let edge = render::rgba(style::PANEL_EDGE, 1.0);
     let lines: Vec<[f32; 4]> = c
@@ -949,19 +940,6 @@ fn the_preview_lane_has_no_lines_round_it_and_fades_in_at_its_ends() {
         .filter(|r| r[0] < right + 2.0 && r[0] + r[2] > left - 2.0)
         .collect();
     assert!(lines.is_empty(), "lines round the lane: {lines:?}");
-    let strength = |x: f32| {
-        1.0 - layers
-            .iter()
-            .filter(|(r, _)| x >= r[0] && x < r[0] + r[2])
-            .map(|(_, a)| 1.0 - a)
-            .product::<f32>()
-    };
-    let middle = strength((left + right) / 2.0);
-    assert!(middle > 0.9, "whole in the middle: {middle}");
-    assert!(
-        strength(left + 0.5) < 0.2 && strength(right - 0.5) < 0.2,
-        "faint at its ends"
-    );
 }
 
 #[test]
@@ -1049,116 +1027,6 @@ fn local_play(s: &State, player: &str, score: u64, accuracy: f64) -> crate::scor
     }
 }
 
-#[test]
-fn the_details_show_the_maps_top_three_and_my_best_under_the_timeline() {
-    let (mut s, _songs, mut now) = menu_look("select-look-mini-board");
-    for (k, name) in ["Ann", "Bo", "Cy", "Di"].iter().enumerate() {
-        let play = local_play(&s, name, 900_000 - k as u64 * 1000, 0.99 - k as f64 * 0.01);
-        s.scores.push(play);
-    }
-    let c = settled(&mut s, &mut now);
-    let strip = s.preview.mini_board.expect("a strip under the timeline");
-    let [_, ty] = text_at(&c, "0:00 / ").expect("the timeline");
-    assert!(strip[1] > ty, "under the timeline: {strip:?}");
-    let shown = texts_in(&c, strip);
-    for name in ["Ann", "Bo", "Cy"] {
-        assert!(shown.iter().any(|t| t == name), "{name} in {shown:?}");
-    }
-    assert!(
-        !shown.iter().any(|t| t == "Di"),
-        "only the top three: {shown:?}"
-    );
-    // The best of the player's own plays at its right: what it is, its grade and accuracy.
-    for part in ["best", "S", "99.00%"] {
-        assert!(shown.iter().any(|t| t == part), "{part} in {shown:?}");
-    }
-    let opens = c.hits.iter().any(|b| {
-        let r = b.rect;
-        b.hit == Hit::BoardPage
-            && r[0] <= strip[0] + 1.0
-            && r[1] <= strip[1] + 1.0
-            && r[2] >= strip[2] - 1.0
-    });
-    assert!(opens, "a click on it opens the whole board");
-    // Above the lane of actions.
-    let play = c
-        .hits
-        .iter()
-        .find(|b| b.hit == Hit::Key(KeyCode::Enter))
-        .expect("Play")
-        .rect;
-    assert!(
-        strip[1] + strip[3] <= play[1],
-        "{strip:?} over Play {play:?}"
-    );
-}
-
-#[test]
-fn with_no_plays_the_strip_says_so_quietly() {
-    let (mut s, _songs, mut now) = menu_look("select-look-mini-board-empty");
-    let c = settled(&mut s, &mut now);
-    let strip = s.preview.mini_board.expect("a strip under the timeline");
-    assert_eq!(texts_in(&c, strip), vec!["no scores yet".to_string()]);
-}
-
-#[test]
-fn the_strip_shows_the_online_board_greyed_out_until_it_comes() {
-    let (mut s, _songs, mut now) = menu_look("select-look-mini-board-online");
-    settled(&mut s, &mut now);
-    // The board tab turned online: the strip waits a moment on the map, then asks the server.
-    s.board_online = true;
-    s.cfg.online_user = "Bo".into();
-    now += Duration::from_millis(16);
-    let c = frame(&mut s, now);
-    let strip = s.preview.mini_board.expect("a strip");
-    let grey = render::rgba(style::ink::SECONDARY, 0.12);
-    let bars = c
-        .shapes
-        .iter()
-        .filter(|sh| same_rgb(sh.fill, grey) && (sh.fill[3] - grey[3]).abs() < 0.01)
-        .filter(|sh| {
-            let [x, y, ..] = rect(sh);
-            x >= strip[0] && y >= strip[1] && y <= strip[1] + strip[3]
-        })
-        .count();
-    assert_eq!(bars, 3, "grey bars in the rows' places");
-    assert!(texts_in(&c, strip).is_empty());
-    let i = s.select.selected().unwrap();
-    let hash = s.library[i].hash();
-    let score = |player: &str, accuracy: f64| crate::online::OnlineScore {
-        player: player.into(),
-        accuracy,
-        ..Default::default()
-    };
-    let rows = vec![
-        score("Ann", 0.99),
-        score("Bo", 0.98),
-        score("Cy", 0.97),
-        score("Di", 0.96),
-    ];
-    s.online_boards
-        .insert((hash, false), (Instant::now(), Ok(rows)));
-    let c = settled(&mut s, &mut now);
-    let shown = texts_in(&c, strip);
-    assert!(
-        ["Ann", "Bo", "Cy"]
-            .iter()
-            .all(|n| shown.iter().any(|t| t == n)),
-        "{shown:?}"
-    );
-    // The player's own row in the accent.
-    let bo = c
-        .texts
-        .iter()
-        .find(|(r, t)| t == "Bo" && texts_in(&c, strip).contains(t) && !r.is_empty())
-        .unwrap();
-    assert!(
-        same_rgb(c.shapes[bo.0.start].fill, render::rgba(ACCENT, 1.0)),
-        "mine in the accent"
-    );
-}
-
-/// `menu_look` with the interface's animations on.
 fn animated(tag: &str) -> (State, Songs, Instant) {
     let (mut s, songs, now) = menu_look(tag);
     s.cfg.animations = true;
@@ -1252,7 +1120,7 @@ fn nothing_in_the_details_stretches_on_the_way_to_the_leaderboard() {
     s.cfg.animations = true;
     let c = settled(&mut s, &mut now);
     let preview = |c: &Canvas| hit_rect(c, |h| *h == Hit::Preview).expect("the lane");
-    let (lane, strip) = (preview(&c), s.preview.mini_board.expect("the strip"));
+    let lane = preview(&c);
     s.mob.flip_board();
     let mut on_the_way = 0;
     for _ in 0..12 {
@@ -1267,19 +1135,12 @@ fn nothing_in_the_details_stretches_on_the_way_to_the_leaderboard() {
             continue;
         }
         on_the_way += 1;
-        let m = s.preview.mini_board.expect("the strip");
         let shown = |r: [f32; 4]| r[0] + r[2];
         assert!(
             (l[2] - lane[2]).abs() < 0.5 || shown(l) >= c.width - 0.5,
             "the lane as long on the way ({t}): {} vs {}",
             l[2],
             lane[2]
-        );
-        assert!(
-            (m[2] - strip[2]).abs() < 0.5,
-            "the board strip as wide on the way ({t}): {} vs {}",
-            m[2],
-            strip[2]
         );
     }
     assert!(on_the_way > 0, "caught on the way");
@@ -1288,6 +1149,7 @@ fn nothing_in_the_details_stretches_on_the_way_to_the_leaderboard() {
 #[test]
 fn the_search_row_has_a_glass_a_quiet_hint_its_key_on_a_cap_and_the_counts_on_a_chip() {
     let (mut s, _songs, mut now) = menu_look("select-look-search-row");
+    s.cfg.select_info = true;
     let c = settled(&mut s, &mut now);
     let field = hit_rect(&c, |h| matches!(h, Hit::TextField)).expect("the search box");
     let hint = text_at(&c, "click to search").expect("the hint");
@@ -1337,4 +1199,248 @@ fn the_search_row_has_a_glass_a_quiet_hint_its_key_on_a_cap_and_the_counts_on_a_
             && rect(sh)[0] < counts[0]
     });
     assert!(chip, "on a chip");
+}
+
+#[test]
+fn the_map_s_picture_behind_song_select_is_blurred_to_a_field_of_colour() {
+    let (mut s, _songs, mut now) = menu_look("select-look-blur");
+    settled(&mut s, &mut now);
+    assert_eq!(s.background_blur(), 1.0, "the main menu's look");
+    // Legacy keeps the picture sharp.
+    let songs = Songs::new("select-look-blur-legacy", &maps::all());
+    let mut legacy = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut legacy, &mut now);
+    assert!(legacy.select.legacy);
+    assert_eq!(legacy.background_blur(), 0.0);
+}
+
+#[test]
+fn play_and_the_lane_of_actions_keep_the_screen_s_margin() {
+    let (mut s, _songs, mut now) = menu_look("select-look-play-margin");
+    let c = settled(&mut s, &mut now);
+    let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
+    let margin = c.width - (play[0] + play[2]);
+    assert!(
+        (margin - 24.0).abs() < 0.5,
+        "Play ends 24 in from the right, as the panel above it: {margin}"
+    );
+    // And the lane under Mods and Random ends with it, both ends round.
+    let lane = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, style::surface_fill(style::Surface::Raised)))
+        .map(|sh| (rect(sh), sh.params[0]))
+        .find(|(r, _)| (r[1] - play[1]).abs() < 0.5 && (r[3] - play[3]).abs() < 0.5)
+        .expect("the lane of actions");
+    assert!(
+        (lane.0[0] + lane.0[2] - (play[0] + play[2])).abs() < 0.5,
+        "{lane:?}"
+    );
+    assert_eq!(lane.1, style::radius::CARD);
+}
+
+#[test]
+fn the_details_sit_on_a_panel_of_their_own_and_nothing_of_them_runs_off_it() {
+    let (mut s, _songs, mut now) = menu_look("select-look-right-panel");
+    let c = settled(&mut s, &mut now);
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let raised = style::surface_fill(style::Surface::Raised);
+    // A raised surface, as round as the cards, from beside the list to the screen's margin.
+    let panel = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, raised) && sh.params[0] == style::radius::CARD)
+        .map(rect)
+        .find(|r| r[0] > 24.0 + lw && r[3] > 200.0)
+        .expect("the details' panel");
+    assert!(
+        (panel[0] + panel[2] - (c.width - 24.0)).abs() < 0.5,
+        "{panel:?}"
+    );
+    // The preview's lane ends inside it.
+    let lane = hit_rect(&c, |h| *h == Hit::Preview).expect("the preview lane");
+    assert!(
+        lane[0] + lane[2] <= panel[0] + panel[2],
+        "{lane:?} in {panel:?}"
+    );
+}
+
+#[test]
+fn the_details_leave_the_plays_to_the_leaderboard_s_page() {
+    let (mut s, _songs, mut now) = menu_look("select-look-no-strip");
+    for (k, name) in ["Ann", "Bo"].iter().enumerate() {
+        let play = local_play(&s, name, 900_000 - k as u64 * 1000, 0.99);
+        s.scores.push(play);
+    }
+    let c = settled(&mut s, &mut now);
+    let shown = texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT]);
+    assert!(
+        !shown.iter().any(|t| t == "Ann" || t == "Bo"),
+        "no strip of the board under the timeline: {shown:?}"
+    );
+    assert!(
+        hit_rect(&c, |h| *h == Hit::BoardPage).is_some(),
+        "the way to the board"
+    );
+}
+
+#[test]
+fn a_map_whose_bpm_changes_shows_its_whole_range() {
+    let chart = maps::Chart {
+        name: "bpm-range",
+        timing: vec![
+            "1000,600,4,1,0,100,1,0".into(),
+            "5000,240,4,1,0,100,1,0".into(),
+        ],
+        ..maps::basics()
+    };
+    let (mut s, _songs, mut now) = menu_look_with("select-look-bpm-range", &[chart]);
+    let c = settled(&mut s, &mut now);
+    let shown = texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT]);
+    assert!(
+        shown.iter().any(|t| t == "100-250"),
+        "the range whole: {shown:?}"
+    );
+    assert!(
+        !shown
+            .iter()
+            .any(|t| t.starts_with('1') && t.ends_with("...")),
+        "nothing cut: {shown:?}"
+    );
+}
+
+#[test]
+fn the_library_counts_and_the_device_line_wait_for_their_setting() {
+    let (mut s, _songs, mut now) = menu_look("select-look-info");
+    let shown = |s: &mut State, now: &mut Instant| {
+        let c = settled(s, now);
+        texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT])
+    };
+    s.status = "gpu  |  audio  |  60 Hz".into();
+    let off = shown(&mut s, &mut now);
+    assert!(
+        !off.iter()
+            .any(|t| t.contains(" songs, ") || t.contains("60 Hz")),
+        "off by default: {off:?}"
+    );
+    s.cfg.select_info = true;
+    let on = shown(&mut s, &mut now);
+    assert!(
+        on.iter().any(|t| t.contains(" songs, ")),
+        "the counts: {on:?}"
+    );
+    assert!(
+        on.iter().any(|t| t.contains("60 Hz")),
+        "the device line: {on:?}"
+    );
+}
+
+#[test]
+fn the_full_combo_pp_is_one_button_and_the_way_to_the_board_ends_its_row() {
+    let (mut s, _songs, mut now) = menu_look("select-look-pp-row");
+    let c = settled(&mut s, &mut now);
+    let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
+    let way = hit_rect(&c, |h| *h == Hit::BoardPage).expect("the way to the board");
+    assert!(
+        (way[1] + way[3] / 2.0 - (pp[1] + pp[3] / 2.0)).abs() < 2.5,
+        "one row: {pp:?} {way:?}"
+    );
+    assert!(
+        way[0] > pp[0] + pp[2],
+        "the board's way after it: {pp:?} {way:?}"
+    );
+    let lifted = |r: [f32; 4]| {
+        c.shapes.iter().any(|sh| {
+            same_rgb(sh.fill, style::surface_fill(style::Surface::Lifted))
+                && sh.params[0] == style::radius::SMALL
+                && inside([r[0] + r[2] / 2.0, r[1] + r[3] / 2.0], rect(sh), 0.0)
+        })
+    };
+    assert!(lifted(pp) && lifted(way), "both on chips alike");
+    let shown = texts_in(&c, pp);
+    for want in ["SS", "99%", "98%"] {
+        assert!(shown.iter().any(|t| t == want), "{want} on it: {shown:?}");
+    }
+    assert!(
+        !texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT])
+            .iter()
+            .any(|t| t.starts_with("click / drag")),
+        "no hint under the timeline"
+    );
+}
+
+#[test]
+fn the_pp_button_opens_a_simulator_of_accuracy_and_misses() {
+    let (mut s, _songs, mut now) = menu_look("select-look-pp-sim");
+    settled(&mut s, &mut now);
+    s.click(Hit::PpSim, None);
+    let c = settled(&mut s, &mut now);
+    let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the simulator");
+    let shown = texts_in(&c, pp);
+    assert!(shown.iter().any(|t| t == "98.00%"), "at 98%: {shown:?}");
+    let at_98 = s.preview.sim_pp.expect("its pp");
+    assert!(
+        shown.iter().any(|t| *t == format!("{at_98:.0}pp")),
+        "{shown:?}"
+    );
+    let full = s.preview.potential.expect("the full-combo pp");
+    assert!(
+        (at_98 - full[2]).abs() < 1.0,
+        "as the 98% chip: {at_98} vs {}",
+        full[2]
+    );
+    // A miss and less accuracy give less.
+    for hit in [
+        Hit::PpSimStep(1, 1),
+        Hit::PpSimStep(0, -1),
+        Hit::PpSimStep(0, -1),
+    ] {
+        assert!(hit_rect(&c, |h| *h == hit).is_some(), "{hit:?} drawn");
+        s.click(hit, None);
+    }
+    let c = settled(&mut s, &mut now);
+    let sim = s.preview.sim.expect("still open");
+    assert_eq!(sim.misses, 1);
+    assert!((sim.accuracy - 0.97).abs() < 1e-9, "{}", sim.accuracy);
+    let lower = s.preview.sim_pp.expect("its pp");
+    assert!(lower < at_98, "{lower} under {at_98}");
+    assert!(texts_in(&c, pp).iter().any(|t| t == "97.00%"));
+    s.click(Hit::PpSim, None);
+    let c = settled(&mut s, &mut now);
+    assert!(s.preview.sim.is_none(), "closed again");
+    assert!(
+        texts_in(&c, pp).iter().any(|t| t == "SS"),
+        "the full-combo chips back"
+    );
+}
+
+#[test]
+fn the_list_s_grip_sits_in_the_gap_between_the_cards_and_the_details_panel() {
+    let (mut s, _songs, mut now) = menu_look("select-look-grip");
+    let c = settled(&mut s, &mut now);
+    let grip = hit_rect(&c, |h| *h == Hit::SplitList).expect("the grip");
+    let cards_right = cards(&c)
+        .iter()
+        .map(|(_, r)| r[0] + r[2])
+        .fold(0.0, f32::max);
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let raised = style::surface_fill(style::Surface::Raised);
+    let panel_left = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, raised) && sh.params[0] == style::radius::CARD)
+        .map(rect)
+        .filter(|r| r[0] > 24.0 + lw && r[3] > 200.0)
+        .map(|r| r[0])
+        .fold(f32::MAX, f32::min);
+    let mid = grip[0] + grip[2] / 2.0;
+    assert!(
+        mid > cards_right && mid < panel_left,
+        "between {cards_right} and {panel_left}: {grip:?}"
+    );
+    assert!(
+        (mid - (cards_right + panel_left) / 2.0).abs() < 2.0,
+        "in the gap's middle: {mid} of {cards_right}..{panel_left}"
+    );
 }
