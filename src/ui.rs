@@ -372,6 +372,8 @@ pub struct Select {
     /// the cards' pictures ahead of it are read first.
     seen_scroll: Option<f32>,
     scroll_speed: f32,
+    /// How far the routes behind lean away from the pointer now (virtual units, eased).
+    pub parallax: [f32; 2],
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
     random_history: Vec<usize>,
     rng: u64,
@@ -434,6 +436,8 @@ struct ListAnim {
     /// The selection last landed in the target, and when it did (its flash).
     landed: Option<usize>,
     flash: Option<std::time::Instant>,
+    /// The set last opened (its first row) and when: its difficulties drop in one by one.
+    opened_at: Option<(usize, std::time::Instant)>,
 }
 
 /// The list held by the pointer: it scrolls with it, then flies on and settles on a song.
@@ -481,6 +485,9 @@ const CARD_INSET: f32 = 12.0;
 const CARD_HOVER: f32 = 4.0;
 const CARD_DIM: f32 = 0.7;
 const CARD_RADIUS: f32 = 4.0;
+/// A set opening: its difficulties drop in from this far above, this many ms apart.
+const DIFF_DROP: f32 = 8.0;
+const DIFF_CASCADE_MS: f32 = 30.0;
 const COVER_FADE_MS: f32 = 200.0;
 const COVER_SHADE: (f32, f32) = (0.85, 0.4);
 const BOTTOM_FADE: f32 = 16.0;
@@ -629,6 +636,7 @@ impl Select {
             hold_pictures: false,
             seen_scroll: None,
             scroll_speed: 0.0,
+            parallax: [0.0; 2],
             random_history: Vec::new(),
             rng: seed | 1,
         };
@@ -2654,6 +2662,7 @@ impl Select {
                 };
             } else {
                 if open_start != a.open {
+                    a.opened_at = open_start.map(|s| (s, crate::render::frame_now()));
                     let reopen = open_start.is_some() && open_start == a.closing;
                     let from = if reopen { a.closing_now } else { 0.0 };
                     a.closing = a.open;
@@ -3291,6 +3300,22 @@ impl Select {
                     c.fade_since(row_start, f * f * (3.0 - 2.0 * f), 1.0);
                 }
             }
+            // A set just opened: its difficulties drop in one after another.
+            if !legacy
+                && let Row::Diff(i) = row
+                && let Some((start, at)) = self.anim.opened_at
+                && let Some(&g) = self.group_of.get(*i)
+                && groups[g].start == start
+            {
+                use crate::style::motion;
+                let k = (*i - start) as f32;
+                let since = at + std::time::Duration::from_secs_f32(DIFF_CASCADE_MS * k / 1000.0);
+                let p = motion::entrance(since, motion::CONTENT_MS, motion::out_quint);
+                if p < 1.0 {
+                    c.transform_since(row_start, [0.0, 0.0], 1.0, 0.0, -DIFF_DROP * (1.0 - p));
+                    c.fade_since(row_start, p, 1.0);
+                }
+            }
             if let Some(ms) = switch_ms {
                 let t = ((ms - drawn as f32 * 18.0) / lens::SWITCH_MS).clamp(0.0, 1.0);
                 if t < 1.0 {
@@ -3562,13 +3587,16 @@ impl Select {
         }
         let clear = rgba(0, 0.0);
         if open {
-            let col = style::selector_colour();
+            // On the beat its edge and tone light a little; in a kiai the edge turns gold.
+            let kiai = style::kiai();
+            let col = crate::menu::tint(style::selector_colour(), style::KIAI_GOLD, kiai);
+            let beat = style::pulse();
             c.round_rect(
                 [x, y],
                 [w, h],
                 CARD_RADIUS,
-                rgba(col, 0.1),
-                rgba(col, 0.8),
+                rgba(col, 0.1 + 0.03 * beat),
+                rgba(col, 0.8 + 0.2 * beat),
                 1.0,
             );
         } else if light > 0.0 {
