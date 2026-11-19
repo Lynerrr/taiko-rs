@@ -758,12 +758,30 @@ thread_local! {
     static LIGHTS: RefCell<HashMap<&'static str, f32>> = RefCell::new(HashMap::new());
 }
 
-/// A strip in the menu lane's look over `[x, y, w, h]`: the panel's fill and `lane_edges`.
-/// Running off the screen's right edge, it reads as a lane going on.
-pub fn lane_strip(c: &mut Canvas, rect: [f32; 4], closed: bool) {
-    let [x, y, w, h] = rect;
-    c.rect(x, y, w, h, rgba(PANEL, 0.95));
-    lane_edges(c, rect, closed);
+/// A lane's strip with no lines round it, fading out over `[left, right]` units at its ends
+/// (song select's autoplay preview in the main menu's look), `alpha` of its full strength. The
+/// fades are nested layers, each from one end's step to the other's, so no edge is shared by two
+/// of them (bands side by side would show seams).
+pub fn lane_fade_strip(
+    c: &mut Canvas,
+    [x, y, w, h]: [f32; 4],
+    [left, right]: [f32; 2],
+    alpha: f32,
+) {
+    const STEPS: usize = 8;
+    let full = 0.95 * alpha;
+    // How strong the strip is `d + 1` steps in from its ends.
+    let want = |d: usize| {
+        let t = (d + 1) as f32 / STEPS as f32;
+        full * t * t * (3.0 - 2.0 * t)
+    };
+    for d in 0..STEPS {
+        let before = if d == 0 { 0.0 } else { want(d - 1) };
+        let layer = 1.0 - (1.0 - want(d)) / (1.0 - before);
+        let k = d as f32 / STEPS as f32;
+        let (l, r) = (snap_to_grid(x + left * k), snap_to_grid(x + w - right * k));
+        c.rect(l, y, r - l, h, rgba(PANEL, layer.max(0.0)));
+    }
 }
 
 /// A strip in the menu lane's place as a surface: the raised tone alone, no lines round it (song
@@ -771,21 +789,6 @@ pub fn lane_strip(c: &mut Canvas, rect: [f32; 4], closed: bool) {
 pub fn lane_surface(c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
     let fill = surface_fill(Surface::Raised);
     c.rect(x, y, w, h, fill);
-}
-
-/// The lines of a lane's strip, for over what's drawn in it: an edge along its top and bottom
-/// with a faint second line just inside each, its left end closed, and its right end too when
-/// it stops short of the screen's edge (`closed`).
-pub fn lane_edges(c: &mut Canvas, [x, y, w, h]: [f32; 4], closed: bool) {
-    let (edge, faint) = (rgba(PANEL_EDGE, 1.0), rgba(PANEL_EDGE, 0.25));
-    c.rect(x, y, w, 1.5, edge);
-    c.rect(x, y + h - 1.5, w, 1.5, edge);
-    c.rect(x, y + 4.0, w, 1.0, faint);
-    c.rect(x, y + h - 5.0, w, 1.0, faint);
-    c.rect(x, y, 1.5, h, edge);
-    if closed {
-        c.rect(x + w - 1.5, y, 1.5, h, edge);
-    }
 }
 
 /// The size of a lane-end button's ▶ at `[x, y, h]`, and its middle.
