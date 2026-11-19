@@ -20,6 +20,51 @@ use crate::services::jobs::Job;
 /// stays cheap. A single change after a quiet moment loads at once.
 const DEBOUNCE: Duration = Duration::from_millis(60);
 const QUIET: Duration = Duration::from_millis(300);
+/// A part of the bare details coming in (`Preview::enter`): how long it takes and how far right
+/// of its place it starts.
+const ENTER_MS: f32 = 180.0;
+const ENTER_SHIFT: f32 = 8.0;
+/// How quickly a shown rating or pp counts to a new song's (`follow`, a time constant in ms).
+const COUNT_TAU: f32 = 60.0;
+
+/// `shown` following `target`: counting to it (`COUNT_TAU`), there at once from nothing or
+/// without animations. With no target it keeps its value, for the next one to count from, and
+/// gives nothing.
+fn follow(shown: &mut Option<f32>, target: Option<f32>, dt_ms: f32) -> Option<f32> {
+    let t = target?;
+    match shown {
+        Some(v) if crate::render::animations() => {
+            crate::render::approach(v, t, dt_ms, COUNT_TAU);
+            if (*v - t).abs() < 0.005 {
+                *v = t;
+            }
+        }
+        _ => *shown = Some(t),
+    }
+    *shown
+}
+
+/// `follow` for the three full-combo pp values.
+fn follow_pp(
+    shown: &mut Option<[f64; 3]>,
+    target: Option<[f64; 3]>,
+    dt_ms: f32,
+) -> Option<[f64; 3]> {
+    let t = target?;
+    match shown {
+        Some(v) if crate::render::animations() => {
+            let k = 1.0 - (-f64::from(dt_ms) / f64::from(COUNT_TAU)).exp();
+            for (v, t) in v.iter_mut().zip(t) {
+                *v += (t - *v) * k;
+                if (*v - t).abs() < 0.5 {
+                    *v = t;
+                }
+            }
+        }
+        _ => *shown = Some(t),
+    }
+    *shown
+}
 /// The preview music starts from a quick decode of this much audio at the preview point; the
 /// full song replaces it a moment later without a gap.
 /// The width (virtual units, 480 tall) the preview lays the playfield out at: a 4:3 screen's,
@@ -228,6 +273,13 @@ pub struct Preview {
     pub epic_at: Option<[f32; 2]>,
     /// The picture the bare details' banner shows and when it was first drawn (it fades in).
     banner_seen: Option<(PathBuf, Instant)>,
+    /// The song the bare details are coming in for, and when it was picked: they come in one
+    /// after another (`enter`). None for a song picked in a quick run of them: those swap at once.
+    entered: Option<(usize, Instant)>,
+    /// The star rating and full-combo pp the bare details show: they follow the map's, counting
+    /// from the last song's to the new one's.
+    stars_shown: Option<f32>,
+    pp_shown: Option<[f64; 3]>,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
     /// changes per unit of that (for dragging the panel's bottom edge).
     pub size: f32,
@@ -480,9 +532,16 @@ impl Preview {
         }
         self.owned_background = self.own_background;
         if selected != self.seen {
+            // The first song shown (song select opening) comes with the screen, not on its own.
+            let was = self.seen;
             self.seen = selected;
             self.resume_at = None;
             let quiet = self.last_change.is_none_or(|t| now - t >= QUIET);
+            // A song picked on its own comes in; one in a quick run of them (a key held, Random
+            // spammed) swaps in at once, so nothing queues up or flickers.
+            self.entered = selected
+                .filter(|_| quiet && was.is_some())
+                .map(|i| (i, now));
             self.last_change = Some(now);
             self.changed_at = Some(if quiet {
                 now.checked_sub(DEBOUNCE).unwrap_or(now)
@@ -1035,13 +1094,19 @@ impl Preview {
         use crate::style::{Surface, ink, role, space, surface, surface_fill, text};
         let (lx, iw) = (x + 14.0, w - 28.0);
         self.draw_banner(c, e, [x, y, w, BANNER_H]);
+        // A song picked on its own comes in a part at a time, from the title down (`enter`).
         let mut cy = y + BANNER_TOP;
+        let part = c.shapes.len();
         for line in &l.title {
             c.text(lx, cy, l.title_size, rgba(ink::PRIMARY, 1.0), line);
             cy += Canvas::text_height(l.title_size) + 4.0;
         }
+        self.enter(c, part, 0.0);
+        let part = c.shapes.len();
         c.text(lx, cy, l.artist_size, rgba(ink::SECONDARY, 1.0), &l.artist);
         cy += Canvas::text_height(l.artist_size) + 6.0;
+        self.enter(c, part, 40.0);
+        let part = c.shapes.len();
 
         // The mapper's line: the EPIC pill (bumping on the beat) or the status at its right,
         // the heart left of that.
@@ -1081,12 +1146,23 @@ impl Preview {
         let name = Canvas::fit(text::BODY, (right - lx - bw).max(0.0), &e.meta.creator);
         c.text(lx + bw, ty, text::BODY, rgba(ink::PRIMARY, 1.0), &name);
         cy += MAPPER_H + BLOCK_GAP;
+        self.enter(c, part, 70.0);
 
-        // The difficulty: a chip of its rating's colour, its rating pill at the right.
+        // The difficulty: a chip of its rating's colour, its rating pill at the right. The
+        // rating counts from the last song's to this one's; while it's being worked out, a
+        // skeleton stands in the pill's place.
+        let part = c.shapes.len();
         let level = e.meta.level;
-        let pill_w =
-            crate::style::map_pill(c, x + w - 14.0, cy + 3.0, text::HEADING, level, shown.stars);
-        let chip = role::rating(level, shown.stars);
+        let stars = follow(&mut self.stars_shown, shown.stars, c.dt_ms);
+        let pill_w = if level.is_none() && stars.is_none() {
+            let pw = Canvas::text_width(text::HEADING, "0.00") + text::HEADING * 1.6 + 6.0;
+            let ph = text::HEADING + 6.0;
+            crate::style::skeleton(c, [x + w - 14.0 - pw, cy + 3.0, pw, ph], ph / 2.0);
+            pw
+        } else {
+            crate::style::map_pill(c, x + w - 14.0, cy + 3.0, text::HEADING, level, stars)
+        };
+        let chip = role::rating(level, stars);
         let luma = 0.299 * (chip >> 16 & 0xff) as f32
             + 0.587 * (chip >> 8 & 0xff) as f32
             + 0.114 * (chip & 0xff) as f32;
@@ -1099,6 +1175,7 @@ impl Preview {
         let ty = cy + (CHIP_H - Canvas::text_height(text::BODY)) / 2.0;
         c.text(lx + 8.0, ty, text::BODY, rgba(chip_ink, 1.0), &name);
         cy += CHIP_H + BLOCK_GAP;
+        self.enter(c, part, 100.0);
 
         // The stats as tiles: a caption over its value. OD is known at once, the rest when the
         // map is read (they fade in with it).
@@ -1140,6 +1217,7 @@ impl Preview {
         let tw = (iw - (n - 1.0) * space::CARD_GAP) / n;
         let mut od_hovered = None;
         for (k, (caption, value, alpha)) in tiles.iter().enumerate() {
+            let part = c.shapes.len();
             let tx = lx + k as f32 * (tw + space::CARD_GAP);
             surface(c, [tx, cy, tw, TILE_H], 4.0, Surface::Raised);
             let room = tw - 12.0;
@@ -1159,14 +1237,21 @@ impl Preview {
                 rgba(ink::PRIMARY, *alpha),
                 &value,
             );
+            // A value still being read: a skeleton where it goes.
+            if value.is_empty() && d.is_none() {
+                let vh = Canvas::text_height(text::HEADING);
+                crate::style::skeleton(c, [tx + 6.0, cy + 13.0, room * 0.6, vh], 2.0);
+            }
             if k == 0 && c.hovered(tx, cy, tw, TILE_H) {
                 od_hovered = Some((tx, cy + TILE_H));
             }
+            self.enter(c, part, 130.0 + 25.0 * k as f32);
         }
         cy += TILE_H + BLOCK_GAP;
 
         // Don and Kat as one bar split in proportion, the counts at its ends, rolls and swells
         // between them.
+        let part = c.shapes.len();
         let notes = crate::game::note_colours();
         let caption_h = Canvas::text_height(text::CAPTION);
         let bar_y = cy + caption_h + 3.0;
@@ -1193,15 +1278,27 @@ impl Preview {
                     c.text_centered(lx + iw / 2.0, cy, text::CAPTION, quiet, &extra.join("  "));
                 }
             }
+            None if d.is_none() => crate::style::skeleton(c, [lx, bar_y, iw, bar_h], 0.0),
             None => {
                 let fill = surface_fill(Surface::Lifted);
                 c.rect(lx, bar_y, iw, bar_h, fill);
             }
         }
         cy += BAR_H + BLOCK_GAP;
+        self.enter(c, part, 230.0);
 
-        // What a full combo would give, as three chips.
-        if let Some(pp) = self.potential {
+        // What a full combo would give, as three chips, counting from the last song's; three
+        // skeletons while the map is being read.
+        let part = c.shapes.len();
+        let pp_now = follow_pp(&mut self.pp_shown, self.potential, c.dt_ms);
+        if pp_now.is_none() && d.is_none() {
+            let pw = (iw - 2.0 * space::CARD_GAP) / 3.0;
+            for k in 0..3 {
+                let px = lx + k as f32 * (pw + space::CARD_GAP);
+                crate::style::skeleton(c, [px, cy, pw, PP_H], PP_H / 2.0);
+            }
+        }
+        if let Some(pp) = pp_now {
             let pw = (iw - 2.0 * space::CARD_GAP) / 3.0;
             for (k, (label, pp)) in ["SS", "99%", "98%"].into_iter().zip(pp).enumerate() {
                 let px = lx + k as f32 * (pw + space::CARD_GAP);
@@ -1224,6 +1321,7 @@ impl Preview {
                 );
             }
         }
+        self.enter(c, part, 260.0);
         cy += PP_H;
         if let (true, Some(what)) = (l.left_out, shown.left_out) {
             cy += 4.0;
@@ -1245,6 +1343,22 @@ impl Preview {
             );
         }
         od_hovered
+    }
+
+    /// The bare details' part drawn since shape `start` coming in `delay` ms after its song was
+    /// picked: from `ENTER_SHIFT` right of its place and faded out, into place over `ENTER_MS`.
+    fn enter(&self, c: &mut Canvas, start: usize, delay: f32) {
+        let Some((_, at)) = self.entered else {
+            return;
+        };
+        use crate::style::motion;
+        let since = at + Duration::from_secs_f32(delay / 1000.0);
+        let p = motion::entrance(since, ENTER_MS, motion::out_quint);
+        if p >= 1.0 {
+            return;
+        }
+        c.transform_since(start, [0.0, 0.0], 1.0, ENTER_SHIFT * (1.0 - p), 0.0);
+        c.fade_since(start, p, 1.0);
     }
 
     /// The map's picture over `[x, y, w, h]` (cover-cropped), whole down to `BANNER_WHOLE` of
@@ -2263,6 +2377,34 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Play {
 
 #[cfg(test)]
 mod beat_tests {
+    #[test]
+    fn a_shown_rating_counts_to_the_new_one_and_keeps_its_value_while_none_comes() {
+        let mut shown = None;
+        assert_eq!(
+            follow(&mut shown, Some(3.0), 16.0),
+            Some(3.0),
+            "at once from nothing"
+        );
+        assert_eq!(
+            follow(&mut shown, None, 16.0),
+            None,
+            "nothing shown while it's worked out"
+        );
+        assert_eq!(shown, Some(3.0), "kept to count from");
+        let mut last = 3.0;
+        for _ in 0..40 {
+            let v = follow(&mut shown, Some(5.5), 16.0).expect("a value");
+            assert!(v >= last && v <= 5.5, "counting up: {last} then {v}");
+            last = v;
+        }
+        assert_eq!(last, 5.5, "there in the end");
+        let mut pp = Some([100.0, 90.0, 80.0]);
+        for _ in 0..40 {
+            follow_pp(&mut pp, Some([200.0, 180.0, 160.0]), 16.0);
+        }
+        assert_eq!(pp, Some([200.0, 180.0, 160.0]));
+    }
+
     use super::*;
     use crate::beatmap::ControlPoint;
 
