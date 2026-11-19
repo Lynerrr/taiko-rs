@@ -529,6 +529,16 @@ fn draw_songs(
     }
     let lw = Select::list_width(canvas.width, state.cfg.song_list_share);
     state.select.arriving = None;
+    // The list's column is glass, the gaps between its cards too: what's behind is frosted.
+    if !phone && !state.select.legacy {
+        let [top, end] = state.select.frame_span();
+        let landed = shift.map_or(1.0, |(ph, _)| ph.landed);
+        canvas.glass_area(
+            [20.0, top, lw + 8.0, end - top],
+            style::radius::CARD,
+            landed,
+        );
+    }
     // On the way from the menu: the search row comes on over the lane that folded into it,
     // and the list's cards drop out of it one by one (`Select::draw`). On the way back the list
     // goes up into it as one window, its bottom edge going up.

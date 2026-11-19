@@ -355,9 +355,9 @@ struct Globals {
 }
 
 /// How many glass surfaces a frame blurs what's behind (the biggest ones).
-pub const GLASS_MAX: usize = 4;
+pub const GLASS_MAX: usize = 6;
 /// How soft the shapes behind a glass surface are drawn (virtual units).
-pub const GLASS_BLUR: f32 = 7.0;
+pub const GLASS_BLUR: f32 = 18.0;
 /// `Shape::params[3]` of a plain shape that softens behind glass (`Canvas::frost_since`).
 pub const FROST: f32 = 5.0;
 
@@ -3283,6 +3283,9 @@ pub struct Canvas<H> {
     /// Surfaces (shape indices, plain round rects) that frost what's behind them: frosted
     /// shapes under them are drawn soft, as through a blur (`glass_rects`, `frost_since`).
     pub glass: Vec<usize>,
+    /// Areas of glass with no surface of their own (a list of cards: what's between them too),
+    /// in virtual units: `[x, y, w, h]`, corner radius, strength (0 to 1).
+    pub glass_areas: Vec<([f32; 4], f32, f32)>,
     /// Which profile pictures the renderer has, by lowercased name: their slots.
     pub avatar_slots: std::sync::Arc<std::collections::HashMap<String, u32>>,
     /// Pictures asked for this frame (lowercased names), so they get fetched.
@@ -3326,6 +3329,7 @@ impl<H> Default for Canvas<H> {
             boxes: Default::default(),
             opaque: Default::default(),
             glass: Vec::new(),
+            glass_areas: Vec::new(),
             avatar_slots: Default::default(),
             avatars_wanted: Default::default(),
             picture_slots: Default::default(),
@@ -3543,6 +3547,7 @@ impl<H> Canvas<H> {
         self.boxes.clear();
         self.opaque = None;
         self.glass.clear();
+        self.glass_areas.clear();
         self.width = width;
     }
 
@@ -3551,6 +3556,13 @@ impl<H> Canvas<H> {
     pub fn glass_last(&mut self) {
         if let Some(i) = self.shapes.len().checked_sub(1) {
             self.glass.push(i);
+        }
+    }
+
+    /// Makes `rect` (round by `radius`) glass without a surface of its own, `strength` of it.
+    pub fn glass_area(&mut self, rect: [f32; 4], radius: f32, strength: f32) {
+        if strength > 0.0 && rect[2] > 0.0 && rect[3] > 0.0 {
+            self.glass_areas.push((rect, radius, strength.min(1.0)));
         }
     }
 
@@ -3588,6 +3600,17 @@ impl<H> Canvas<H> {
                 })
             })
             .collect();
+        panes.extend(self.glass_areas.iter().map(|&([x, y, w, h], r, strength)| {
+            let half = [w / 2.0, h / 2.0];
+            [
+                x + half[0],
+                y + half[1],
+                half[0],
+                half[1],
+                r.min(half[0]).min(half[1]),
+                strength,
+            ]
+        }));
         panes.sort_by(|a, b| (b[2] * b[3]).total_cmp(&(a[2] * a[3])));
         panes.truncate(GLASS_MAX);
         panes
@@ -4857,7 +4880,7 @@ mod tests {
 
         let mut c = Canvas::<()>::default();
         c.clear(854.0);
-        for k in 0..6 {
+        for k in 0..GLASS_MAX + 2 {
             let side = 10.0 + k as f32;
             c.round_rect(
                 [0.0, 0.0],
@@ -4869,9 +4892,16 @@ mod tests {
             );
             c.glass_last();
         }
+        c.glass_area([0.0, 0.0, 4.0, 2.0], 8.0, 2.0);
+        c.glass_area([0.0, 0.0, 400.0, 200.0], 8.0, 0.5);
         let panes = c.glass_rects();
         assert_eq!(panes.len(), GLASS_MAX);
-        assert_eq!(panes[0][2], 7.5, "the biggest first");
+        assert_eq!(
+            panes[0],
+            [200.0, 100.0, 200.0, 100.0, 8.0, 0.5],
+            "an area, the biggest"
+        );
+        assert_eq!(panes[1][2], 8.5, "then the biggest surface");
     }
 
     #[test]
