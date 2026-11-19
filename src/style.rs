@@ -57,6 +57,39 @@ pub fn surface(c: &mut Canvas, [x, y, w, h]: [f32; 4], radius: f32, level: Surfa
     c.round_rect([x, y], [w, h], radius, fill, fill, 0.0);
 }
 
+/// When the skeletons' light band set off (`skeleton`): one sweep for every block on screen.
+static SKELETON_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+/// How long the light band takes across the screen, and how wide it is.
+const SKELETON_MS: f32 = 1400.0;
+const SKELETON_BAND: f32 = 60.0;
+
+/// Something on its way (a value being read): a block of the lifted surface, a soft light band
+/// sweeping across it with the others on screen (still, with animations off).
+pub fn skeleton(c: &mut Canvas, [x, y, w, h]: [f32; 4], radius: f32) {
+    surface(c, [x, y, w, h], radius, Surface::Lifted);
+    if !crate::render::animations() || w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let now = crate::render::frame_now();
+    let epoch = *SKELETON_EPOCH.get_or_init(|| now);
+    let t = now.saturating_duration_since(epoch).as_secs_f32() * 1000.0 % SKELETON_MS;
+    let mid = t / SKELETON_MS * (c.width + 2.0 * SKELETON_BAND) - SKELETON_BAND;
+    if mid + SKELETON_BAND / 2.0 < x || mid - SKELETON_BAND / 2.0 > x + w {
+        return;
+    }
+    let start = c.shapes.len();
+    // Steps rising to the band's middle and down again.
+    const STEPS: usize = 6;
+    let step = SKELETON_BAND / STEPS as f32;
+    for k in 0..STEPS {
+        let d = (k as f32 + 0.5) / STEPS as f32 * 2.0 - 1.0;
+        let a = 0.07 * (1.0 - d.abs());
+        let sx = mid - SKELETON_BAND / 2.0 + k as f32 * step;
+        c.rect(sx, y, step, h, rgba(0xffffff, a));
+    }
+    c.clip_since(start, x, y, w, h);
+}
+
 /// Room, on a grid of 4 units.
 pub mod space {
     /// The grid every gap and inset is a step of.
