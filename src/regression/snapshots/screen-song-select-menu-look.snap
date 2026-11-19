@@ -1,9 +1,10 @@
 text  723,7    log in
 text  778,7    what's new
 text  420,24   SORT
-text  104,27   click to search (ctrl+f)...
 text   49,28   Menu
-text  649,28   7 songs, 7 maps  |  taiko only
+text  118,28   click to search...
+text  488,29   7 songs, 7 maps  |  taiko only
+text  355,30   ctrl+f
 text  420,31   artist
 text   36,58   basics
 text  416,63   1 diff

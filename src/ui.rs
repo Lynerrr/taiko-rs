@@ -2233,15 +2233,18 @@ impl Select {
                 );
                 left += bw + 6.0;
             }
-            // Over the panel beside the list, where there is one.
+            // On a small chip beside the search row, over the panel's side, where there is one.
             let (x, right) = (24.0 + lw + 12.0, w - 24.0);
             if right - x > 60.0 {
-                c.text_right(
-                    right,
-                    row + 8.0,
-                    7.0,
+                let text = Canvas::fit(6.0, right - x - 16.0, &summary);
+                let chip = [x, row + 4.0, Canvas::text_width(6.0, &text) + 16.0, 16.0];
+                crate::style::surface(c, chip, 8.0, crate::style::Surface::Raised);
+                c.text(
+                    x + 8.0,
+                    row + 12.0 - Canvas::text_height(6.0) / 2.0,
+                    6.0,
                     rgba(crate::style::ink::CAPTION, 1.0),
-                    &Canvas::fit(7.0, right - x, &summary),
+                    &text,
                 );
             }
         }
@@ -2394,6 +2397,20 @@ impl Select {
                 );
             }
         }
+        // Outside the Legacy layout the box starts with a magnifying glass.
+        let glass = if legacy { 0.0 } else { 14.0 };
+        if !legacy {
+            crate::style::icon(
+                c,
+                &crate::style::SEARCH,
+                [left + 12.0, row + 12.0],
+                10.0,
+                crate::style::ink::CAPTION,
+                1.0,
+            );
+        }
+        let left = left + glass;
+        let search_w = search_w - glass;
         // The filters on, as tokens at the start of the box: the text goes after them.
         let token_room = search_w * 0.6;
         let mut tokens_w = 0.0;
@@ -2407,13 +2424,36 @@ impl Select {
         let text_x = left + 10.0 + tokens_w;
         let room = search_w - 20.0 - tokens_w;
         let caret = "";
+        // Outside the Legacy layout the hint is smaller, and the key that opens the search sits
+        // on a key cap at the box's right end.
+        let hint_size = if legacy { 10.0 } else { 8.0 };
+        let mut room = room;
+        if !legacy && self.filter.is_empty() && !self.searching {
+            let key = "ctrl+f";
+            let kw = Canvas::text_width(5.0, key) + 8.0;
+            if room - kw - 8.0 >= Canvas::text_width(hint_size, "search...") {
+                let kx = left + search_w - 6.0 - kw;
+                let cap = [kx, row + 6.0, kw, 12.0];
+                crate::style::surface(c, cap, 3.0, crate::style::Surface::Raised);
+                c.text(
+                    kx + 4.0,
+                    row + 12.0 - Canvas::text_height(5.0) / 2.0,
+                    5.0,
+                    rgba(crate::style::ink::CAPTION, 1.0),
+                    key,
+                );
+                room -= kw + 8.0;
+            }
+        }
         let (search, search_col) = if self.filter.is_empty() {
             let (long, short) = if self.searching {
                 ("type to search...", "search...")
-            } else {
+            } else if legacy {
                 ("click to search (ctrl+f)...", "search...")
+            } else {
+                ("click to search...", "search...")
             };
-            let hint = if Canvas::text_width(10.0, long) <= room {
+            let hint = if Canvas::text_width(hint_size, long) <= room {
                 long
             } else {
                 short
@@ -2423,7 +2463,10 @@ impl Select {
             } else {
                 crate::style::ink::CAPTION
             };
-            (Canvas::fit(10.0, room, &format!("{hint}{caret}")), quiet)
+            (
+                Canvas::fit(hint_size, room, &format!("{hint}{caret}")),
+                quiet,
+            )
         } else {
             let full = format!("search: {}{caret}", self.filter);
             let text = if Canvas::text_width(10.0, &full) <= room {
@@ -2444,10 +2487,13 @@ impl Select {
                 false,
                 true,
             );
+        } else if self.filter.is_empty() {
+            let y = row + 12.0 - Canvas::text_height(hint_size) / 2.0;
+            c.text(text_x, y, hint_size, rgba(search_col, 1.0), &search);
         } else {
             c.text(text_x, row + 7.0, 10.0, rgba(search_col, 1.0), &search);
         }
-        c.hit(left, row, search_w, 24.0, Hit::TextField);
+        c.hit(left - glass, row, search_w + glass, 24.0, Hit::TextField);
         self.draw_tokens(c, left + 6.0, row + 4.0, token_room);
 
         if let Some(n) = self.scanning {
