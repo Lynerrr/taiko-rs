@@ -271,3 +271,63 @@ fn another_screen_leaves_no_camera_on_its_way() {
     run(&mut s, &mut now, 32);
     assert!(s.menu_shift.is_none());
 }
+
+#[test]
+fn the_routes_blur_in_with_the_camera_as_the_picture_does() {
+    let (mut s, _songs, mut now) = on_menu("menu-shift-routes-blur", true);
+    let menu = run(&mut s, &mut now, 32);
+    assert!(menu.blur.is_none(), "sharp on the menu");
+    s.menu_click(0);
+    run(&mut s, &mut now, 16);
+    let mut last = 0.0;
+    let mut between = false;
+    for _ in 0..80 {
+        let c = run(&mut s, &mut now, 16);
+        let k = c.blur.as_ref().map_or(0.0, |(_, k)| *k);
+        assert!(
+            k >= last - 1e-4,
+            "only more blurred on the way in: {last} then {k}"
+        );
+        let picture = s.background_blur();
+        assert!(
+            (k - picture).abs() < 0.02,
+            "as blurred as the picture: {k} vs {picture}"
+        );
+        between |= k > 0.05 && k < 0.95;
+        last = k;
+        if shift_t(&s).is_none() {
+            break;
+        }
+    }
+    assert!(between, "it ramps in with the camera");
+    let c = run(&mut s, &mut now, 200);
+    let (range, k) = c.blur.clone().expect("blurred on song select");
+    assert_eq!(k, 1.0);
+    // The blurred run is the routes (none drawn here, without music), nothing of song select's.
+    assert!(
+        c.texts
+            .iter()
+            .all(|(r, _)| r.end <= range.start || r.start >= range.end),
+        "no text in it"
+    );
+    assert!(
+        c.hits
+            .iter()
+            .all(|h| h.shape < range.start || h.shape >= range.end),
+        "nothing to click in it"
+    );
+
+    // And back: sharp again on the menu.
+    s.key(winit::keyboard::KeyCode::Escape, false, None, now, None);
+    let mut last = 1.0;
+    for _ in 0..80 {
+        let c = run(&mut s, &mut now, 16);
+        let k = c.blur.as_ref().map_or(0.0, |(_, k)| *k);
+        assert!(
+            k <= last + 1e-4,
+            "only sharper on the way back: {last} then {k}"
+        );
+        last = k;
+    }
+    assert_eq!(last, 0.0, "sharp on the menu again");
+}

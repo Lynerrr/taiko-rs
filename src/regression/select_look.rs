@@ -1901,3 +1901,29 @@ fn many_sets_charts() -> Vec<maps::Chart> {
         })
         .collect()
 }
+
+#[test]
+fn song_select_s_routes_go_through_the_blur_and_legacy_s_do_not() {
+    let (mut s, _songs, mut now) = menu_look_moving("select-look-routes-blur");
+    let c = settled(&mut s, &mut now);
+    let (range, k) = c.blur.clone().expect("the routes are blurred");
+    assert_eq!(k, 1.0, "wholly, as the picture");
+    // The routes (none drawn here, without music): plain shapes, before song select's own.
+    assert!(
+        c.shapes[range.clone()].iter().all(plain),
+        "plain shapes only: the routes' notes and lines"
+    );
+    assert!(
+        c.texts
+            .iter()
+            .all(|(r, _)| r.end <= range.start || r.start >= range.end),
+        "no text of song select's in it"
+    );
+    // Legacy keeps them as they are.
+    let songs = Songs::new("select-look-routes-blur-legacy", &maps::all());
+    let mut legacy = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut legacy, &mut now);
+    let c = settled(&mut legacy, &mut now);
+    assert!(c.blur.is_none(), "{:?}", c.blur);
+}
