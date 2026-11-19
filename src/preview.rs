@@ -1446,6 +1446,8 @@ impl Preview {
                     crate::style::radius::SMALL,
                     Surface::Lifted,
                 );
+                // The whole field, for the wheel (its - and +, drawn after, take their clicks).
+                c.hit(fx, sy, half, PP_H, Hit::PpSimField(field as u8));
                 // Its name when there's room for it beside the value and its - and +.
                 let bw = 14.0;
                 let value_w = Canvas::text_width(text::CAPTION, value) + 8.0;

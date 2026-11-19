@@ -63,6 +63,8 @@ pub enum Hit {
     /// one of its fields (0: accuracy, 1: misses) down or up.
     PpSim,
     PpSimStep(u8, i32),
+    /// A whole field of the pp simulator (0: accuracy, 1: misses), for the wheel to step it.
+    PpSimField(u8),
     /// The song preview's autoplay box, seek graph and play button. It only marks the preview as
     /// the topmost thing there, so whatever is drawn over it takes the click instead.
     Preview,
