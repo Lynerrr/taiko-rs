@@ -18,10 +18,20 @@ fn menu_look(tag: &str) -> (State, Songs, Instant) {
 
 /// `menu_look` with these charts, each a set of its own, every one naming a picture.
 fn menu_look_with(tag: &str, charts: &[maps::Chart]) -> (State, Songs, Instant) {
+    menu_look_cfg(tag, charts, harness::config().animations)
+}
+
+/// `menu_look` with animations on.
+fn menu_look_moving(tag: &str) -> (State, Songs, Instant) {
+    menu_look_cfg(tag, &maps::all(), true)
+}
+
+fn menu_look_cfg(tag: &str, charts: &[maps::Chart], animations: bool) -> (State, Songs, Instant) {
     let songs = Songs::new(tag, charts);
     let cfg = Config {
         main_menu: true,
         accent: ACCENT,
+        animations,
         ..harness::config()
     };
     let mut entries = songs.entries();
@@ -1376,7 +1386,19 @@ fn the_pp_button_opens_a_simulator_of_accuracy_and_misses() {
     settled(&mut s, &mut now);
     s.click(Hit::PpSim, None);
     let c = settled(&mut s, &mut now);
-    let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the simulator");
+    let button = hit_rect(&c, |h| *h == Hit::PpSim).expect("the simulator");
+    // The button and the row of the play under it.
+    let steps = hit_rect(&c, |h| *h == Hit::PpSimStep(1, 1)).expect("a step");
+    let pp = [
+        button[0],
+        button[1],
+        steps[0] + steps[2] - button[0],
+        steps[1] + steps[3] - button[1],
+    ];
+    assert!(
+        steps[1] > button[1] + button[3],
+        "the play on a row under the button"
+    );
     let shown = texts_in(&c, pp);
     assert!(shown.iter().any(|t| t == "98.00%"), "at 98%: {shown:?}");
     let at_98 = s.preview.sim_pp.expect("its pp");
@@ -1443,4 +1465,190 @@ fn the_list_s_grip_sits_in_the_gap_between_the_cards_and_the_details_panel() {
         (mid - (cards_right + panel_left) / 2.0).abs() < 2.0,
         "in the gap's middle: {mid} of {cards_right}..{panel_left}"
     );
+}
+
+/// Every text drawn and its `[x, y, w, h]` (from its letters).
+fn text_boxes(c: &Canvas) -> Vec<(String, [f32; 4])> {
+    c.texts
+        .iter()
+        .filter(|(r, _)| r.start < r.end)
+        .map(|(r, t)| {
+            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for sh in &c.shapes[r.clone()] {
+                let [x, y, w, h] = rect(sh);
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + w), y1.max(y + h));
+            }
+            (t.trim().to_string(), [x0, y0, x1 - x0, y1 - y0])
+        })
+        .collect()
+}
+
+#[test]
+fn the_pp_button_shows_every_number_whole_and_its_simulator_overlaps_nothing() {
+    let (mut s, _songs, mut now) = menu_look("select-look-pp-whole");
+    let c = settled(&mut s, &mut now);
+    let button = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
+    let full = s.preview.potential.expect("the full-combo pp");
+    let shown: Vec<(String, [f32; 4])> = text_boxes(&c)
+        .into_iter()
+        .filter(|(_, r)| inside([r[0] + r[2] / 2.0, r[1] + r[3] / 2.0], button, 0.0))
+        .collect();
+    for pp in full {
+        let whole = format!("{pp:.0}");
+        assert!(
+            shown
+                .iter()
+                .any(|(t, _)| *t == whole || *t == format!("{whole}pp")),
+            "{whole} shown whole: {shown:?}"
+        );
+    }
+    for (t, r) in &shown {
+        assert!(!t.contains("..."), "nothing cut: {t}");
+        assert!(
+            r[0] + r[2] <= button[0] + button[2] + 0.5,
+            "{t} inside the button"
+        );
+    }
+
+    // Open: the button reads the play and its pp; the play's fields are on a row of their own
+    // under it, and nothing on the two rows overlaps.
+    s.click(Hit::PpSim, None);
+    let c = settled(&mut s, &mut now);
+    let steps: Vec<[f32; 4]> = c
+        .hits
+        .iter()
+        .filter(|h| matches!(h.hit, Hit::PpSimStep(..)))
+        .map(|h| h.rect)
+        .collect();
+    assert_eq!(steps.len(), 4, "- and + for accuracy and misses");
+    let row = steps[0][1];
+    assert!(row >= button[1] + button[3], "under the button: {row}");
+    let area = [button[0], button[1], c.width, row + steps[0][3] - button[1]];
+    let mut boxes: Vec<(String, [f32; 4])> = text_boxes(&c)
+        .into_iter()
+        .filter(|(_, r)| inside([r[0] + r[2] / 2.0, r[1] + r[3] / 2.0], area, 0.0))
+        .collect();
+    let pp = format!("{:.0}pp", s.preview.sim_pp.expect("its pp"));
+    assert!(boxes.iter().any(|(t, _)| *t == pp), "{pp}: {boxes:?}");
+    assert!(
+        boxes.iter().any(|(t, _)| t.starts_with("98.00%")),
+        "{boxes:?}"
+    );
+    boxes.extend(steps.iter().map(|r| ("step".to_string(), *r)));
+    for (i, (a, ra)) in boxes.iter().enumerate() {
+        for (b, rb) in &boxes[i + 1..] {
+            let apart = ra[0] + ra[2] <= rb[0] + 0.5
+                || rb[0] + rb[2] <= ra[0] + 0.5
+                || ra[1] + ra[3] <= rb[1] + 0.5
+                || rb[1] + rb[3] <= ra[1] + 0.5;
+            // A step's own mark is inside it.
+            let own =
+                (a == "step") != (b == "step") && (a == "-" || a == "+" || b == "-" || b == "+");
+            assert!(apart || own, "{a} {ra:?} overlaps {b} {rb:?}");
+        }
+    }
+    assert!(!boxes.iter().any(|(t, _)| t.contains("...")), "{boxes:?}");
+}
+
+#[test]
+fn song_select_s_panels_frost_the_routes_behind_them() {
+    let (mut s, _songs, mut now) = menu_look("select-look-glass");
+    let c = settled(&mut s, &mut now);
+    let panes = c.glass_rects();
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
+    let is = |want: &dyn Fn(&[f32; 6]) -> bool| panes.iter().any(want);
+    assert!(
+        is(&|p| p[0] - p[2] > 24.0 + lw && p[3] * 2.0 > 200.0),
+        "the details' panel: {panes:?}"
+    );
+    assert!(
+        is(&|p| p[1] - p[3] < 20.0 && p[0] - p[2] < 24.0),
+        "the search row: {panes:?}"
+    );
+    assert!(
+        is(&|p| inside(
+            [play[0] + play[2] / 2.0, play[1] + play[3] / 2.0],
+            [p[0] - p[2], p[1] - p[3], p[2] * 2.0, p[3] * 2.0],
+            0.0
+        )),
+        "the lane of actions: {panes:?}"
+    );
+    assert!(
+        panes.iter().all(|p| p[5] == 1.0),
+        "settled, wholly: {panes:?}"
+    );
+    // Legacy has none.
+    let songs = Songs::new("select-look-glass-legacy", &maps::all());
+    let mut legacy = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut legacy, &mut now);
+    let c = settled(&mut legacy, &mut now);
+    assert!(c.glass_rects().is_empty(), "{:?}", c.glass_rects());
+}
+
+#[test]
+fn a_song_picked_on_its_own_sends_the_old_details_out_to_the_left() {
+    let (mut s, _songs, mut now) = menu_look_moving("select-look-leave");
+    let before = settled(&mut s, &mut now);
+    let title = s.library[s.select.selected().unwrap()].meta.title.clone();
+    let lw = ui::Select::list_width(before.width, s.cfg.song_list_share);
+    let (range, _) = before
+        .texts
+        .iter()
+        .find(|(r, t)| t.trim() == title && before.shapes[r.start].center[0] > 24.0 + lw)
+        .cloned()
+        .expect("the title in the details");
+    let letter = before.shapes[range.start];
+    press(&mut s, KeyCode::ArrowRight, now);
+    assert_ne!(
+        s.library[s.select.selected().unwrap()].meta.title,
+        title,
+        "another song"
+    );
+    // The old title's first letter, a little left and fainter, for a moment.
+    let gone = |c: &Canvas| {
+        c.shapes.iter().any(|sh| {
+            sh.half == letter.half
+                && sh.params == letter.params
+                && (sh.center[1] - letter.center[1]).abs() < 0.01
+                && sh.center[0] < letter.center[0] - 0.01
+                && sh.center[0] > letter.center[0] - 6.5
+                && sh.fill[3] < letter.fill[3]
+        })
+    };
+    // The frame that sees the change starts the way out; a little later it's on it.
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    now += Duration::from_millis(32);
+    let going = frame(&mut s, now);
+    assert!(gone(&going), "the old details going out");
+    now += Duration::from_millis(150);
+    let later = frame(&mut s, now);
+    assert!(!gone(&later), "gone in a moment");
+}
+
+#[test]
+fn the_details_and_the_picture_behind_lean_with_the_pointer_the_other_way() {
+    let (mut s, _songs, mut now) = menu_look_moving("select-look-lean");
+    let rest = settled(&mut s, &mut now);
+    let play_at = |c: &Canvas| hit_rect(c, |h| *h == Hit::PpSim).expect("the pp button");
+    let mid = play_at(&rest);
+    s.mouse = (0.0, 0.0);
+    let mut c = rest;
+    for _ in 0..120 {
+        now += Duration::from_millis(16);
+        c = frame(&mut s, now);
+    }
+    let leant = play_at(&c);
+    let [bx, by, room] = screens::select::song_select::background_lean(&s);
+    assert!(
+        bx > 1.0 && by > 1.0 && room >= bx.max(by),
+        "the picture leans away: {bx} {by} {room}"
+    );
+    assert!(
+        leant[0] < mid[0] - 1.0 && leant[1] < mid[1] - 1.0,
+        "the details lean towards the pointer: {mid:?} to {leant:?}"
+    );
+    assert!(leant[0] > mid[0] - 2.5, "a little: {mid:?} to {leant:?}");
 }

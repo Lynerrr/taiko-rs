@@ -24,6 +24,18 @@ const QUIET: Duration = Duration::from_millis(300);
 /// of its place it starts.
 const ENTER_MS: f32 = 180.0;
 const ENTER_SHIFT: f32 = 8.0;
+/// The details of the song before a change go out as the new ones come in: `LEAVE_SHIFT`
+/// to the left and faded out over `LEAVE_MS`.
+const LEAVE_MS: f32 = 80.0;
+const LEAVE_SHIFT: f32 = 6.0;
+
+/// What the bare details drew in a frame (their shapes, and the clips among them from shape
+/// 0), to go out as drawn when the song changes.
+#[derive(Default)]
+struct Drawn {
+    shapes: Vec<crate::render::Shape>,
+    clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
+}
 /// How quickly a shown rating or pp counts to a new song's (`follow`, a time constant in ms).
 const COUNT_TAU: f32 = 60.0;
 
@@ -307,6 +319,10 @@ pub struct Preview {
     /// The song the bare details are coming in for, and when it was picked: they come in one
     /// after another (`enter`). None for a song picked in a quick run of them: those swap at once.
     entered: Option<(usize, Instant)>,
+    /// The bare details as last drawn, and what of them is going out since a change (with
+    /// when the change was).
+    drawn: Drawn,
+    leaving: Option<(Drawn, Instant)>,
     /// The star rating and full-combo pp the bare details show: they follow the map's, counting
     /// from the last song's to the new one's.
     stars_shown: Option<f32>,
@@ -1378,48 +1394,29 @@ impl Preview {
         self.board_at =
             (self.board_w > 0.0).then_some([lx + iw - self.board_w, cy, self.board_w, PP_H]);
         let ty = cy + (PP_H - Canvas::text_height(text::BODY)) / 2.0;
+        let pointer = c.mouse;
+        let over = |[x, y, w, h]: [f32; 4]| {
+            pointer.0 >= x && pointer.0 < x + w && pointer.1 >= y && pointer.1 < y + h
+        };
+        let button = [lx, cy, row_w, PP_H];
         if let Some(sim) = self.sim {
-            surface(
-                c,
-                [lx, cy, row_w, PP_H],
-                crate::style::radius::SMALL,
-                Surface::Lifted,
-            );
+            // Open: what the play set up below gives, on the same button (it closes it).
+            pp_chip(c, button, over(button));
             c.hit(lx, cy, row_w, PP_H, Hit::PpSim);
-            let mut tx = lx + 8.0;
-            let shown = [
-                ("ACC", format!("{:.2}%", sim.accuracy * 100.0)),
-                (tr!("MISS", "ミス", "ПРОМАХИ"), sim.misses.to_string()),
-            ];
-            for (field, (label, value)) in shown.iter().enumerate() {
-                tx += c.text(tx, ty + 1.0, text::CAPTION, rgba(ink::CAPTION, 1.0), label) + 4.0;
-                for (dir, mark) in [(-1, "-"), (1, "+")] {
-                    if dir == 1 {
-                        tx += c.text(tx, ty, text::BODY, rgba(ink::PRIMARY, 1.0), value) + 4.0;
-                    }
-                    let bw = 12.0;
-                    surface(
-                        c,
-                        [tx, cy + 2.0, bw, PP_H - 4.0],
-                        crate::style::radius::SMALL,
-                        Surface::Raised,
-                    );
-                    let mw = Canvas::text_width(text::BODY, mark);
-                    c.text(
-                        tx + (bw - mw) / 2.0,
-                        ty,
-                        text::BODY,
-                        rgba(ink::SECONDARY, 1.0),
-                        mark,
-                    );
-                    c.hit(tx, cy, bw, PP_H, Hit::PpSimStep(field as u8, dir));
-                    tx += bw + 4.0;
-                }
-                tx += 8.0;
-            }
+            // What it is: the play under it works out this pp.
+            let what = tr!("PP CALCULATOR", "PP計算", "РАСЧЁТ PP");
             let pp = self
                 .sim_pp
                 .map_or_else(|| "...".to_string(), |pp| format!("{pp:.0}pp"));
+            let pw = Canvas::text_width(text::BODY, &pp);
+            let what = Canvas::fit(text::CAPTION, row_w - pw - 24.0, what);
+            c.text(
+                lx + 8.0,
+                ty + 1.0,
+                text::CAPTION,
+                rgba(ink::SECONDARY, 1.0),
+                &what,
+            );
             c.text_right(
                 lx + row_w - 8.0,
                 ty,
@@ -1427,13 +1424,69 @@ impl Preview {
                 rgba(ink::PRIMARY, 1.0),
                 &pp,
             );
+            // Under it, the play: accuracy and misses, each with its - and +.
+            let sy = cy + PP_H + SIM_GAP;
+            let half = (iw - space::CARD_GAP) / 2.0;
+            let fields = [
+                (
+                    tr!("ACC", "精度", "ТОЧН."),
+                    format!("{:.2}%", sim.accuracy * 100.0),
+                ),
+                (tr!("MISS", "ミス", "ПРОМАХИ"), sim.misses.to_string()),
+            ];
+            for (field, (label, value)) in fields.iter().enumerate() {
+                let fx = lx + field as f32 * (half + space::CARD_GAP);
+                surface(
+                    c,
+                    [fx, sy, half, PP_H],
+                    crate::style::radius::SMALL,
+                    Surface::Lifted,
+                );
+                let lw = c.text(
+                    fx + 8.0,
+                    ty + PP_H + SIM_GAP + 1.0,
+                    text::CAPTION,
+                    rgba(ink::CAPTION, 1.0),
+                    label,
+                );
+                let bw = 14.0;
+                let minus = [fx + 8.0 + lw + 6.0, sy + 2.0, bw, PP_H - 4.0];
+                let plus = [fx + half - 2.0 - bw, sy + 2.0, bw, PP_H - 4.0];
+                for (dir, mark, [bx, by, bw, bh]) in [(-1, "-", minus), (1, "+", plus)] {
+                    let lit = over([bx, sy, bw, PP_H]);
+                    let level = if lit {
+                        Surface::Lifted
+                    } else {
+                        Surface::Raised
+                    };
+                    surface(c, [bx, by, bw, bh], crate::style::radius::SMALL, level);
+                    let mw = Canvas::text_width(text::BODY, mark);
+                    let ink = if lit { ink::PRIMARY } else { ink::SECONDARY };
+                    c.text(
+                        bx + (bw - mw) / 2.0,
+                        ty + PP_H + SIM_GAP,
+                        text::BODY,
+                        rgba(ink, 1.0),
+                        mark,
+                    );
+                    c.hit(bx, sy, bw, PP_H, Hit::PpSimStep(field as u8, dir));
+                }
+                // The value between them, whole.
+                let (mx, room) = (minus[0] + bw, plus[0] - minus[0] - bw);
+                let size = fit_size(value, room - 4.0);
+                let vw = Canvas::text_width(size, value);
+                let vy = sy + (PP_H - Canvas::text_height(size)) / 2.0;
+                c.text(
+                    mx + (room - vw) / 2.0,
+                    vy,
+                    size,
+                    rgba(ink::PRIMARY, 1.0),
+                    value,
+                );
+            }
         } else if let Some(pp) = pp_now {
-            surface(
-                c,
-                [lx, cy, row_w, PP_H],
-                crate::style::radius::SMALL,
-                Surface::Lifted,
-            );
+            // Closed: what a full combo gives at SS, 99% and 98%, every number whole.
+            pp_chip(c, button, over(button));
             c.hit(lx, cy, row_w, PP_H, Hit::PpSim);
             let third = row_w / 3.0;
             for (k, (label, pp)) in ["SS", "99%", "98%"].into_iter().zip(pp).enumerate() {
@@ -1445,17 +1498,22 @@ impl Preview {
                     rgba(ink::CAPTION, 1.0),
                     label,
                 );
-                let value = Canvas::fit(text::BODY, third - 16.0 - lw, &format!("{pp:.0}pp"));
-                c.text(
-                    px + 12.0 + lw,
-                    ty,
-                    text::BODY,
-                    rgba(ink::PRIMARY, 1.0),
-                    &value,
-                );
+                let room = third - 12.0 - lw - 4.0;
+                let with_unit = format!("{pp:.0}pp");
+                let value = if Canvas::text_width(text::BODY, &with_unit) <= room {
+                    with_unit
+                } else {
+                    format!("{pp:.0}")
+                };
+                let size = fit_size(&value, room);
+                let vy = cy + (PP_H - Canvas::text_height(size)) / 2.0;
+                c.text(px + 12.0 + lw, vy, size, rgba(ink::PRIMARY, 1.0), &value);
             }
         } else if d.is_none() {
             crate::style::skeleton(c, [lx, cy, row_w, PP_H], crate::style::radius::SMALL);
+        }
+        if self.sim.is_some() {
+            cy += SIM_GAP + PP_H;
         }
         self.enter(c, part, 260.0);
         cy += PP_H;
@@ -1567,7 +1625,100 @@ impl Preview {
     #[allow(clippy::too_many_arguments)]
     /// `button`: the action under the timeline as (verb, key hint), e.g. ("Play from", "Shift+Enter").
     /// `status`: the map's on osu! (label, colour), shown by the mapper's name.
+    /// Bare, the details of the song before a change go out under the new ones.
     pub fn draw_panel(
+        &mut self,
+        c: &mut Canvas,
+        library: &[Entry],
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        scroll_speed: f64,
+        stars: Option<f32>,
+        button: Option<(&str, &str)>,
+        status: Option<(&str, u32)>,
+        liked: Option<bool>,
+    ) -> Option<(std::ops::Range<usize>, crate::layout::Area)> {
+        self.draw_leaving(c);
+        let start = c.shapes.len();
+        let clip = self.draw_details(
+            c,
+            library,
+            x,
+            y,
+            w,
+            h,
+            scroll_speed,
+            stars,
+            button,
+            status,
+            liked,
+        );
+        if self.bare && crate::render::animations() {
+            self.keep_drawn(c, start, clip.as_ref().map(|(r, _)| r.clone()));
+        }
+        clip
+    }
+
+    /// The details of the song before the one just picked on its own (`entered`), as they
+    /// were last drawn, going out: `LEAVE_SHIFT` left and fading over `LEAVE_MS`.
+    fn draw_leaving(&mut self, c: &mut Canvas) {
+        let Some(at) = self.entered.map(|(_, at)| at) else {
+            self.leaving = None;
+            return;
+        };
+        if self.leaving.as_ref().is_none_or(|(_, t)| *t != at) {
+            self.leaving = Some((std::mem::take(&mut self.drawn), at));
+        }
+        let Some((gone, at)) = &self.leaving else {
+            return;
+        };
+        let p = crate::style::motion::entrance(*at, LEAVE_MS, |t| t * t);
+        if p >= 1.0 || gone.shapes.is_empty() {
+            return;
+        }
+        let start = c.shapes.len();
+        c.shapes.extend_from_slice(&gone.shapes);
+        for (r, rect) in &gone.clips {
+            c.clips.push((r.start + start..r.end + start, *rect));
+        }
+        c.transform_since(start, [0.0, 0.0], 1.0, -LEAVE_SHIFT * p, 0.0);
+        c.fade_since(start, 1.0 - p, 1.0);
+    }
+
+    /// Keeps what the details drew since shape `start` for `draw_leaving`, the preview's lane
+    /// (`lane`, cut to its box by a clip of its own) left out.
+    fn keep_drawn(&mut self, c: &Canvas, start: usize, lane: Option<std::ops::Range<usize>>) {
+        let d = &mut self.drawn;
+        d.shapes.clear();
+        d.clips.clear();
+        let Some(drawn) = c.shapes.get(start..) else {
+            return;
+        };
+        d.shapes.extend_from_slice(drawn);
+        if let Some(r) = lane {
+            let n = d.shapes.len();
+            let (a, b) = (
+                r.start.saturating_sub(start).min(n),
+                r.end.saturating_sub(start).min(n),
+            );
+            for sh in &mut d.shapes[a..b] {
+                sh.fill[3] = 0.0;
+                sh.border[3] = 0.0;
+            }
+        }
+        d.clips.extend(
+            c.clips
+                .iter()
+                .filter(|(r, _)| r.start >= start && r.start < r.end)
+                .map(|(r, rect)| (r.start - start..r.end - start, *rect)),
+        );
+    }
+
+    /// `draw_panel`'s details themselves.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_details(
         &mut self,
         c: &mut Canvas,
         library: &[Entry],
@@ -1757,7 +1908,9 @@ impl Preview {
             + 6.0;
         // Bare: the banner layout, of its own height.
         let left_out_text = stats[3].first().map(|cell| cell.1.clone());
-        let bare_layout = self.bare.then(|| Bare::new(e, iw, left_out_text.is_some()));
+        let bare_layout = self
+            .bare
+            .then(|| Bare::new(e, iw, left_out_text.is_some(), self.sim.is_some()));
         let head = bare_layout.as_ref().map_or(head, |l| l.head);
         (self.size_cap, self.size_shown) = (fitted(head), wanted.min(fitted(head)));
         // The lane fills the panel's width (at the size chosen), however little room the details
@@ -2076,6 +2229,34 @@ fn fitting_size(value: &str, room: f32) -> f32 {
         .find(|&s| Canvas::text_width(s, value) <= room)
         .unwrap_or(text::BODY)
 }
+
+/// The biggest size from the body's down to the caption's that `value` fits `room` at (the
+/// caption's when nothing does: a number is never cut).
+fn fit_size(value: &str, room: f32) -> f32 {
+    use crate::style::text;
+    [text::BODY, 7.0, text::CAPTION]
+        .into_iter()
+        .find(|&s| Canvas::text_width(s, value) <= room)
+        .unwrap_or(text::CAPTION)
+}
+
+/// The pp row's button: the lifted surface, lighter under the pointer.
+fn pp_chip(c: &mut Canvas, rect: [f32; 4], lit: bool) {
+    use crate::style::{Surface, radius, surface};
+    surface(c, rect, radius::SMALL, Surface::Lifted);
+    if lit {
+        let [x, y, w, h] = rect;
+        c.round_rect(
+            [x, y],
+            [w, h],
+            radius::SMALL,
+            rgba(0xffffff, 0.06),
+            rgba(0xffffff, 0.0),
+            0.0,
+        );
+    }
+}
+
 const BARE_GRAPH_H: f32 = 28.0;
 /// Bare: the timeline's bars, a neutral ink (the accent is Play's and the selection's), kiai's in
 /// gold; how strong they are ahead of the playhead and behind it.
@@ -2094,6 +2275,8 @@ const CHIP_H: f32 = 18.0;
 const TILE_H: f32 = 30.0;
 const BAR_H: f32 = 14.0;
 const PP_H: f32 = 16.0;
+/// Between the pp button, open, and the play it works out under it.
+const SIM_GAP: f32 = 4.0;
 const LEFT_OUT_H: f32 = 12.0;
 const BLOCK_GAP: f32 = 8.0;
 /// The banner's strips (it fades out down them) and how far down it stays whole.
@@ -2115,7 +2298,7 @@ struct Bare {
 }
 
 impl Bare {
-    fn new(e: &Entry, iw: f32, left_out: bool) -> Bare {
+    fn new(e: &Entry, iw: f32, left_out: bool, sim: bool) -> Bare {
         use crate::style::text::{BODY, HEADING, TITLE};
         let (title_size, title, artist_size) = if Canvas::text_width(TITLE, &e.meta.title) <= iw {
             (TITLE, vec![e.meta.title.clone()], HEADING)
@@ -2136,6 +2319,7 @@ impl Bare {
             + BAR_H
             + BLOCK_GAP
             + PP_H
+            + if sim { SIM_GAP + PP_H } else { 0.0 }
             + if left_out { 4.0 + LEFT_OUT_H } else { 0.0 }
             + 10.0;
         Bare {

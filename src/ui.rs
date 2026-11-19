@@ -2231,6 +2231,7 @@ impl Select {
                 let (top, bottom) = (row - 6.0, self.frame_top() - 4.0);
                 let rect = [20.0, top, lw + 8.0, bottom - top];
                 crate::style::surface(c, rect, 8.0, crate::style::Surface::Raised);
+                c.glass_last();
             }
             // The way back: an arrow and where it goes, as bare as the menu's icons.
             let back = if self.to_menu {

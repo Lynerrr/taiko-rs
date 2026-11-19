@@ -379,9 +379,13 @@ pub(super) fn render_loop(
             }
             renderer.bg_brightness = s.bg_brightness;
             renderer.bg_blur = s.background_blur();
+            renderer.bg_pan = crate::screens::select::song_select::background_lean(&s);
+            renderer.bg_arrive = crate::screens::select::song_select::background_arrive(&s);
             // A new background cross-fades from the previous one.
             let fade = if s.on_menu() {
                 MENU_BACKGROUND_FADE_MS
+            } else if renderer.bg_arrive > 0.0 {
+                crate::screens::select::song_select::BG_FADE_MS
             } else {
                 300.0
             };
@@ -433,6 +437,7 @@ pub(super) fn render_loop(
                 .map(|(range, r)| (range, to_fraction(r))),
         );
         renderer.disc = canvas.disc.map(|d| (d, vw));
+        renderer.glass = canvas.glass_rects();
         renderer.glitch = canvas.glitch;
         // Before the present, which may wait while the window is still hidden.
         if !first_frame_sent {

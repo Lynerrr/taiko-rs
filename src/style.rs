@@ -922,6 +922,7 @@ thread_local! {
 /// corners as round as the cards' (song select's lane of actions in the main menu's look).
 pub fn lane_surface(c: &mut Canvas, rect: [f32; 4]) {
     surface(c, rect, radius::CARD, Surface::Raised);
+    c.glass_last();
 }
 
 /// The middle and radius at rest of the main menu's Play note at the end of a lane `[x, y, h]`

@@ -113,6 +113,16 @@ impl Gpu {
     }
 
     fn draw(&mut self, shapes: &[Shape], scale: f32) -> (u32, u32, Vec<u8>) {
+        self.draw_under(shapes, scale, &[])
+    }
+
+    /// `draw` under panes of glass (`Canvas::glass_rects`).
+    fn draw_under(
+        &mut self,
+        shapes: &[Shape],
+        scale: f32,
+        glass: &[[f32; 6]],
+    ) -> (u32, u32, Vec<u8>) {
         upload_font_glyphs(&self.queue, &self.font, &mut self.revision);
         let (w, h) = ((256.0 * scale) as u32, (128.0 * scale) as u32);
         let size = wgpu::Extent3d {
@@ -133,13 +143,7 @@ impl Gpu {
         self.queue.write_buffer(
             &self.globals,
             0,
-            bytemuck::bytes_of(&Globals {
-                screen_px: [w as f32, h as f32],
-                px_per_unit: scale,
-                _pad: 0.0,
-                origin: [0.0; 2],
-                _pad2: [0.0; 2],
-            }),
+            bytemuck::bytes_of(&Globals::new([w as f32, h as f32], scale, [0.0; 2], glass)),
         );
         let instances = self
             .device
@@ -398,4 +402,40 @@ fn card_pictures_gpu_draw_their_own_strip() {
     for (x, y) in [(20, 64), (128, 41), (240, 64)] {
         assert_eq!(at(x, y), [0, 255, 0, 255], "its own strip at {x}, {y}");
     }
+}
+
+#[test]
+fn frosted_shapes_gpu_are_soft_under_glass_and_sharp_beside_it() {
+    let mut gpu = Gpu::new();
+    let mut canvas = Canvas::<()>::default();
+    canvas.clear(256.0);
+    // Two white squares: one under a pane of glass (10..90 across), one beside it.
+    for x in [30.0, 150.0] {
+        canvas.round_rect([x, 40.0], [40.0, 40.0], 0.0, [1.0; 4], [1.0; 4], 0.0);
+    }
+    let sharp = gpu.draw(&canvas.shapes, 2.0).2;
+    canvas.frost_since(0);
+    assert_eq!(
+        gpu.draw(&canvas.shapes, 2.0).2,
+        sharp,
+        "no glass: as it was"
+    );
+    let glass = [[50.0, 60.0, 40.0, 40.0, 0.0, 1.0]];
+    let (width, _, pixels) = gpu.draw_under(&canvas.shapes, 2.0, &glass);
+    let alpha =
+        |x: f32| pixels[(((60.0 * 2.0) as u32 * width + (x * 2.0) as u32) * 4 + 3) as usize];
+    // Under the glass its edge spreads both ways.
+    let (inside, outside) = (alpha(33.0), alpha(27.0));
+    assert!(
+        inside > 100 && inside < 235,
+        "fainter just inside: {inside}"
+    );
+    assert!(
+        outside > 20 && outside < 150,
+        "some just outside: {outside}"
+    );
+    assert_eq!(alpha(50.0), 255, "whole in its middle");
+    // Beside it, the one-pixel edge.
+    assert_eq!(alpha(153.0), 255);
+    assert_eq!(alpha(147.0), 0);
 }
