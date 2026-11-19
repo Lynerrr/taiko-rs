@@ -142,6 +142,39 @@ fn back_halfway_turns_round_with_the_menu_that_was_left() {
 }
 
 #[test]
+fn play_again_as_the_menu_slides_back_in_throws_its_note_whole() {
+    let (mut s, _songs, mut now) = on_menu("menu-shift-again", true);
+    s.menu_click(0);
+    run(&mut s, &mut now, 1000);
+    assert_eq!(shift_t(&s), None, "on song select");
+    press(&mut s, KeyCode::Escape, now);
+    // The menu nearly back in its place.
+    while shift_t(&s).is_some_and(|t| menu_shift::phases(t).cam > 0.15) {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    assert!(shift_t(&s).is_some(), "still on its way back");
+    s.menu_click(0);
+    run(&mut s, &mut now, 0);
+    let way = s.menu_shift.as_ref().expect("on the way to song select");
+    assert!(
+        way.into_songs && way.flying == Some(menu::Item::Play),
+        "the note flies: {} {:?} at {}",
+        way.into_songs,
+        way.flying,
+        way.t()
+    );
+    assert_eq!(way.flight(), 0.0, "from its start");
+    let mut flown = 0.0f32;
+    while s.menu_shift.is_some() {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+        flown = flown.max(s.menu_shift.as_ref().map_or(0.0, menu_shift::Shift::flight));
+    }
+    assert!(flown > 0.8, "all the way: {flown}");
+}
+
+#[test]
 fn without_animations_song_select_is_simply_there() {
     let (mut s, _songs, mut now) = on_menu("menu-shift-off", false);
     s.menu_click(0);

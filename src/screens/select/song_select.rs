@@ -250,9 +250,9 @@ impl Screen for SongSelect {
         // The camera between the menu and song select, a frame on.
         let dt = canvas.dt_ms;
         let shift = match state.menu_shift.as_mut() {
-            Some(s) if menu_shift::animated() => {
-                s.step(dt).then(|| (s.t(), s.into_songs, s.flying))
-            }
+            Some(s) if menu_shift::animated() => s
+                .step(dt)
+                .then(|| (s.t(), s.into_songs, s.flying.map(|i| (i, s.flight())))),
             _ => None,
         };
         if shift.is_none() {
@@ -987,7 +987,7 @@ fn draw_shift(
     frame: &Frame,
     t: f32,
     into: bool,
-    flying: Option<menu::Item>,
+    flying: Option<(menu::Item, f32)>,
 ) {
     let w = canvas.width;
     let ph = menu_shift::phases(t);
@@ -1012,12 +1012,13 @@ fn draw_shift(
         let kiai = (edge * left, fill * left);
         menu_shift::draw_lane(canvas, &menu_shift::lane(t, w, row), 1.0, kiai);
     }
-    let in_air = flying.filter(|_| ph.flight > 0.0 && ph.flight < 1.0);
+    let (flying, flight) = flying.map_or((None, 0.0), |(i, f)| (Some(i), f));
+    let in_air = flying.filter(|_| flight > 0.0 && flight < 1.0);
     let songs_hits = canvas.hits.len();
-    let play_away = flying.is_some() && ph.flight < 1.0;
+    let play_away = flying.is_some() && flight < 1.0;
     draw_songs(state, canvas, frame, Some(ph), play_away);
     let menu_hits = canvas.hits.len();
-    let away = flying.filter(|_| ph.flight > 0.0);
+    let away = flying.filter(|_| flight > 0.0);
     draw_menu(state, canvas, frame, Layer::Front { cam: ph.cam, away });
     // Only the screen being gone to takes clicks.
     if into {
@@ -1032,7 +1033,7 @@ fn draw_shift(
         .map(|m| m.spot(w));
     if let (Some(item), Some(from), Some((to, size))) = (in_air, from, state.play_icon_at) {
         let to = [to[0] + (1.0 - ph.cam) * w, to[1]];
-        menu_shift::draw_flight(canvas, item, from, (to, size), ph.flight);
+        menu_shift::draw_flight(canvas, item, from, (to, size), flight);
     }
 }
 
