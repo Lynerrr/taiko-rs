@@ -1386,6 +1386,8 @@ pub struct SettingsUi {
     pub choices: Option<Choices>,
     /// Typing a value for a setting.
     pub editing: Option<Edit>,
+    /// Key settings whose key does two jobs (`State::key_clashes`), drawn in red.
+    pub clashes: Vec<(Item, crate::keys::Clash<Item>)>,
     /// What's typed into the search box, and the rows it finds (`ITEMS` indices, best first).
     pub search: String,
     results: Vec<usize>,
@@ -1400,6 +1402,21 @@ pub struct SettingsUi {
     free: Cell<Option<Glide>>,
     /// Where the bars of `Control::Level` were drawn (x, width).
     track: Cell<(f32, f32)>,
+}
+
+/// The red of a key that does two jobs.
+const CLASH: u32 = 0xff6b6b;
+
+/// Why a key setting's key is drawn in red.
+pub fn clash_text(clash: crate::keys::Clash<Item>) -> String {
+    match clash {
+        crate::keys::Clash::With(other) => {
+            tr!("same key as {}", "{}と同じキー", "та же клавиша, что «{}»"; [other.label()] [])
+        }
+        crate::keys::Clash::Menu(k) => {
+            tr!("{} runs the menus", "{}はメニューのキー", "{} нужна меню"; [k.name()] [])
+        }
+    }
 }
 
 /// Top of the settings screen, a row's height, a group heading's height, a wheel notch.
@@ -2782,17 +2799,41 @@ impl SettingsUi {
                 c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &shown);
             }
             (Kind::Key, _) => {
+                let clash = self
+                    .clashes
+                    .iter()
+                    .find(|(who, _)| *who == item)
+                    .map(|&(_, clash)| clash);
+                let (fill, edge, ink) = if clash.is_some() {
+                    (0x3a1f26, CLASH, 0xffd0d0)
+                } else {
+                    (0x2a2a3a, 0x5a5a74, 0xffffff)
+                };
                 let text = Canvas::fit(8.0, room - 12.0, &shown);
                 let bw = Canvas::text_width(8.0, &text) + 12.0;
                 c.round_rect(
                     [right + 6.0 - bw, y + 5.0],
                     [bw, ROW - 14.0],
                     3.0,
-                    rgba(0x2a2a3a, 1.0),
-                    rgba(0x5a5a74, 1.0),
+                    rgba(fill, 1.0),
+                    rgba(edge, 1.0),
                     1.0,
                 );
-                c.text_right(right, y + 9.5, 8.0, rgba(0xffffff, 1.0), &text);
+                c.text_right(right, y + 9.5, 8.0, rgba(ink, 1.0), &text);
+                // What else the key does, in the room the label leaves.
+                if let Some(clash) = clash {
+                    let why = clash_text(clash);
+                    let left = room - bw - 16.0;
+                    if left > 40.0 {
+                        c.text_right(
+                            right - bw - 2.0,
+                            y + 10.5,
+                            6.5,
+                            rgba(CLASH, 1.0),
+                            &Canvas::fit(6.5, left, &why),
+                        );
+                    }
+                }
             }
             (Kind::Action, _) => {
                 let text = Canvas::fit(8.0, room, &shown);

@@ -1120,3 +1120,19 @@ fn a_play_with_a_mod_being_reworked_is_sent_without_pp() {
         Some("mods being reworked give no pp for now")
     );
 }
+
+/// Play (and clicking the selected difficulty) starts the song even with a control on Enter, as
+/// an older build let a preset key go: it used to change the playfield's size instead.
+#[test]
+fn play_starts_the_song_whatever_is_on_enter() {
+    let (mut s, _songs, mut now) = client("play-over-enter", vec![maps::basics()]);
+    s.cfg.preset_keys[1] = keys::Chord::plain(KeyCode::Enter);
+    let area = s.cfg.playfield_area;
+    s.click(hit::Hit::Key(KeyCode::Enter), None);
+    assert_eq!(s.cfg.playfield_area, area, "the playfield keeps its size");
+    assert!(
+        wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"),
+        "Play starts the map, not {}",
+        scene_name(&s)
+    );
+}

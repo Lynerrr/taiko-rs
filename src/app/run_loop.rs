@@ -1455,6 +1455,7 @@ impl State {
             guides: Vec::new(),
             hud_sample: None,
             readout_rect: None,
+            clicked_key: false,
             replay_bar: None,
             replay_scrub: None,
             replay_bar_grow: 0.0,

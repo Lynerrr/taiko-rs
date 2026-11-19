@@ -850,6 +850,9 @@ struct State {
     idle: idle::Idle,
     /// Where the playfield size readout was drawn (virtual units), so it can be clicked.
     readout_rect: Option<[f32; 4]>,
+    /// The key going through `key_inner` comes from a click on a button (Play, Random): it does
+    /// what the button says, not what the player put on that key (a preset key, say).
+    clicked_key: bool,
     /// Watching a replay: the timeline drawn this frame (virtual units), and when the pointer
     /// dragging along it last seeked.
     replay_bar: Option<[f32; 4]>,
@@ -2815,6 +2818,58 @@ impl State {
             .filter(|(_, item)| item.kind() == Kind::Key)
             .map(|&(_, item)| (item, self.setting_value(item)))
             .collect()
+    }
+
+    /// A button that does what a key does (Play is Enter): that key's job, whatever the player
+    /// bound to the key itself.
+    fn button_key(&mut self, code: KeyCode, window: Option<&Window>) {
+        self.clicked_key = true;
+        self.key_inner(code, false, None, Instant::now(), window);
+        self.clicked_key = false;
+    }
+
+    /// Every key setting whose key does two jobs, with the other one (`keys::clashes`): the
+    /// settings show them in red.
+    pub(crate) fn key_clashes(&self) -> Vec<(Item, keys::Clash<Item>)> {
+        use keys::{Bound, Place};
+        let c = &self.cfg;
+        let set = |k: keys::Chord| k.key != config::NO_KEY;
+        let mut bound: Vec<Bound<Item>> = Vec::new();
+        for (i, &k) in c.keys.iter().enumerate() {
+            bound.push(Bound {
+                who: Item::Key(i),
+                keys: [keys::Chord::plain(k)]
+                    .into_iter()
+                    .filter(|&k| set(k))
+                    .collect(),
+                places: &[Place::Play],
+                shift_free: false,
+                menus: false,
+                own: &[],
+            });
+        }
+        for (i, &k) in c.preset_keys.iter().enumerate() {
+            bound.push(Bound {
+                who: Item::PresetKey(i),
+                keys: [k].into_iter().filter(|&k| set(k)).collect(),
+                places: keys::ANYWHERE,
+                shift_free: false,
+                menus: true,
+                own: &[],
+            });
+        }
+        bound.push(Bound {
+            who: Item::InterfaceKey,
+            keys: [c.interface_key].into_iter().filter(|&k| set(k)).collect(),
+            places: &[Place::Play, Place::Paused],
+            shift_free: false,
+            menus: true,
+            own: &[],
+        });
+        for (i, &h) in keys::Hotkey::ALL.iter().enumerate() {
+            bound.push(Bound::hotkey(Item::Hotkey(i), h, c.hotkeys.get(h)));
+        }
+        keys::clashes(&bound)
     }
 
     fn setting_value(&self, item: Item) -> String {
@@ -5446,6 +5501,17 @@ impl State {
                 }
                 self.toast(tr!("{}: no key", "{}: キーなし", "{}: без клавиши"; [item.label()] []));
                 self.cfg.save();
+                return;
+            }
+            let chord = self.chord(code);
+            let own =
+                matches!(item, Item::Hotkey(i) if keys::Hotkey::ALL[i].defaults().contains(&chord));
+            if code != KeyCode::Escape
+                && !matches!(item, Item::Key(_))
+                && keys::menu_key(chord)
+                && !own
+            {
+                self.toast(tr!("{} runs the menus: pick another key", "{}はメニューのキーです: 別のキーを選んでください", "{} нужна меню: выберите другую клавишу"; [chord.name()] []));
                 return;
             }
             if code != KeyCode::Escape || modified_control {
@@ -12388,6 +12454,7 @@ impl State {
             return;
         }
         if !repeat
+            && !self.clicked_key
             && self.in_song()
             && self.settings_ui.binding.is_none()
             && self.chord(code) == self.cfg.interface_key
@@ -12404,6 +12471,7 @@ impl State {
             return;
         }
         if !repeat
+            && !self.clicked_key
             && !self.in_settings()
             && !self
                 .scene
@@ -14734,7 +14802,7 @@ impl State {
                     }
                 }
             }
-            Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
+            Hit::Key(code) => self.button_key(code, window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),
             Hit::MedalTab(tab) => {
@@ -15212,7 +15280,7 @@ impl State {
             }
             // Like osu!: the first click selects, clicking the selected difficulty plays it.
             Hit::SongRow(row) if row == self.select.cursor() => {
-                self.key_inner(KeyCode::Enter, false, None, Instant::now(), window)
+                self.button_key(KeyCode::Enter, window)
             }
             // A song's own row picks its remembered (or hardest) difficulty.
             Hit::SongRow(row)
