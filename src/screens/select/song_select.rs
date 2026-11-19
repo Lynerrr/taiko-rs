@@ -635,7 +635,6 @@ fn draw_songs(
             if bare {
                 let page = [x - t * step, panel_top, pw, panel_h];
                 style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
-                canvas.glass_last();
             }
             state.preview.title_room = bw + 10.0;
             state.preview.board_w = if bare { bw } else { 0.0 };
@@ -718,7 +717,6 @@ fn draw_songs(
             if bare {
                 let page = [page_x, panel_top, pw, panel_h];
                 style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
-                canvas.glass_last();
             } else {
                 style::panel(canvas, page_x, panel_top, pw, panel_h);
             }
@@ -1029,10 +1027,7 @@ fn draw_crowd(
     shown: f32,
     cam: f32,
 ) {
-    let first = canvas.shapes.len();
     draw_crowd_routes(state, canvas, now, base, shown, cam);
-    // Under song select's panels they're seen as through frosted glass.
-    canvas.frost_since(first);
 }
 
 fn draw_crowd_routes(
@@ -1099,7 +1094,6 @@ fn draw_shift(
     let routes = canvas.shapes.len();
     draw_menu(state, canvas, frame, Layer::Routes);
     canvas.fade_since(routes, routes_brightness(ph.cam), 1.0);
-    canvas.frost_since(routes);
     let shown = if into { (t * 2.0).min(1.0) } else { 1.0 };
     draw_crowd(state, canvas, frame.now, false, shown, ph.cam);
     if ph.landed < 1.0 {

@@ -1551,40 +1551,21 @@ fn the_pp_button_shows_every_number_whole_and_its_simulator_overlaps_nothing() {
 }
 
 #[test]
-fn song_select_s_panels_frost_the_routes_behind_them() {
-    let (mut s, _songs, mut now) = menu_look("select-look-glass");
+fn song_select_s_routes_are_plain_shapes_with_no_frosted_glass_over_them() {
+    // #643 tagged the routes as frosted (`params[3]` 5) and softened them under panes of
+    // glass; that look was dropped. The routes are drawn as on the menu, sharp everywhere.
+    let (mut s, _songs, mut now) = menu_look("select-look-no-glass");
     let c = settled(&mut s, &mut now);
-    let panes = c.glass_rects();
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
-    let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
-    let is = |want: &dyn Fn(&[f32; 6]) -> bool| panes.iter().any(want);
+    let frosted = c
+        .shapes
+        .iter()
+        .filter(|sh| sh.params[3] > 4.5 && sh.params[3] < 5.5)
+        .count();
+    assert_eq!(frosted, 0, "no shape carries the old frost tag");
     assert!(
-        is(&|p| p[0] - p[2] > 24.0 + lw && p[3] * 2.0 > 200.0),
-        "the details' panel: {panes:?}"
+        c.shapes.iter().any(|sh| sh.params[3] == 0.0),
+        "plain shapes are drawn"
     );
-    assert!(
-        is(&|p| p[1] - p[3] < 20.0 && p[0] - p[2] < 24.0),
-        "the search row: {panes:?}"
-    );
-    assert!(
-        is(&|p| inside(
-            [play[0] + play[2] / 2.0, play[1] + play[3] / 2.0],
-            [p[0] - p[2], p[1] - p[3], p[2] * 2.0, p[3] * 2.0],
-            0.0
-        )),
-        "the lane of actions: {panes:?}"
-    );
-    assert!(
-        panes.iter().all(|p| p[5] == 1.0),
-        "settled, wholly: {panes:?}"
-    );
-    // Legacy has none.
-    let songs = Songs::new("select-look-glass-legacy", &maps::all());
-    let mut legacy = state_with(harness::config(), songs.entries());
-    let mut now = Instant::now();
-    ready(&mut legacy, &mut now);
-    let c = settled(&mut legacy, &mut now);
-    assert!(c.glass_rects().is_empty(), "{:?}", c.glass_rects());
 }
 
 #[test]
@@ -1671,6 +1652,77 @@ fn set_cards_carry_no_difficulty_count_over_their_pictures() {
     ready(&mut legacy, &mut now);
     let c = settled(&mut legacy, &mut now);
     assert!(counts(&c) > 0, "Legacy's cards");
+}
+
+#[test]
+fn the_pp_button_leaves_values_out_rather_than_spill_out_of_a_narrow_panel() {
+    let (mut s, _songs, mut now) = menu_look("select-look-pp-narrow");
+    let c = settled(&mut s, &mut now);
+    let (_, widest) = ui::Select::share_range(c.width).expect("a range");
+    let mut fewest = 3;
+    for k in 0..=8 {
+        // From the list's default share to its widest (the panel's narrowest).
+        let share = s.cfg.song_list_share + (widest - s.cfg.song_list_share) * k as f32 / 8.0;
+        s.cfg.song_list_share = share;
+        for open in [false, true] {
+            if s.preview.sim.is_some() != open {
+                s.click(Hit::PpSim, None);
+            }
+            let c = settled(&mut s, &mut now);
+            let button = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
+            let mut area = button;
+            for h in c
+                .hits
+                .iter()
+                .filter(|h| matches!(h.hit, Hit::PpSimStep(..)))
+            {
+                area[3] = area[3].max(h.rect[1] + h.rect[3] - area[1]);
+            }
+            let board = hit_rect(&c, |h| *h == Hit::BoardPage).expect("Leaderboard");
+            let panel_right = board[0] + board[2] + 1.0;
+            let boxes: Vec<(String, [f32; 4])> = text_boxes(&c)
+                .into_iter()
+                .filter(|(_, r)| {
+                    let mid = [r[0] + r[2] / 2.0, r[1] + r[3] / 2.0];
+                    inside(mid, [area[0], area[1], panel_right - area[0], area[3]], 0.0)
+                        && !inside(mid, board, 0.0)
+                })
+                .collect();
+            for (t, r) in &boxes {
+                assert!(!t.contains("..."), "{share}: nothing cut: {t}");
+                let right = if r[1] < button[1] + button[3] {
+                    button[0] + button[2]
+                } else {
+                    panel_right
+                };
+                assert!(
+                    r[0] + r[2] <= right + 0.5,
+                    "{share} open {open}: {t} {r:?} spills past {right}"
+                );
+            }
+            for (i, (a, ra)) in boxes.iter().enumerate() {
+                for (b, rb) in &boxes[i + 1..] {
+                    let apart = ra[0] + ra[2] <= rb[0] + 0.5
+                        || rb[0] + rb[2] <= ra[0] + 0.5
+                        || ra[1] + ra[3] <= rb[1] + 0.5
+                        || rb[1] + rb[3] <= ra[1] + 0.5;
+                    assert!(apart, "{share} open {open}: {a} {ra:?} overlaps {b} {rb:?}");
+                }
+            }
+            if !open {
+                let shown = ["SS", "99%", "98%"]
+                    .iter()
+                    .filter(|l| boxes.iter().any(|(t, _)| t == *l))
+                    .count();
+                assert!(
+                    shown >= 1 && boxes.iter().any(|(t, _)| t == "SS"),
+                    "{share}: SS stays"
+                );
+                fewest = fewest.min(shown);
+            }
+        }
+    }
+    assert!(fewest < 3, "the narrowest panel leaves 98% out");
 }
 
 #[test]
