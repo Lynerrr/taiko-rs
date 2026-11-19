@@ -365,8 +365,13 @@ pub struct Select {
     /// Where the pointer is while flying through the list (right drag, scrollbar): the heading
     /// passing by shows beside it.
     pub scrubbing: Option<f32>,
-    /// The list is moving (`draw`): the cards ask for no new pictures, only show those read.
+    /// Selections come faster than the list gets to them (`draw`): the banner's picture of
+    /// where it's going isn't read ahead.
     hold_pictures: bool,
+    /// Where the list was scrolled last frame, and how fast it's going (units a ms, smoothed):
+    /// the cards' pictures ahead of it are read first.
+    seen_scroll: Option<f32>,
+    scroll_speed: f32,
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
     random_history: Vec<usize>,
     rng: u64,
@@ -480,8 +485,12 @@ const COVER_FADE_MS: f32 = 200.0;
 const COVER_SHADE: (f32, f32) = (0.85, 0.4);
 const BOTTOM_FADE: f32 = 16.0;
 const DIFF_BAR_DIM: f32 = 0.35;
-/// How long after the list has got to a new selection the cards start asking for pictures.
+/// How long after the list has got to a new selection the banner's picture is read ahead.
 const PICTURE_SETTLE_MS: f32 = 60.0;
+/// The cards' pictures read ahead of the list: as far as it goes in this long (ms) at its speed,
+/// smoothed over this long.
+const CARD_AHEAD_MS: f32 = 400.0;
+const CARD_AHEAD_TAU: f32 = 80.0;
 
 /// The list as a lane through the selection's target brackets: the cards stay straight near the
 /// target (`ARC_STRAIGHT` of the list's height), then bend away from it along an arc, `ARC_K`
@@ -618,6 +627,8 @@ impl Select {
             thumb: 0.0,
             scrubbing: None,
             hold_pictures: false,
+            seen_scroll: None,
+            scroll_speed: 0.0,
             random_history: Vec::new(),
             rng: seed | 1,
         };
@@ -2729,6 +2740,49 @@ impl Select {
             }
             let _ = sec;
         }
+        // The cards' pictures near the list and ahead of it, the way it's going (at least a
+        // screen, more the faster it goes), are read before they come into view: dragging or
+        // wheeling through the list draws them from memory.
+        let moved = self.seen_scroll.map_or(0.0, |s| scroll - s);
+        self.seen_scroll = Some(scroll);
+        if c.dt_ms > 0.0 {
+            let speed = moved / c.dt_ms;
+            crate::render::approach(&mut self.scroll_speed, speed, c.dt_ms, CARD_AHEAD_TAU);
+        }
+        if !legacy {
+            let lead = (self.scroll_speed.abs() * CARD_AHEAD_MS).clamp(view, view * 8.0);
+            let (back, ahead) = if self.scroll_speed < 0.0 {
+                (lead, view * 0.5)
+            } else {
+                (view * 0.5, lead)
+            };
+            let (from, to) = (scroll - back, scroll + view + ahead);
+            // Nearest the screen first, those ahead before those behind.
+            let mut near: Vec<(f32, usize)> = Vec::new();
+            for (si, &open) in section_open.iter().enumerate() {
+                if !open {
+                    continue;
+                }
+                for gi in layout.visible_songs(si, from, to) {
+                    let y = layout.song_y(si, gi);
+                    let off = if y < scroll {
+                        (scroll - y) * if self.scroll_speed < 0.0 { 1.0 } else { 2.0 }
+                    } else if y > scroll + view {
+                        (y - scroll - view) * if self.scroll_speed < 0.0 { 2.0 } else { 1.0 }
+                    } else {
+                        0.0
+                    };
+                    near.push((off, gi));
+                }
+            }
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for (_, gi) in near {
+                let e = &library[self.visible[groups[gi].start]];
+                if let Some(bg) = crate::preview::background_path(e) {
+                    c.want_card(&bg);
+                }
+            }
+        }
         // The main menu's look: one dark panel the list runs down, rows as lines on it.
         let frame_top = self.frame_top();
         // Outside the Legacy layout it was drawn with the search row, unless that's covered.
@@ -2764,8 +2818,9 @@ impl Select {
             }
         };
         // Flying through the list (the pointer or the scrollbar holding it, or a new selection
-        // before the last one has got there: Random spammed, an arrow held down), the cards show
-        // only the pictures already read, so the sets passing by don't each start one reading.
+        // before the last one has got there: Random spammed, an arrow held down), the banner's
+        // whole picture of where it's going isn't read ahead: the sets passing by would each start
+        // a slow reading. The cards' strips are small and read all the same.
         let settle = LIST_ANIM_MS + PICTURE_SETTLE_MS;
         let ms = |t: std::time::Instant, since: std::time::Instant| {
             t.saturating_duration_since(since).as_secs_f32() * 1000.0
@@ -2777,10 +2832,10 @@ impl Select {
         };
         self.hold_pictures =
             self.scrubbing.is_some() || self.drag.is_some() || self.free.is_some() || rushed;
-        // On its way to a new selection: the sets where it's going are read meanwhile, so their
-        // cards come in with their pictures.
+        // On its way to a new selection: the cards where it's going are read meanwhile, so
+        // they come in with their pictures, and the banner's picture of the set it lands on
+        // (not while selections come faster than the list gets to them).
         if !legacy
-            && !self.hold_pictures
             && self.anim.start.is_some_and(|t| ms(now, t) < LIST_ANIM_MS)
             && let Some(g0) = cursor_group
         {
@@ -2790,7 +2845,10 @@ impl Select {
             for g in g0.saturating_sub(up)..(g0 + down + 1).min(groups.len()) {
                 let e = &library[self.visible[groups[g].start]];
                 if let Some(bg) = crate::preview::background_path(e) {
-                    c.want_picture_path(&bg);
+                    c.want_card(&bg);
+                    if g == g0 && !self.hold_pictures {
+                        c.want_picture_path(&bg);
+                    }
                 }
             }
         }
@@ -3405,6 +3463,11 @@ impl Select {
         style::surface(c, [x, y, w, h], CARD_RADIUS, level);
         if let Some(bg) = crate::preview::background_path(e) {
             let key = crate::render::path_picture_key(&bg);
+            let shown = c.card_slots.contains_key(&key);
+            if !shown {
+                // Let go of to make room for others: it fades in again when it's back.
+                covers.remove(&key);
+            }
             let since = covers.get(&key).copied();
             let a = match since {
                 Some(t) => crate::render::progress(t, COVER_FADE_MS),
@@ -3412,18 +3475,27 @@ impl Select {
                 None => 1.0,
             };
             let inner = [x + 1.0, y + 1.0, w - 2.0, h - 2.0];
-            // Flying through the list (right-drag): only pictures already read, so hundreds of
-            // sets passing by don't each start one reading.
-            let flying = self.hold_pictures && !c.picture_slots.contains_key(&key);
-            if !flying && c.picture_cover(&bg, inner, [1.0, 1.0, 1.0, a]) {
-                if since.is_none() {
-                    covers.insert(key, crate::render::frame_now());
-                }
+            // Until its picture is in, the card shows the picture's average colour (once known),
+            // and the picture fades in over it: nothing on the card pops.
+            let colour = c.card_colour(&bg);
+            if let Some([r, g, b]) = colour
+                && (!shown || a < 1.0)
+            {
+                c.rect(inner[0], inner[1], inner[2], inner[3], [r, g, b, 1.0]);
+            }
+            let drawn = c.card_picture(&bg, inner, [1.0, 1.0, 1.0, a]);
+            if drawn && since.is_none() {
+                covers.insert(key, crate::render::frame_now());
+            }
+            if drawn || colour.is_some() {
+                // Over the colour the shade is there at once; over the bare surface it comes in
+                // with the picture.
+                let base = if colour.is_some() { 1.0 } else { a };
                 const BANDS: usize = 16;
                 let bw = inner[2] / BANDS as f32;
                 let shade = |b: usize| {
                     let t = b as f32 / (BANDS - 1) as f32;
-                    (COVER_SHADE.0 + (COVER_SHADE.1 - COVER_SHADE.0) * t) * a
+                    (COVER_SHADE.0 + (COVER_SHADE.1 - COVER_SHADE.0) * t) * base
                 };
                 // Layers from the card's left edge to the end of each band, so band `b` is
                 // under layers `b..`: every edge belongs to one layer alone (bands side by side

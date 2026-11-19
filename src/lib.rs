@@ -82,6 +82,7 @@ use taiko_proto::net;
 mod od_override;
 mod offline;
 use taiko_proto::online;
+mod card_pictures;
 mod osudb;
 #[cfg(test)]
 mod perf_audit;
@@ -595,6 +596,8 @@ struct State {
     avatars: avatars::Avatars,
     /// The playing or edited `.tko` map's own pictures.
     pictures: pictures::Pictures,
+    /// Song select's card pictures (strips of the maps' pictures).
+    card_pictures: card_pictures::CardPictures,
     /// The account logged in is an admin (the server says so; it checks every admin action).
     admin: bool,
     /// Checking the address the server says it moved to (`Reply::Account::server`): the server
@@ -9233,6 +9236,7 @@ impl State {
                 .filter_map(preview::background_path)
                 .filter(|p| seen.insert(p.clone()))
                 .collect();
+            self.card_pictures.prewarm(paths.clone());
             self.pictures.prewarm(paths);
         }
         // Keep whatever was typed into the search box while scanning, and the sort.
@@ -12669,12 +12673,15 @@ impl State {
             &canvas.picture_times,
             &canvas.picture_paths,
         );
+        self.card_pictures.update(&canvas.cards_wanted);
         canvas.clear(width);
         canvas.input_editor = self
             .sync_text_input()
             .map(|field| (field, self.text_input.view()));
         canvas.avatar_slots = self.avatars.slots();
         canvas.picture_slots = self.pictures.slots();
+        canvas.card_slots = self.card_pictures.slots();
+        canvas.card_colours = self.card_pictures.colours();
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
         self.mob.begin_frame();
