@@ -1040,12 +1040,20 @@ impl Preview {
             !self.bare,
         );
         self.graph_rect = Some(rect);
+        // Bare, the row under it ends in the way to the leaderboard (`title_room` wide), and
+        // there's no hint: the timeline is plain enough.
+        let (room, hint) = if self.bare {
+            (self.title_room, false)
+        } else {
+            (0.0, true)
+        };
         self.play_rect = draw_play_button(
             c,
-            rect[0] + rect[2] / 2.0,
+            rect[0] + (rect[2] - room) / 2.0,
             rect[1] + rect[3] + 17.0,
             marker,
             button,
+            hint,
         );
         // The same slack as `time_at`.
         c.hit(
@@ -1804,10 +1812,13 @@ impl Preview {
         // the screen's right edge as far as the friends tab there leaves room; the notes come in
         // from its end.
         let lane_end = if self.bare { x + w - 10.0 } else { bx + bw };
-        // Bare: no lines round it, fading in at its ends (a little out from the drum's side).
+        // Bare: no lines round it, its corners as round as the tiles' (a little out from the
+        // drum's side).
         let strip = [bx - LANE_FADE[0], by, lane_end - bx + LANE_FADE[0], bh];
+        // A tile as the stats' are, not a dark box: on a bright picture that read as black.
         if self.bare {
-            crate::style::lane_fade_strip(c, strip, LANE_FADE, 1.0);
+            let r = crate::style::radius::SMALL;
+            crate::style::surface(c, strip, r, crate::style::Surface::Raised);
         } else {
             c.round_rect(
                 [bx, by],
@@ -1904,7 +1915,8 @@ impl Preview {
         }
         if fade < 1.0 {
             if self.bare {
-                crate::style::lane_fade_strip(c, strip, LANE_FADE, 1.0 - fade);
+                // Nothing dark to cover them with: the notes fade in themselves.
+                c.fade_since(start, fade, 1.0);
             } else {
                 c.round_rect(
                     [bx, by],
@@ -1960,7 +1972,7 @@ const BARS_PLAYED: f32 = 0.8;
 /// heights (the mapper's line, the difficulty's chip, the stat tiles, the Don/Kat bar with its
 /// counts, the pp chips, what a TJA course leaves out) and the gaps between the blocks.
 const BANNER_H: f32 = 96.0;
-const BANNER_TOP: f32 = 30.0;
+const BANNER_TOP: f32 = 14.0;
 const MAPPER_H: f32 = 13.0;
 const CHIP_H: f32 = 18.0;
 const TILE_H: f32 = 30.0;
@@ -2191,17 +2203,21 @@ pub fn strain_colour(v: f32) -> u32 {
     }
 }
 
-/// "<verb> 1:23" under the timeline once a start point is picked (else a hint). `button` is
-/// (verb, key hint); None shows no button (only the host picks a match's start). Returns the
-/// button's rect.
+/// "<verb> 1:23" under the timeline once a start point is picked (else a hint, when `show_hint`).
+/// `button` is (verb, key hint); None shows no button (only the host picks a match's start).
+/// Returns the button's rect.
 fn draw_play_button(
     c: &mut Canvas,
     cx: f32,
     y: f32,
     marker: Option<f64>,
     button: Option<(&str, &str)>,
+    show_hint: bool,
 ) -> Option<[f32; 4]> {
     let (Some(t), Some((verb, hint))) = (marker, button) else {
+        if !show_hint {
+            return None;
+        }
         let text = if crate::mobile::active() {
             "tap or drag to scroll"
         } else if button.is_some() {

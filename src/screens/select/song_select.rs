@@ -508,6 +508,7 @@ fn draw_songs(
     if phone {
         state.draw_mobile_select(canvas);
     } else {
+        state.select.show_info = state.cfg.select_info;
         state.select.draw(
             canvas,
             &state.library,
@@ -660,11 +661,22 @@ fn draw_songs(
             fx.burst.draw(canvas, panel, canvas.dt_ms);
             // As the board's back button: 10 in from the frame, then the rows' scroll
             // bar room (`board_tabs`, inside `pw - 28`).
-            let (bx, by) = (x - t * step + pw - 18.0 - bw, panel_top + 10.0);
+            // Bare, it's at the panel's bottom right instead, on a chip as the other buttons
+            // are, at the end of the row under the timeline.
+            let (bx, by) = if bare {
+                let bottom = state.preview.panel_bottom.min(panel_top + panel_h);
+                (x - t * step + pw - 10.0 - bw, bottom - 28.5)
+            } else {
+                (x - t * step + pw - 18.0 - bw, panel_top + 10.0)
+            };
             let hit = hit::Hit::BoardPage;
             if state.select.legacy {
                 canvas.button(bx, by, bw, 20.0, &legacy_label, 7.0, hit, false);
             } else {
+                if bare {
+                    let chip = [bx, by, bw, 20.0];
+                    style::surface(canvas, chip, style::radius::SMALL, style::Surface::Lifted);
+                }
                 let at = [bx + 6.0, by + 10.0];
                 style::icon_button(canvas, at, &style::PODIUM, label, None, 7.0, false, hit);
             }

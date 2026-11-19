@@ -58,6 +58,9 @@ fn words(item: Item) -> &'static str {
         }
         Item::FpsCap => "fps framerate limit lag фпс кадры лимит",
         Item::ShowFps => "fps framerate counter фпс кадры счетчик",
+        Item::SelectInfo => {
+            "songs maps count device gpu status info песни карты число видеокарта инфо"
+        }
         Item::HalfResolution => "performance weak gpu lag производительность слабый лаги",
         Item::Renderer => {
             "renderer graphics api vulkan directx dx12 opengl metal crash gpu рендер графика вулкан директ вылет краш видеокарта"

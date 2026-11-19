@@ -387,6 +387,9 @@ pub struct Select {
     pub to_menu: bool,
     /// A mod's customization is open over the top of the screen: no way back to show.
     pub covered: bool,
+    /// The main menu's look shows the library's counts and the status line (`Config::select_info`);
+    /// the classic look always does.
+    pub show_info: bool,
 }
 
 /// A play's letter in its colour, the same as on the website.
@@ -484,7 +487,7 @@ pub const SONG_ROW_H: f32 = 34.0;
 const CARD_INSET: f32 = 12.0;
 const CARD_HOVER: f32 = 4.0;
 const CARD_DIM: f32 = 0.7;
-const CARD_RADIUS: f32 = 4.0;
+const CARD_RADIUS: f32 = crate::style::radius::CARD;
 /// How bright the faint edge round a card is (not the open one, which has the selection's).
 const CARD_EDGE: f32 = 0.1;
 /// A set opening: its difficulties drop in from this far above, this many ms apart.
@@ -571,6 +574,7 @@ impl Select {
             legacy: false,
             to_menu: true,
             covered: false,
+            show_info: false,
             filter: String::new(),
             searching: false,
             sort: SortMode::Artist,
@@ -2245,10 +2249,15 @@ impl Select {
             }
             // On a small chip beside the search row, over the panel's side, where there is one.
             let (x, right) = (24.0 + lw + 12.0, w - 24.0);
-            if right - x > 60.0 {
+            if self.show_info && right - x > 60.0 {
                 let text = Canvas::fit(6.0, right - x - 16.0, &summary);
                 let chip = [x, row + 4.0, Canvas::text_width(6.0, &text) + 16.0, 16.0];
-                crate::style::surface(c, chip, 8.0, crate::style::Surface::Raised);
+                crate::style::surface(
+                    c,
+                    chip,
+                    crate::style::radius::CARD,
+                    crate::style::Surface::Raised,
+                );
                 c.text(
                     x + 8.0,
                     row + 12.0 - Canvas::text_height(6.0) / 2.0,
@@ -3505,13 +3514,15 @@ impl Select {
             7.0,
             2.0 * (469.5 - (455.5 + Canvas::text_height(7.0) / 2.0) - 3.0),
         );
-        c.text(
-            24.0,
-            466.0 + (7.0 - status_size) / 2.0,
-            status_size,
-            rgba(0x55556a, 1.0),
-            &Canvas::fit(status_size, w - 48.0, status),
-        );
+        if legacy || self.show_info {
+            c.text(
+                24.0,
+                466.0 + (7.0 - status_size) / 2.0,
+                status_size,
+                rgba(0x55556a, 1.0),
+                &Canvas::fit(status_size, w - 48.0, status),
+            );
+        }
     }
 
     /// A set's card in the main menu's look over `[x, y, w, h]`: a surface (lifted when open or

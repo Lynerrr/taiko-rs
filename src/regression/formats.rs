@@ -363,6 +363,7 @@ fn changed_config() -> Config {
         master_volume: 0.35,
         animations: false,
         song_headings: true,
+        select_info: true,
         check_updates: false,
         online_server: "example.org:7800".into(),
         idle_minutes: 5,
@@ -539,6 +540,7 @@ data_folder = /games/taiko-data
 wheel_resizes_playfield = true
 show_converts = true
 song_headings = true
+select_info = true
 song_order = title desc
 song_source = tja
 lens_osu = status stars desc headings

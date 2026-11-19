@@ -336,6 +336,9 @@ pub fn selector_colour() -> u32 {
 }
 
 /// Corner brackets round `[x, y, w, h]`, `alpha` of their strength, brighter on the beat.
+/// No fill: an outline alone.
+const CLEAR_FILL: [f32; 4] = [0.0; 4];
+
 pub fn brackets(c: &mut Canvas, [x, y, w, h]: [f32; 4], alpha: f32) {
     // Bolder on a phone, to be seen from arm's length.
     let t = pixel_size(crate::mobile::pick(2.0, 3.0));
@@ -347,12 +350,16 @@ pub fn brackets(c: &mut Canvas, [x, y, w, h]: [f32; 4], alpha: f32) {
         snap_to_grid(y + h),
     );
     let col = rgba(selector_colour(), alpha * (0.75 + 0.25 * pulse()));
+    // Each corner a piece of one outline as round as the cards' (a little more, as it's round
+    // them), cut to the corner: the brackets turn their corners round as everything else does.
+    let round = (radius::SMALL + 3.0).min(arm);
     for (cx, sx) in [(l, 1.0), (r, -1.0)] {
         for (cy, sy) in [(top, 1.0), (bot, -1.0)] {
             let hx = if sx > 0.0 { cx } else { cx - arm };
             let vy = if sy > 0.0 { cy } else { cy - arm };
-            c.rect(hx, if sy > 0.0 { cy } else { cy - t }, arm, t, col);
-            c.rect(if sx > 0.0 { cx } else { cx - t }, vy, t, arm, col);
+            let start = c.shapes.len();
+            c.round_rect([l, top], [r - l, bot - top], round, CLEAR_FILL, col, t);
+            c.clip_since(start, hx, vy, arm, arm);
         }
     }
 }
@@ -909,32 +916,6 @@ pub fn icon_button(
 thread_local! {
     /// How lit each lane-end button is (0 to 1), easing towards whether the pointer is on it.
     static LIGHTS: RefCell<HashMap<&'static str, f32>> = RefCell::new(HashMap::new());
-}
-
-/// A lane's strip with no lines round it, fading out over `[left, right]` units at its ends
-/// (song select's autoplay preview in the main menu's look), `alpha` of its full strength. The
-/// fades are nested layers, each from one end's step to the other's, so no edge is shared by two
-/// of them (bands side by side would show seams).
-pub fn lane_fade_strip(
-    c: &mut Canvas,
-    [x, y, w, h]: [f32; 4],
-    [left, right]: [f32; 2],
-    alpha: f32,
-) {
-    const STEPS: usize = 8;
-    let full = 0.95 * alpha;
-    // How strong the strip is `d + 1` steps in from its ends.
-    let want = |d: usize| {
-        let t = (d + 1) as f32 / STEPS as f32;
-        full * t * t * (3.0 - 2.0 * t)
-    };
-    for d in 0..STEPS {
-        let before = if d == 0 { 0.0 } else { want(d - 1) };
-        let layer = 1.0 - (1.0 - want(d)) / (1.0 - before);
-        let k = d as f32 / STEPS as f32;
-        let (l, r) = (snap_to_grid(x + left * k), snap_to_grid(x + w - right * k));
-        c.rect(l, y, r - l, h, rgba(PANEL, layer.max(0.0)));
-    }
 }
 
 /// A strip in the menu lane's place as a surface: the raised tone alone, no lines round it, its

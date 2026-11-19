@@ -139,6 +139,8 @@ fn surfaces_have_no_edge_and_rows_no_lines_under_them() {
         .filter(|sh| sh.params[1] > 0.0 && sh.border[3] > 0.01)
         .filter(|sh| !same_rgb(sh.border, sh.fill) || sh.fill[3] < sh.border[3])
         .filter(|sh| !faint_card_edge(sh))
+        // The selector's brackets round the selected difficulty: corners of one outline.
+        .filter(|sh| !same_rgb(sh.border, render::rgba(style::selector_colour(), 1.0)))
         .map(rect)
         .collect();
     assert!(edged.is_empty(), "boxes with an edge round them: {edged:?}");
@@ -903,36 +905,29 @@ fn text_at(c: &Canvas, s: &str) -> Option<[f32; 2]> {
 }
 
 #[test]
-fn the_preview_lane_has_no_lines_round_it_and_fades_in_at_its_ends() {
+fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
     let (mut s, _songs, mut now) = menu_look("select-look-lane");
     let c = settled(&mut s, &mut now);
     let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
     let right_of_list = |sh: &&Shape| plain(sh) && sh.center[0] > 28.0 + lw;
-    // The strip: layers of the panel's fill, each from one end's step to the other's.
-    let fill = render::rgba(style::PANEL, 1.0);
-    let layers: Vec<([f32; 4], f32)> = c
+    let lane_hit = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
+    // The strip: a tile as the stats' are (not a dark box), as round as them.
+    let fill = style::surface_fill(style::Surface::Raised);
+    let strips: Vec<&Shape> = c
         .shapes
         .iter()
         .filter(right_of_list)
-        .filter(|sh| same_rgb(sh.fill, fill) && sh.half[0] * 2.0 > 100.0)
-        .map(|sh| (rect(sh), sh.fill[3]))
+        .filter(|sh| {
+            same_rgb(sh.fill, fill) && sh.half[0] * 2.0 > 100.0 && inside(sh.center, lane_hit, 1.0)
+        })
         .collect();
-    assert!(layers.len() >= 4, "a strip in layers: {layers:?}");
-    let [_, y, _, h] = layers[0].0;
-    assert!(
-        layers.iter().all(|(r, _)| r[1] == y && r[3] == h),
-        "{layers:?}"
-    );
-    for (k, (a, _)) in layers.iter().enumerate() {
-        for (b, _) in &layers[k + 1..] {
-            assert!(
-                (a[0] - b[0]).abs() > 0.01 && (a[0] + a[2] - b[0] - b[2]).abs() > 0.01,
-                "two layers share an edge: {a:?} {b:?}"
-            );
-        }
-    }
-    let left = layers.iter().map(|(r, _)| r[0]).fold(f32::MAX, f32::min);
-    let right = layers.iter().map(|(r, _)| r[0] + r[2]).fold(0.0, f32::max);
+    let found: Vec<[f32; 4]> = strips.iter().map(|sh| rect(sh)).collect();
+    assert_eq!(strips.len(), 1, "one strip: {found:?}");
+    let strip = strips[0];
+    assert_eq!(strip.params[0], style::radius::SMALL, "its corners round");
+    assert_eq!(strip.params[1], 0.0, "no edge round it");
+    let [left, y, w, h] = rect(strip);
+    let right = left + w;
     // No lines along it or across its ends.
     let edge = render::rgba(style::PANEL_EDGE, 1.0);
     let lines: Vec<[f32; 4]> = c
@@ -945,19 +940,6 @@ fn the_preview_lane_has_no_lines_round_it_and_fades_in_at_its_ends() {
         .filter(|r| r[0] < right + 2.0 && r[0] + r[2] > left - 2.0)
         .collect();
     assert!(lines.is_empty(), "lines round the lane: {lines:?}");
-    let strength = |x: f32| {
-        1.0 - layers
-            .iter()
-            .filter(|(r, _)| x >= r[0] && x < r[0] + r[2])
-            .map(|(_, a)| 1.0 - a)
-            .product::<f32>()
-    };
-    let middle = strength((left + right) / 2.0);
-    assert!(middle > 0.9, "whole in the middle: {middle}");
-    assert!(
-        strength(left + 0.5) < 0.2 && strength(right - 0.5) < 0.2,
-        "faint at its ends"
-    );
 }
 
 #[test]
@@ -1167,6 +1149,7 @@ fn nothing_in_the_details_stretches_on_the_way_to_the_leaderboard() {
 #[test]
 fn the_search_row_has_a_glass_a_quiet_hint_its_key_on_a_cap_and_the_counts_on_a_chip() {
     let (mut s, _songs, mut now) = menu_look("select-look-search-row");
+    s.cfg.select_info = true;
     let c = settled(&mut s, &mut now);
     let field = hit_rect(&c, |h| matches!(h, Hit::TextField)).expect("the search box");
     let hint = text_at(&c, "click to search").expect("the hint");
@@ -1324,5 +1307,70 @@ fn a_map_whose_bpm_changes_shows_its_whole_range() {
             .iter()
             .any(|t| t.starts_with('1') && t.ends_with("...")),
         "nothing cut: {shown:?}"
+    );
+}
+
+#[test]
+fn the_library_counts_and_the_device_line_wait_for_their_setting() {
+    let (mut s, _songs, mut now) = menu_look("select-look-info");
+    let shown = |s: &mut State, now: &mut Instant| {
+        let c = settled(s, now);
+        texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT])
+    };
+    s.status = "gpu  |  audio  |  60 Hz".into();
+    let off = shown(&mut s, &mut now);
+    assert!(
+        !off.iter()
+            .any(|t| t.contains(" songs, ") || t.contains("60 Hz")),
+        "off by default: {off:?}"
+    );
+    s.cfg.select_info = true;
+    let on = shown(&mut s, &mut now);
+    assert!(
+        on.iter().any(|t| t.contains(" songs, ")),
+        "the counts: {on:?}"
+    );
+    assert!(
+        on.iter().any(|t| t.contains("60 Hz")),
+        "the device line: {on:?}"
+    );
+}
+
+#[test]
+fn the_way_to_the_leaderboard_is_a_chip_at_the_details_bottom_right() {
+    let (mut s, _songs, mut now) = menu_look("select-look-board-chip");
+    let c = settled(&mut s, &mut now);
+    let way = c
+        .hits
+        .iter()
+        .filter(|h| h.hit == Hit::BoardPage)
+        .map(|h| h.rect)
+        .next()
+        .expect("the way to the board");
+    let lane = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
+    // Under the lane and the timeline under it.
+    assert!(
+        way[1] > lane[1] + lane[3] + 30.0,
+        "under the timeline: {way:?}"
+    );
+    assert!(
+        way[0] + way[2] > lane[0] + lane[2] - 30.0,
+        "at the right: {way:?}"
+    );
+    let chip = c.shapes.iter().any(|sh| {
+        same_rgb(sh.fill, style::surface_fill(style::Surface::Lifted))
+            && sh.params[0] == style::radius::SMALL
+            && inside(
+                [way[0] + way[2] / 2.0, way[1] + way[3] / 2.0],
+                rect(sh),
+                0.0,
+            )
+    });
+    assert!(chip, "on a chip as the other buttons");
+    assert!(
+        !texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT])
+            .iter()
+            .any(|t| t.starts_with("click / drag")),
+        "no hint under the timeline"
     );
 }

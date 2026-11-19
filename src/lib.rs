@@ -3099,6 +3099,7 @@ impl State {
                 }
             }
             Item::ShowFps => on(c.show_fps),
+            Item::SelectInfo => on(c.select_info),
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
             Item::EpilepsyWarning => on(c.epilepsy_warning),
@@ -3444,6 +3445,7 @@ impl State {
                 self.cfg.fps_cap = FPS_CAPS[(i + dir).rem_euclid(FPS_CAPS.len() as i32) as usize];
             }
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
+            Item::SelectInfo => self.cfg.select_info = !self.cfg.select_info,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::EpilepsyWarning => self.cfg.epilepsy_warning = !self.cfg.epilepsy_warning,
