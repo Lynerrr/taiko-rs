@@ -9,6 +9,8 @@ use crate::hit::Canvas;
 use crate::render::{self, pixel_size, rgba, snap_to_grid};
 
 const GOLD: u32 = 0xFFD34D;
+/// A kiai's gold, for what lights up in one.
+pub const KIAI_GOLD: u32 = GOLD;
 const GLITCH_RED: u32 = 0x9f2137;
 const GLITCH_CYAN: u32 = 0x2a9fb5;
 /// A panel: the main menu's.

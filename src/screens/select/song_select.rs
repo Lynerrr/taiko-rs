@@ -282,7 +282,11 @@ impl Screen for SongSelect {
         }
         let on_songs = shift.is_none() && !frame.on_menu;
         match shift {
-            Some((t, into, flying)) => draw_shift(state, canvas, frame, t, into, flying),
+            Some((t, into, flying)) => {
+                // The camera carries the routes; the lean starts again from none once it's there.
+                state.select.parallax = [0.0; 2];
+                draw_shift(state, canvas, frame, t, into, flying)
+            }
             None if frame.on_menu => {
                 let draining = state.song_routes_drain.is_some();
                 draw_crowd(
@@ -296,7 +300,19 @@ impl Screen for SongSelect {
                 draw_menu(state, canvas, frame, Layer::Whole);
             }
             None => {
+                // The routes behind lean a little away from the pointer.
+                let routes = canvas.shapes.len();
                 draw_crowd(state, canvas, frame.now, true, 1.0, 1.0);
+                let target = if render::animations() && !crate::mobile::active() {
+                    parallax_target(canvas.mouse, canvas.width)
+                } else {
+                    [0.0; 2]
+                };
+                for (v, t) in state.select.parallax.iter_mut().zip(target) {
+                    render::approach(v, t, canvas.dt_ms, PARALLAX_TAU);
+                }
+                let [dx, dy] = state.select.parallax;
+                canvas.transform_since(routes, [0.0, 0.0], 1.0, dx, dy);
                 draw_songs(state, canvas, frame, None, false);
             }
         }
@@ -966,6 +982,18 @@ fn routes_brightness(cam: f32) -> f32 {
     1.0 - (1.0 - ROUTES_CALM) * cam.clamp(0.0, 1.0)
 }
 
+/// How far the routes behind song select lean away from the pointer at most (virtual units),
+/// and how quickly they follow it (`render::approach`, ms).
+const PARALLAX: f32 = 6.0;
+const PARALLAX_TAU: f32 = 160.0;
+
+/// Where the routes lean to with the pointer at `(x, y)` (virtual units) on a `width` wide
+/// screen: away from it, `PARALLAX` at the screen's edges, none in its middle.
+pub(crate) fn parallax_target((x, y): (f32, f32), width: f32) -> [f32; 2] {
+    let off = |v: f32, size: f32| -((v / size.max(1.0)) * 2.0 - 1.0).clamp(-1.0, 1.0) * PARALLAX;
+    [off(x, width), off(y, render::VIRTUAL_HEIGHT)]
+}
+
 fn draw_crowd(
     state: &mut State,
     canvas: &mut Canvas,
@@ -1074,6 +1102,21 @@ fn draw_shift(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_routes_lean_away_from_the_pointer_and_not_at_all_from_the_middle() {
+        use super::{PARALLAX, parallax_target};
+        let w = 853.3;
+        let mid = parallax_target((w / 2.0, crate::render::VIRTUAL_HEIGHT / 2.0), w);
+        assert!(mid.iter().all(|v| v.abs() < 1e-4), "{mid:?}");
+        assert_eq!(parallax_target((0.0, 0.0), w), [PARALLAX, PARALLAX]);
+        assert_eq!(
+            parallax_target((w, crate::render::VIRTUAL_HEIGHT), w),
+            [-PARALLAX, -PARALLAX]
+        );
+        // Off the screen it goes no farther.
+        assert_eq!(parallax_target((-500.0, 2000.0), w), [PARALLAX, -PARALLAX]);
+    }
+
     use super::*;
 
     #[test]
