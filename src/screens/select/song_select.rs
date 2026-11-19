@@ -559,6 +559,10 @@ fn draw_songs(
         ),
         None => None,
     };
+    state.preview.sim_pp = match (state.preview.sim, state.select.selected()) {
+        (Some(sim), Some(i)) => state.simulated_pp(i, sim, rate),
+        _ => None,
+    };
     // The map the panel shows, and whether it's marked EPIC (its pill by the status).
     let shown_path = state
         .preview_target()
@@ -615,6 +619,7 @@ fn draw_songs(
                 style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
             }
             state.preview.title_room = bw + 10.0;
+            state.preview.board_w = if bare { bw } else { 0.0 };
             state.preview.bare = bare;
             state.preview.slid = t * step;
             if let Some(clip) = state.preview.draw_panel(
@@ -633,6 +638,7 @@ fn draw_songs(
                 state.frame_clip = Some(clip);
             }
             state.preview.title_room = 0.0;
+            state.preview.board_w = 0.0;
             state.preview.bare = false;
             state.preview.slid = 0.0;
             // An EPIC map: the music's spectrum round its pill, and on landing on it a
@@ -661,20 +667,18 @@ fn draw_songs(
             fx.burst.draw(canvas, panel, canvas.dt_ms);
             // As the board's back button: 10 in from the frame, then the rows' scroll
             // bar room (`board_tabs`, inside `pw - 28`).
-            // Bare, it's at the panel's bottom right instead, on a chip as the other buttons
-            // are, at the end of the row under the timeline.
-            let (bx, by) = if bare {
-                let bottom = state.preview.panel_bottom.min(panel_top + panel_h);
-                (x - t * step + pw - 10.0 - bw, bottom - 28.5)
-            } else {
-                (x - t * step + pw - 18.0 - bw, panel_top + 10.0)
+            // Bare, it ends the row of the full-combo pp instead (where the details left it
+            // room), on a chip as the other buttons are.
+            let (bx, by) = match state.preview.board_at.filter(|_| bare) {
+                Some([bx, by, _, bh]) => (bx, by + bh / 2.0 - 10.0),
+                None => (x - t * step + pw - 18.0 - bw, panel_top + 10.0),
             };
             let hit = hit::Hit::BoardPage;
             if state.select.legacy {
                 canvas.button(bx, by, bw, 20.0, &legacy_label, 7.0, hit, false);
             } else {
-                if bare {
-                    let chip = [bx, by, bw, 20.0];
+                if let Some(chip) = state.preview.board_at.filter(|_| bare) {
+                    // As tall as the pp button it ends the row of.
                     style::surface(canvas, chip, style::radius::SMALL, style::Surface::Lifted);
                 }
                 let at = [bx + 6.0, by + 10.0];

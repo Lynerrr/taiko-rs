@@ -37,11 +37,12 @@ text  494,187  32 DON
 text  784,187  32 KAT
 text   49,196  Regression  |  mapped by tests
 text  517,213  130pp
-text  631,213  117pp
-text  738,213  99pp
+text  596,213  117pp
+text  670,213  99pp
 text  502,214  SS
-text  610,214  99%
-text  719,214  98%
+text  576,214  99%
+text  650,214  98%
+text  743,214  Leaderboard
 text   51,216  stream
 text  416,221  1 diff
 text   51,230  Regression  |  mapped by tests
@@ -53,7 +54,6 @@ text  416,289  1 diff
 text   57,298  Regression  |  mapped by tests
 text  490,337  0:00 / 0:10
 text  661,337  peak 7.0 notes/s at 0:01
-text  747,354  Leaderboard
 text  749,428  Play
 text  513,429  Mods
 text  634,429  Random
@@ -72,9 +72,10 @@ hit    41,244   426x34   SongHeader(5)
 hit    45,278   423x34   SongHeader(6)
 hit     4,52     20x402  SongScrollbar
 hit   712,102    16x13   SelectLike
+hit   494,209   223x16   PpSim
 hit   490,235   330x61   Preview
 hit   488,302   320x32   Preview
-hit   724,345    95x24   BoardPage
+hit   720,205    95x24   BoardPage
 hit   490,421    56x24   ModsButton
 hit   550,421    45x24   ModsButton
 hit   611,421    70x24   Key(F2)

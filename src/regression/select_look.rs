@@ -1337,40 +1337,80 @@ fn the_library_counts_and_the_device_line_wait_for_their_setting() {
 }
 
 #[test]
-fn the_way_to_the_leaderboard_is_a_chip_at_the_details_bottom_right() {
-    let (mut s, _songs, mut now) = menu_look("select-look-board-chip");
+fn the_full_combo_pp_is_one_button_and_the_way_to_the_board_ends_its_row() {
+    let (mut s, _songs, mut now) = menu_look("select-look-pp-row");
     let c = settled(&mut s, &mut now);
-    let way = c
-        .hits
-        .iter()
-        .filter(|h| h.hit == Hit::BoardPage)
-        .map(|h| h.rect)
-        .next()
-        .expect("the way to the board");
-    let lane = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
-    // Under the lane and the timeline under it.
+    let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
+    let way = hit_rect(&c, |h| *h == Hit::BoardPage).expect("the way to the board");
     assert!(
-        way[1] > lane[1] + lane[3] + 30.0,
-        "under the timeline: {way:?}"
+        (way[1] + way[3] / 2.0 - (pp[1] + pp[3] / 2.0)).abs() < 2.5,
+        "one row: {pp:?} {way:?}"
     );
     assert!(
-        way[0] + way[2] > lane[0] + lane[2] - 30.0,
-        "at the right: {way:?}"
+        way[0] > pp[0] + pp[2],
+        "the board's way after it: {pp:?} {way:?}"
     );
-    let chip = c.shapes.iter().any(|sh| {
-        same_rgb(sh.fill, style::surface_fill(style::Surface::Lifted))
-            && sh.params[0] == style::radius::SMALL
-            && inside(
-                [way[0] + way[2] / 2.0, way[1] + way[3] / 2.0],
-                rect(sh),
-                0.0,
-            )
-    });
-    assert!(chip, "on a chip as the other buttons");
+    let lifted = |r: [f32; 4]| {
+        c.shapes.iter().any(|sh| {
+            same_rgb(sh.fill, style::surface_fill(style::Surface::Lifted))
+                && sh.params[0] == style::radius::SMALL
+                && inside([r[0] + r[2] / 2.0, r[1] + r[3] / 2.0], rect(sh), 0.0)
+        })
+    };
+    assert!(lifted(pp) && lifted(way), "both on chips alike");
+    let shown = texts_in(&c, pp);
+    for want in ["SS", "99%", "98%"] {
+        assert!(shown.iter().any(|t| t == want), "{want} on it: {shown:?}");
+    }
     assert!(
         !texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT])
             .iter()
             .any(|t| t.starts_with("click / drag")),
         "no hint under the timeline"
+    );
+}
+
+#[test]
+fn the_pp_button_opens_a_simulator_of_accuracy_and_misses() {
+    let (mut s, _songs, mut now) = menu_look("select-look-pp-sim");
+    settled(&mut s, &mut now);
+    s.click(Hit::PpSim, None);
+    let c = settled(&mut s, &mut now);
+    let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the simulator");
+    let shown = texts_in(&c, pp);
+    assert!(shown.iter().any(|t| t == "98.00%"), "at 98%: {shown:?}");
+    let at_98 = s.preview.sim_pp.expect("its pp");
+    assert!(
+        shown.iter().any(|t| *t == format!("{at_98:.0}pp")),
+        "{shown:?}"
+    );
+    let full = s.preview.potential.expect("the full-combo pp");
+    assert!(
+        (at_98 - full[2]).abs() < 1.0,
+        "as the 98% chip: {at_98} vs {}",
+        full[2]
+    );
+    // A miss and less accuracy give less.
+    for hit in [
+        Hit::PpSimStep(1, 1),
+        Hit::PpSimStep(0, -1),
+        Hit::PpSimStep(0, -1),
+    ] {
+        assert!(hit_rect(&c, |h| *h == hit).is_some(), "{hit:?} drawn");
+        s.click(hit, None);
+    }
+    let c = settled(&mut s, &mut now);
+    let sim = s.preview.sim.expect("still open");
+    assert_eq!(sim.misses, 1);
+    assert!((sim.accuracy - 0.97).abs() < 1e-9, "{}", sim.accuracy);
+    let lower = s.preview.sim_pp.expect("its pp");
+    assert!(lower < at_98, "{lower} under {at_98}");
+    assert!(texts_in(&c, pp).iter().any(|t| t == "97.00%"));
+    s.click(Hit::PpSim, None);
+    let c = settled(&mut s, &mut now);
+    assert!(s.preview.sim.is_none(), "closed again");
+    assert!(
+        texts_in(&c, pp).iter().any(|t| t == "SS"),
+        "the full-combo chips back"
     );
 }

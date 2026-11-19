@@ -176,6 +176,39 @@ pub(crate) fn left_out_text(left_out: &[taiko_logic::tja::Unsupported]) -> Strin
 type StatCell = (&'static str, String, f32);
 type StatRow<'a> = Vec<&'a StatCell>;
 
+/// The pp simulator's pick: the accuracy (0 to 1) and the misses of a play.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PpSim {
+    pub accuracy: f64,
+    pub misses: u32,
+}
+
+/// How far a step of the simulator moves its accuracy.
+const SIM_ACC_STEP: f64 = 0.005;
+
+impl PpSim {
+    /// A step of field `field` (0: accuracy, 1: misses) `dir` (-1 or 1) on.
+    pub fn step(&mut self, field: u8, dir: i32) {
+        if field == 0 {
+            self.accuracy = (self.accuracy + SIM_ACC_STEP * f64::from(dir)).clamp(0.5, 1.0);
+        } else {
+            self.misses = self.misses.saturating_add_signed(dir).min(9999);
+        }
+    }
+
+    /// The play it stands for on a map of `notes` notes: its greats, oks and misses, the
+    /// accuracy as close as those can come.
+    pub fn counts(&self, notes: u32) -> (u32, u32, u32) {
+        let miss = self.misses.min(notes);
+        let hits = notes - miss;
+        // accuracy = (great + ok / 2) / notes, great + ok = hits.
+        let ok = (2.0 * (f64::from(hits) - self.accuracy * f64::from(notes)))
+            .round()
+            .clamp(0.0, f64::from(hits)) as u32;
+        (hits - ok, ok, miss)
+    }
+}
+
 #[derive(Default)]
 pub struct Preview {
     seen: Option<usize>,
@@ -278,6 +311,14 @@ pub struct Preview {
     /// from the last song's to the new one's.
     stars_shown: Option<f32>,
     pp_shown: Option<[f64; 3]>,
+    /// The pp simulator in place of the full-combo chips (bare): what's picked, and the pp it
+    /// would give, which song select works out.
+    pub sim: Option<PpSim>,
+    pub sim_pp: Option<f64>,
+    /// Bare: room at the right of the pp row for the way to the leaderboard (song select's), and
+    /// where it goes as last drawn.
+    pub board_w: f32,
+    pub board_at: Option<[f32; 4]>,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
     /// changes per unit of that (for dragging the panel's bottom edge).
     pub size: f32,
@@ -941,9 +982,29 @@ impl Preview {
     }
 
     /// The panel isn't on screen: nothing of it is there to press.
+    /// The shown map's notes, once it's read.
+    pub fn notes(&self) -> Option<u32> {
+        self.map
+            .as_ref()
+            .filter(|(mi, ..)| Some(*mi) == self.seen)
+            .map(|(_, _, d, _)| (d.dons + d.kats) as u32)
+    }
+
+    /// Opens the pp simulator (at 98%, no misses) or closes it.
+    pub fn toggle_sim(&mut self) {
+        self.sim = match self.sim {
+            Some(_) => None,
+            None => Some(PpSim {
+                accuracy: 0.98,
+                misses: 0,
+            }),
+        };
+    }
+
     pub fn hide_panel(&mut self) {
         self.graph_rect = None;
         self.play_rect = None;
+        self.board_at = None;
     }
 
     /// The map whose music plays, and where it is (map ms).
@@ -1040,16 +1101,11 @@ impl Preview {
             !self.bare,
         );
         self.graph_rect = Some(rect);
-        // Bare, the row under it ends in the way to the leaderboard (`title_room` wide), and
-        // there's no hint: the timeline is plain enough.
-        let (room, hint) = if self.bare {
-            (self.title_room, false)
-        } else {
-            (0.0, true)
-        };
+        // Bare, there's no hint: the timeline is plain enough.
+        let hint = !self.bare;
         self.play_rect = draw_play_button(
             c,
-            rect[0] + (rect[2] - room) / 2.0,
+            rect[0] + rect[2] / 2.0,
             rect[1] + rect[3] + 17.0,
             marker,
             button,
@@ -1308,23 +1364,80 @@ impl Preview {
         cy += BAR_H + BLOCK_GAP;
         self.enter(c, part, 230.0);
 
-        // What a full combo would give, as three chips, counting from the last song's; three
-        // skeletons while the map is being read.
+        // What a full combo would give, on one button that opens the pp simulator in its place,
+        // counting from the last song's; a skeleton while the map is being read. The way to
+        // the leaderboard ends the row (song select draws it at `board_at`).
         let part = c.shapes.len();
         let pp_now = follow_pp(&mut self.pp_shown, self.potential, c.dt_ms);
-        if pp_now.is_none() && d.is_none() {
-            let pw = (iw - 2.0 * space::CARD_GAP) / 3.0;
-            for k in 0..3 {
-                let px = lx + k as f32 * (pw + space::CARD_GAP);
-                crate::style::skeleton(c, [px, cy, pw, PP_H], PP_H / 2.0);
+        let room = if self.board_w > 0.0 {
+            self.board_w + space::CARD_GAP
+        } else {
+            0.0
+        };
+        let row_w = (iw - room).max(0.0);
+        self.board_at =
+            (self.board_w > 0.0).then_some([lx + iw - self.board_w, cy, self.board_w, PP_H]);
+        let ty = cy + (PP_H - Canvas::text_height(text::BODY)) / 2.0;
+        if let Some(sim) = self.sim {
+            surface(
+                c,
+                [lx, cy, row_w, PP_H],
+                crate::style::radius::SMALL,
+                Surface::Lifted,
+            );
+            c.hit(lx, cy, row_w, PP_H, Hit::PpSim);
+            let mut tx = lx + 8.0;
+            let shown = [
+                ("ACC", format!("{:.2}%", sim.accuracy * 100.0)),
+                (tr!("MISS", "ミス", "ПРОМАХИ"), sim.misses.to_string()),
+            ];
+            for (field, (label, value)) in shown.iter().enumerate() {
+                tx += c.text(tx, ty + 1.0, text::CAPTION, rgba(ink::CAPTION, 1.0), label) + 4.0;
+                for (dir, mark) in [(-1, "-"), (1, "+")] {
+                    if dir == 1 {
+                        tx += c.text(tx, ty, text::BODY, rgba(ink::PRIMARY, 1.0), value) + 4.0;
+                    }
+                    let bw = 12.0;
+                    surface(
+                        c,
+                        [tx, cy + 2.0, bw, PP_H - 4.0],
+                        crate::style::radius::SMALL,
+                        Surface::Raised,
+                    );
+                    let mw = Canvas::text_width(text::BODY, mark);
+                    c.text(
+                        tx + (bw - mw) / 2.0,
+                        ty,
+                        text::BODY,
+                        rgba(ink::SECONDARY, 1.0),
+                        mark,
+                    );
+                    c.hit(tx, cy, bw, PP_H, Hit::PpSimStep(field as u8, dir));
+                    tx += bw + 4.0;
+                }
+                tx += 8.0;
             }
-        }
-        if let Some(pp) = pp_now {
-            let pw = (iw - 2.0 * space::CARD_GAP) / 3.0;
+            let pp = self
+                .sim_pp
+                .map_or_else(|| "...".to_string(), |pp| format!("{pp:.0}pp"));
+            c.text_right(
+                lx + row_w - 8.0,
+                ty,
+                text::BODY,
+                rgba(ink::PRIMARY, 1.0),
+                &pp,
+            );
+        } else if let Some(pp) = pp_now {
+            surface(
+                c,
+                [lx, cy, row_w, PP_H],
+                crate::style::radius::SMALL,
+                Surface::Lifted,
+            );
+            c.hit(lx, cy, row_w, PP_H, Hit::PpSim);
+            let third = row_w / 3.0;
             for (k, (label, pp)) in ["SS", "99%", "98%"].into_iter().zip(pp).enumerate() {
-                let px = lx + k as f32 * (pw + space::CARD_GAP);
-                surface(c, [px, cy, pw, PP_H], PP_H / 2.0, Surface::Lifted);
-                let ty = cy + (PP_H - Canvas::text_height(text::BODY)) / 2.0;
+                let px = lx + k as f32 * third;
                 let lw = c.text(
                     px + 8.0,
                     ty + 1.0,
@@ -1332,7 +1445,7 @@ impl Preview {
                     rgba(ink::CAPTION, 1.0),
                     label,
                 );
-                let value = Canvas::fit(text::BODY, pw - 20.0 - lw, &format!("{pp:.0}pp"));
+                let value = Canvas::fit(text::BODY, third - 16.0 - lw, &format!("{pp:.0}pp"));
                 c.text(
                     px + 12.0 + lw,
                     ty,
@@ -1341,6 +1454,8 @@ impl Preview {
                     &value,
                 );
             }
+        } else if d.is_none() {
+            crate::style::skeleton(c, [lx, cy, row_w, PP_H], crate::style::radius::SMALL);
         }
         self.enter(c, part, 260.0);
         cy += PP_H;
@@ -1495,6 +1610,7 @@ impl Preview {
         self.graph_rect = None;
         self.play_rect = None;
         self.box_rect = None;
+        self.board_at = None;
         let Some(i) = self.seen.filter(|&i| i < library.len()) else {
             (self.size_cap, self.size_shown) = (fitted(110.0), wanted.min(fitted(110.0)));
             let below = unit * self.size_shown + 12.0 + after_box;
@@ -2694,5 +2810,54 @@ mod background_tests {
         assert!(p.bg_path.is_none() && !p.has_background);
         assert!(matches!(p.bg_upload, Some(None)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod sim_tests {
+    use super::PpSim;
+
+    #[test]
+    fn a_simulated_play_comes_as_near_its_accuracy_as_whole_hits_can() {
+        let sim = PpSim {
+            accuracy: 0.98,
+            misses: 2,
+        };
+        let (great, ok, miss) = sim.counts(1000);
+        assert_eq!(great + ok + miss, 1000);
+        assert_eq!(miss, 2);
+        let acc = (f64::from(great) + f64::from(ok) / 2.0) / 1000.0;
+        assert!((acc - 0.98).abs() <= 0.0005, "{acc}");
+        // More accuracy than the misses leave room for: all the rest greats.
+        let sim = PpSim {
+            accuracy: 1.0,
+            misses: 10,
+        };
+        assert_eq!(sim.counts(100), (90, 0, 10));
+        // More misses than notes.
+        assert_eq!(
+            PpSim {
+                accuracy: 0.9,
+                misses: 500
+            }
+            .counts(100),
+            (0, 0, 100)
+        );
+    }
+
+    #[test]
+    fn its_steps_stay_in_reach() {
+        let mut sim = PpSim {
+            accuracy: 0.998,
+            misses: 0,
+        };
+        sim.step(0, 1);
+        assert_eq!(sim.accuracy, 1.0);
+        sim.step(1, -1);
+        assert_eq!(sim.misses, 0);
+        sim.step(1, 1);
+        sim.step(0, -1);
+        assert_eq!(sim.misses, 1);
+        assert!((sim.accuracy - 0.995).abs() < 1e-9);
     }
 }
