@@ -6,56 +6,55 @@ text   49,28   Menu
 text  649,28   7 songs, 7 maps  |  taiko only
 text  420,31   artist
 text   36,58   basics
-text  494,60   basics
 text  416,63   1 diff
 text  739,65   Leaderboard
 text   36,72   Regression  |  mapped by tests
-text  494,79   Regression
+text  494,78   basics
 text   56,92   basics
 text  430,92   3.16
-text  494,98   mapped by tests
-text  731,98   NOT SUBMITTED
+text  494,100  Regression
 text   48,114  big-notes
-text  495,117  [basics]
-text  780,117  3.16
 text  416,119  1 diff
+text  494,121  mapped by
+text  562,121  tests
+text  742,122  NOT SUBMITTED
 text   48,128  Regression  |  mapped by tests
-text  494,135  OD
-text  514,135  7.0
-text  545,135  BPM
-text  572,135  200
-text  603,135  Length
-text  651,135  0:09
-text  494,147  Notes
-text  535,147  64
-text  559,147  Don
-text  586,147  32
-text  610,147  Kat
-text  637,147  32
+text  769,142  3.16
+text  502,144  basics
 text   48,148  rolls-and-swells
 text  416,153  1 diff
-text  494,159  SS
-text  515,159  130pp
-text  559,159  99%
-text  587,159  117pp
-text  630,159  98%
-text  658,159  99pp
 text   48,162  Regression  |  mapped by tests
+text  500,170  OD
+text  581,170  BPM
+text  663,170  LENGTH
+text  744,170  NOTES
+text  500,178  7.0
+text  581,178  200
+text  663,178  0:09
+text  744,178  64
 text   48,182  sv-and-kiai
 text  416,187  1 diff
 text   48,196  Regression  |  mapped by tests
+text  494,203  32 DON
+text  784,203  32 KAT
 text   48,216  stream
 text  416,221  1 diff
+text  517,229  130pp
+text  631,229  117pp
+text  738,229  99pp
 text   48,230  Regression  |  mapped by tests
+text  502,230  SS
+text  610,230  99%
+text  719,230  98%
 text   49,250  low-od
 text  416,255  1 diff
 text   48,264  Regression  |  mapped by tests
 text   48,284  high-od
 text  416,289  1 diff
-text  490,291  0:00 / 0:10
-text  675,291  peak 7.0 notes/s at 0:01
 text   48,298  Regression  |  mapped by tests
-text  508,307  click / drag / wheel to scroll - play from where you stop
+text  490,365  0:00 / 0:10
+text  675,365  peak 7.0 notes/s at 0:01
+text  508,381  click / drag / wheel to scroll - play from where you stop
 text  751,428  Play
 text  513,429  Mods HR HD
 text  628,429  Random
@@ -71,9 +70,9 @@ hit    36,210   432x34   SongHeader(4)
 hit    36,244   432x34   SongHeader(5)
 hit    36,278   432x34   SongHeader(6)
 hit     4,52     20x402  SongScrollbar
-hit   701,95     16x13   SelectLike
-hit   490,177   330x61   Preview
-hit   488,244   334x44   Preview
+hit   712,118    16x13   SelectLike
+hit   490,251   330x61   Preview
+hit   488,318   334x44   Preview
 hit   716,56     95x24   BoardPage
 hit   490,421    98x24   ModsButton
 hit   605,421    70x24   Key(F2)

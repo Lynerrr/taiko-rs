@@ -68,6 +68,7 @@ impl Song {
 /// A decode result: (track, base frame, whether it is the whole song), or None if it failed.
 type Decoded = (PathBuf, Option<(Arc<Track>, i64, bool)>);
 
+#[derive(Clone, Copy)]
 pub struct Details {
     pub bpm: (f64, f64),
     pub length_ms: f64,
@@ -219,6 +220,8 @@ pub struct Preview {
     pub epic: bool,
     /// Where `draw_panel` put the EPIC pill (left, top), for the effects round it.
     pub epic_at: Option<[f32; 2]>,
+    /// The picture the bare details' banner shows and when it was first drawn (it fades in).
+    banner_seen: Option<(PathBuf, Instant)>,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
     /// changes per unit of that (for dragging the panel's bottom edge).
     pub size: f32,
@@ -1008,6 +1011,277 @@ impl Preview {
         Some(self.timeline.0 + f * (self.timeline.1 - self.timeline.0))
     }
 
+    /// The details in song select's main menu look at `[x, y, w]` (`l` laid out for them):
+    /// a banner of the map's picture fading out downwards with the title and the artist over
+    /// it, the mapper's line (with the EPIC pill, the status, the heart at its right), the
+    /// difficulty as a chip in its rating's colour beside its rating pill, the stats as tiles
+    /// (a caption over a value), Don and Kat as one bar split in proportion, and the pp as
+    /// three chips. Returns where the OD tile's hit windows go when it's under the pointer.
+    fn draw_bare_details(
+        &mut self,
+        c: &mut Canvas,
+        e: &Entry,
+        l: &Bare,
+        [x, y, w]: [f32; 3],
+        shown: &BareShown,
+    ) -> Option<(f32, f32)> {
+        use crate::style::{Surface, ink, role, space, surface, surface_fill, text};
+        let (lx, iw) = (x + 14.0, w - 28.0);
+        self.draw_banner(c, e, [x, y, w, BANNER_H]);
+        let mut cy = y + BANNER_TOP;
+        for line in &l.title {
+            c.text(lx, cy, l.title_size, rgba(ink::PRIMARY, 1.0), line);
+            cy += Canvas::text_height(l.title_size) + 4.0;
+        }
+        c.text(lx, cy, l.artist_size, rgba(ink::SECONDARY, 1.0), &l.artist);
+        cy += Canvas::text_height(l.artist_size) + 6.0;
+
+        // The mapper's line: the EPIC pill (bumping on the beat) or the status at its right,
+        // the heart left of that.
+        self.epic_at = None;
+        let mut right = x + w - 14.0;
+        if self.epic {
+            let pw = crate::epic::pill_width();
+            right -= pw;
+            crate::epic::pill(c, right, cy, 1.0, crate::style::pulse());
+            self.epic_at = Some([right, cy]);
+            right -= 8.0;
+        } else if let Some((label, col)) = shown.status.filter(|s| !s.0.is_empty()) {
+            let cw = Canvas::text_width(text::CAPTION, label) + 12.0;
+            right -= cw;
+            let fill = rgba(col, 0.22);
+            c.round_rect([right, cy], [cw, MAPPER_H], MAPPER_H / 2.0, fill, fill, 0.0);
+            let ty = cy + (MAPPER_H - Canvas::text_height(text::CAPTION)) / 2.0;
+            c.text_centered(right + cw / 2.0, ty, text::CAPTION, rgba(col, 1.0), label);
+            right -= 8.0;
+        }
+        if let Some(liked) = shown.liked {
+            const HEART_W: f32 = 16.0;
+            right -= HEART_W;
+            let hover = c.hovered(right, cy, HEART_W, MAPPER_H);
+            let colour = match (liked, hover) {
+                (true, _) => 0xff5fa2,
+                (false, true) => ink::SECONDARY,
+                (false, false) => ink::CAPTION,
+            };
+            crate::player::draw_heart(c, right + 3.5, cy + 2.5, 1.0, colour);
+            c.hit(right, cy, HEART_W, MAPPER_H, Hit::SelectLike);
+            right -= 6.0;
+        }
+        let ty = cy + (MAPPER_H - Canvas::text_height(text::BODY)) / 2.0;
+        let by = tr!("mapped by ", "譜面: ", "маппер: ");
+        let bw = c.text(lx, ty, text::BODY, rgba(ink::CAPTION, 1.0), by);
+        let name = Canvas::fit(text::BODY, (right - lx - bw).max(0.0), &e.meta.creator);
+        c.text(lx + bw, ty, text::BODY, rgba(ink::PRIMARY, 1.0), &name);
+        cy += MAPPER_H + BLOCK_GAP;
+
+        // The difficulty: a chip of its rating's colour, its rating pill at the right.
+        let level = e.meta.level;
+        let pill_w =
+            crate::style::map_pill(c, x + w - 14.0, cy + 3.0, text::HEADING, level, shown.stars);
+        let chip = role::rating(level, shown.stars);
+        let luma = 0.299 * (chip >> 16 & 0xff) as f32
+            + 0.587 * (chip >> 8 & 0xff) as f32
+            + 0.114 * (chip & 0xff) as f32;
+        let chip_ink = if luma > 140.0 { 0x15151d } else { ink::PRIMARY };
+        let room = (iw - pill_w - space::SECTION - 16.0).max(0.0);
+        let name = Canvas::fit(text::BODY, room, &e.meta.version);
+        let cw = Canvas::text_width(text::BODY, &name) + 16.0;
+        let fill = rgba(chip, 1.0);
+        c.round_rect([lx, cy], [cw, CHIP_H], 5.0, fill, fill, 0.0);
+        let ty = cy + (CHIP_H - Canvas::text_height(text::BODY)) / 2.0;
+        c.text(lx + 8.0, ty, text::BODY, rgba(chip_ink, 1.0), &name);
+        cy += CHIP_H + BLOCK_GAP;
+
+        // The stats as tiles: a caption over its value. OD is known at once, the rest when the
+        // map is read (they fade in with it).
+        let speed = self.requested_rate.0.max(0.01);
+        let od = crate::beatmap::od_at_rate(
+            self.mods.od_with(e.meta.od, crate::od_override::get()),
+            self.requested_rate.0,
+        );
+        let d = shown.details;
+        let mut tiles: Vec<(&str, String, f32)> =
+            vec![(tr!("OD", "OD", "OD"), format!("{od:.1}"), 1.0)];
+        let later = |v: Option<String>| v.unwrap_or_default();
+        tiles.push((
+            tr!("BPM", "BPM", "BPM"),
+            later(d.map(|d| {
+                if (d.bpm.1 - d.bpm.0).abs() < 0.5 {
+                    format!("{:.0}", d.bpm.0 * speed)
+                } else {
+                    format!("{:.0}-{:.0}", d.bpm.0 * speed, d.bpm.1 * speed)
+                }
+            })),
+            shown.fade,
+        ));
+        tiles.push((
+            tr!("LENGTH", "長さ", "ДЛИНА"),
+            later(d.map(|d| fmt_time(d.length_ms / speed))),
+            shown.fade,
+        ));
+        tiles.push((
+            tr!("NOTES", "ノーツ", "НОТЫ"),
+            later(d.map(|d| (d.dons + d.kats).to_string())),
+            shown.fade,
+        ));
+        if self.map_offset != 0.0 {
+            let offset = format!("{:+.0}", self.map_offset);
+            tiles.push((tr!("OFFSET", "オフセット", "ОФФСЕТ"), offset, 1.0));
+        }
+        let n = tiles.len() as f32;
+        let tw = (iw - (n - 1.0) * space::CARD_GAP) / n;
+        let mut od_hovered = None;
+        for (k, (caption, value, alpha)) in tiles.iter().enumerate() {
+            let tx = lx + k as f32 * (tw + space::CARD_GAP);
+            surface(c, [tx, cy, tw, TILE_H], 4.0, Surface::Raised);
+            let room = tw - 12.0;
+            let caption = Canvas::fit(text::CAPTION, room, caption);
+            c.text(
+                tx + 6.0,
+                cy + 5.0,
+                text::CAPTION,
+                rgba(ink::CAPTION, 1.0),
+                &caption,
+            );
+            let value = Canvas::fit(text::HEADING, room, value);
+            c.text(
+                tx + 6.0,
+                cy + 13.0,
+                text::HEADING,
+                rgba(ink::PRIMARY, *alpha),
+                &value,
+            );
+            if k == 0 && c.hovered(tx, cy, tw, TILE_H) {
+                od_hovered = Some((tx, cy + TILE_H));
+            }
+        }
+        cy += TILE_H + BLOCK_GAP;
+
+        // Don and Kat as one bar split in proportion, the counts at its ends, rolls and swells
+        // between them.
+        let notes = crate::game::note_colours();
+        let caption_h = Canvas::text_height(text::CAPTION);
+        let bar_y = cy + caption_h + 3.0;
+        let bar_h = BAR_H - caption_h - 3.0;
+        match d.filter(|d| d.dons + d.kats > 0) {
+            Some(d) => {
+                let a = shown.fade;
+                let dw = iw * d.dons as f32 / (d.dons + d.kats) as f32;
+                c.rect(lx, bar_y, dw, bar_h, rgba(notes.don(), a));
+                c.rect(lx + dw, bar_y, iw - dw, bar_h, rgba(notes.kat(), a));
+                let quiet = rgba(ink::CAPTION, a);
+                let dons = format!("{} {}", d.dons, tr!("DON", "ドン", "ДОН"));
+                let kats = format!("{} {}", d.kats, tr!("KAT", "カッ", "КАТ"));
+                c.text(lx, cy, text::CAPTION, quiet, &dons);
+                c.text_right(lx + iw, cy, text::CAPTION, quiet, &kats);
+                let mut extra = Vec::new();
+                if d.rolls > 0 {
+                    extra.push(format!("{} {}", d.rolls, tr!("ROLLS", "連打", "РОЛЛЫ")));
+                }
+                if d.swells > 0 {
+                    extra.push(format!("{} {}", d.swells, tr!("SWELLS", "風船", "БАЛЛОНЫ")));
+                }
+                if !extra.is_empty() {
+                    c.text_centered(lx + iw / 2.0, cy, text::CAPTION, quiet, &extra.join("  "));
+                }
+            }
+            None => {
+                let fill = surface_fill(Surface::Lifted);
+                c.rect(lx, bar_y, iw, bar_h, fill);
+            }
+        }
+        cy += BAR_H + BLOCK_GAP;
+
+        // What a full combo would give, as three chips.
+        if let Some(pp) = self.potential {
+            let pw = (iw - 2.0 * space::CARD_GAP) / 3.0;
+            for (k, (label, pp)) in ["SS", "99%", "98%"].into_iter().zip(pp).enumerate() {
+                let px = lx + k as f32 * (pw + space::CARD_GAP);
+                surface(c, [px, cy, pw, PP_H], PP_H / 2.0, Surface::Lifted);
+                let ty = cy + (PP_H - Canvas::text_height(text::BODY)) / 2.0;
+                let lw = c.text(
+                    px + 8.0,
+                    ty + 1.0,
+                    text::CAPTION,
+                    rgba(ink::CAPTION, 1.0),
+                    label,
+                );
+                let value = Canvas::fit(text::BODY, pw - 20.0 - lw, &format!("{pp:.0}pp"));
+                c.text(
+                    px + 12.0 + lw,
+                    ty,
+                    text::BODY,
+                    rgba(ink::PRIMARY, 1.0),
+                    &value,
+                );
+            }
+        }
+        cy += PP_H;
+        if let (true, Some(what)) = (l.left_out, shown.left_out) {
+            cy += 4.0;
+            let label = format!("{} ", left_out_label());
+            let lw = c.text(
+                lx,
+                cy,
+                text::CAPTION,
+                rgba(ink::CAPTION, shown.fade),
+                &label,
+            );
+            let what = Canvas::fit(text::CAPTION, iw - lw, what);
+            c.text(
+                lx + lw,
+                cy,
+                text::CAPTION,
+                rgba(ink::SECONDARY, shown.fade),
+                &what,
+            );
+        }
+        od_hovered
+    }
+
+    /// The map's picture over `[x, y, w, h]` (cover-cropped), whole down to `BANNER_WHOLE` of
+    /// it and then fading out strip by strip, a shade over it deepening downwards so the title
+    /// reads. It fades in when it first arrives; nothing until then.
+    fn draw_banner(&mut self, c: &mut Canvas, e: &Entry, rect: [f32; 4]) {
+        let Some(bg) = background_path(e) else {
+            return;
+        };
+        let since = self
+            .banner_seen
+            .as_ref()
+            .filter(|(p, _)| *p == bg)
+            .map(|(_, t)| *t);
+        let a = match since {
+            Some(t) => crate::render::progress(t, crate::style::motion::CONTENT_MS),
+            None if crate::render::animations() => 0.0,
+            None => 1.0,
+        };
+        let [x, y, w, h] = rect;
+        let sh = h / BANNER_STRIPS as f32;
+        let edge = |k: usize| crate::render::snap_to_grid(y + k as f32 * sh);
+        let mut drawn = false;
+        for k in 0..BANNER_STRIPS {
+            let mid = (k as f32 + 0.5) / BANNER_STRIPS as f32;
+            let t = ((mid - BANNER_WHOLE) / (1.0 - BANNER_WHOLE)).clamp(0.0, 1.0);
+            let keep = 1.0 - t * t * (3.0 - 2.0 * t);
+            let (top, bottom) = (edge(k), edge(k + 1));
+            let strip = [x, top, w, bottom - top];
+            drawn |= c.picture_cover_clipped(&bg, rect, strip, [1.0, 1.0, 1.0, a * keep]);
+            let shade = (0.2 + 0.45 * mid) * keep * a;
+            c.rect(
+                x,
+                top,
+                w,
+                bottom - top,
+                rgba(crate::style::SURFACE_1, shade),
+            );
+        }
+        if drawn && since.is_none() {
+            self.banner_seen = Some((bg, crate::render::frame_now()));
+        }
+    }
+
     /// Details and the autoplay preview in the right-hand panel (virtual units). Returns the
     /// shape range to clip and the clip area.
     #[allow(clippy::too_many_arguments)]
@@ -1199,6 +1473,10 @@ impl Preview {
             + 6.0
             + stat_rows as f32 * row_h
             + 6.0;
+        // Bare: the banner layout, of its own height.
+        let left_out_text = stats[3].first().map(|cell| cell.1.clone());
+        let bare_layout = self.bare.then(|| Bare::new(e, iw, left_out_text.is_some()));
+        let head = bare_layout.as_ref().map_or(head, |l| l.head);
         (self.size_cap, self.size_shown) = (fitted(head), wanted.min(fitted(head)));
         // The lane fills the panel's width (at the size chosen), however little room the details
         // leave: the panel grows down, into the leaderboard's room, rather than the lane shrink.
@@ -1241,125 +1519,139 @@ impl Preview {
             );
         }
 
+        // The OD under the pointer: where its hit windows go, once all else is drawn.
+        let mut od_hovered = None;
         let mut cy = y + 12.0;
-        for line in &title {
-            c.text(
-                lx,
-                cy,
-                crate::style::text::HEADING,
-                rgba(0xffffff, 1.0),
-                line,
-            );
-            cy += title_step;
-        }
-        cy += 3.0;
-        // Outside the bare look the panel keeps its own greys.
-        let bare = self.bare;
-        let ink = |bare_ink: u32, boxed: u32| if bare { bare_ink } else { boxed };
-        for line in &artist {
-            let col = ink(crate::style::ink::SECONDARY, 0xc8c8d8);
-            c.text(lx, cy, 9.0, rgba(col, 1.0), line);
-            cy += body_step;
-        }
-        cy += 4.0;
-        // The EPIC mark at the very right of the mapper's line, bumping on the beat. It stands in
-        // the status's place, as on the website: the map's osu! status isn't shown with it.
-        self.epic_at = None;
-        let epic_w = if self.epic {
-            let pw = crate::epic::pill_width();
-            let ex = x + w - 14.0 - pw;
-            crate::epic::pill(c, ex, cy, 1.0, crate::style::pulse());
-            self.epic_at = Some([ex, cy]);
-            pw + 8.0
+        let is_loaded = loaded.is_some();
+        if let Some(l) = &bare_layout {
+            let shown = BareShown {
+                stars,
+                status,
+                liked,
+                details: loaded.map(|(_, _, d, _)| *d),
+                left_out: left_out_text.as_deref(),
+                fade,
+            };
+            od_hovered = self.draw_bare_details(c, e, l, [x, y, w], &shown);
+            cy = y + head;
         } else {
-            0.0
-        };
-        // Otherwise the status on osu!.
-        let status_w = epic_w
-            + match status.filter(|s| !s.0.is_empty() && !self.epic) {
-                Some((label, col)) => {
-                    let lw = Canvas::text_width(7.0, label) + 12.0;
-                    let sx = x + w - 14.0 - epic_w - lw;
-                    // Bare, the chip is its colour's tone alone, no edge.
-                    let (fill, edge) = if bare {
-                        (rgba(col, 0.22), 0.0)
-                    } else {
-                        (rgba(col, 0.15), 1.0)
+            for line in &title {
+                c.text(
+                    lx,
+                    cy,
+                    crate::style::text::HEADING,
+                    rgba(0xffffff, 1.0),
+                    line,
+                );
+                cy += title_step;
+            }
+            cy += 3.0;
+            // Outside the bare look the panel keeps its own greys.
+            let bare = self.bare;
+            let ink = |bare_ink: u32, boxed: u32| if bare { bare_ink } else { boxed };
+            for line in &artist {
+                let col = ink(crate::style::ink::SECONDARY, 0xc8c8d8);
+                c.text(lx, cy, 9.0, rgba(col, 1.0), line);
+                cy += body_step;
+            }
+            cy += 4.0;
+            // The EPIC mark at the very right of the mapper's line, bumping on the beat. It stands in
+            // the status's place, as on the website: the map's osu! status isn't shown with it.
+            self.epic_at = None;
+            let epic_w = if self.epic {
+                let pw = crate::epic::pill_width();
+                let ex = x + w - 14.0 - pw;
+                crate::epic::pill(c, ex, cy, 1.0, crate::style::pulse());
+                self.epic_at = Some([ex, cy]);
+                pw + 8.0
+            } else {
+                0.0
+            };
+            // Otherwise the status on osu!.
+            let status_w = epic_w
+                + match status.filter(|s| !s.0.is_empty() && !self.epic) {
+                    Some((label, col)) => {
+                        let lw = Canvas::text_width(7.0, label) + 12.0;
+                        let sx = x + w - 14.0 - epic_w - lw;
+                        // Bare, the chip is its colour's tone alone, no edge.
+                        let (fill, edge) = if bare {
+                            (rgba(col, 0.22), 0.0)
+                        } else {
+                            (rgba(col, 0.15), 1.0)
+                        };
+                        c.round_rect([sx, cy], [lw, 13.0], 6.5, fill, rgba(col, 0.9), edge);
+                        c.text_centered(sx + lw / 2.0, cy + 3.0, 7.0, rgba(col, 1.0), label);
+                        lw + 8.0
+                    }
+                    None => 0.0,
+                };
+            // The heart, left of the status: whether the song's liked, and a click changes it.
+            let heart_w = match liked {
+                Some(liked) => {
+                    const HEART_W: f32 = 16.0;
+                    let hx = x + w - 14.0 - status_w - HEART_W;
+                    let hover = c.hovered(hx, cy, HEART_W, 13.0);
+                    let colour = match (liked, hover) {
+                        (true, _) => 0xff5fa2,
+                        (false, true) => 0xc8c8d8,
+                        (false, false) => 0x5a5a70,
                     };
-                    c.round_rect([sx, cy], [lw, 13.0], 6.5, fill, rgba(col, 0.9), edge);
-                    c.text_centered(sx + lw / 2.0, cy + 3.0, 7.0, rgba(col, 1.0), label);
-                    lw + 8.0
+                    crate::player::draw_heart(c, hx + 3.5, cy + 2.5, 1.0, colour);
+                    c.hit(hx, cy, HEART_W, 13.0, Hit::SelectLike);
+                    HEART_W + 6.0
                 }
                 None => 0.0,
             };
-        // The heart, left of the status: whether the song's liked, and a click changes it.
-        let heart_w = match liked {
-            Some(liked) => {
-                const HEART_W: f32 = 16.0;
-                let hx = x + w - 14.0 - status_w - HEART_W;
-                let hover = c.hovered(hx, cy, HEART_W, 13.0);
-                let colour = match (liked, hover) {
-                    (true, _) => 0xff5fa2,
-                    (false, true) => 0xc8c8d8,
-                    (false, false) => 0x5a5a70,
-                };
-                crate::player::draw_heart(c, hx + 3.5, cy + 2.5, 1.0, colour);
-                c.hit(hx, cy, HEART_W, 13.0, Hit::SelectLike);
-                HEART_W + 6.0
+            let mapper = Canvas::fit(
+                8.0,
+                iw - status_w - heart_w,
+                &format!("mapped by {}", e.meta.creator),
+            );
+            c.text(
+                lx,
+                cy + (13.0 - th_small) / 2.0,
+                8.0,
+                rgba(ink(crate::style::ink::CAPTION, 0x8a8aa0), 1.0),
+                &mapper,
+            );
+            cy += 13.0 + 6.0;
+            crate::style::map_pill(c, x + w - 14.0, cy + 3.0, 9.0, e.meta.level, stars);
+            // The difficulty's name: bare, in its rating's colour (the accent is Play's and the
+            // selection's), else the accent.
+            let version_ink = if bare {
+                crate::style::role::rating_ink(e.meta.level, stars)
+            } else {
+                accent()
+            };
+            for line in &version {
+                c.text(lx, cy + 3.0, 9.0, rgba(version_ink, 1.0), line);
+                cy += body_step;
             }
-            None => 0.0,
-        };
-        let mapper = Canvas::fit(
-            8.0,
-            iw - status_w - heart_w,
-            &format!("mapped by {}", e.meta.creator),
-        );
-        c.text(
-            lx,
-            cy + (13.0 - th_small) / 2.0,
-            8.0,
-            rgba(ink(crate::style::ink::CAPTION, 0x8a8aa0), 1.0),
-            &mapper,
-        );
-        cy += 13.0 + 6.0;
-        crate::style::map_pill(c, x + w - 14.0, cy + 3.0, 9.0, e.meta.level, stars);
-        // The difficulty's name: bare, in its rating's colour (the accent is Play's and the
-        // selection's), else the accent.
-        let version_ink = if bare {
-            crate::style::role::rating_ink(e.meta.level, stars)
-        } else {
-            accent()
-        };
-        for line in &version {
-            c.text(lx, cy + 3.0, 9.0, rgba(version_ink, 1.0), line);
-            cy += body_step;
-        }
-        cy += (15.0 - version.len() as f32 * body_step).max(0.0) + 6.0;
-        // Muted labels, bright values.
-        // The OD under the pointer: where its hit windows go, once all else is drawn.
-        let mut od_hovered = None;
-        for group in &rows {
-            for row in group {
-                let mut sx = lx;
-                for cell @ (label, value, alpha) in row.iter().copied() {
-                    if *label == "OD" && c.hovered(sx, cy - 2.0, cell_w(cell), row_h) {
-                        od_hovered = Some((sx, cy + row_h));
+            cy += (15.0 - version.len() as f32 * body_step).max(0.0) + 6.0;
+            // Muted labels, bright values.
+            for group in &rows {
+                for row in group {
+                    let mut sx = lx;
+                    for cell @ (label, value, alpha) in row.iter().copied() {
+                        if *label == "OD" && c.hovered(sx, cy - 2.0, cell_w(cell), row_h) {
+                            od_hovered = Some((sx, cy + row_h));
+                        }
+                        let (label_ink, value_ink) = if bare {
+                            (crate::style::ink::CAPTION, crate::style::ink::PRIMARY)
+                        } else {
+                            (0x8a8aa0, 0xe8e8f4)
+                        };
+                        let size = crate::style::text::BODY;
+                        sx += c.text(sx, cy, size, rgba(label_ink, *alpha), &format!("{label} "));
+                        sx += c.text(sx, cy, size, rgba(value_ink, *alpha), value) + STAT_GAP;
                     }
-                    let (label_ink, value_ink) = if bare {
-                        (crate::style::ink::CAPTION, crate::style::ink::PRIMARY)
-                    } else {
-                        (0x8a8aa0, 0xe8e8f4)
-                    };
-                    let size = crate::style::text::BODY;
-                    sx += c.text(sx, cy, size, rgba(label_ink, *alpha), &format!("{label} "));
-                    sx += c.text(sx, cy, size, rgba(value_ink, *alpha), value) + STAT_GAP;
+                    cy += row_h;
                 }
-                cy += row_h;
             }
+            cy = cy.max(y + 12.0)
+                + (stat_rows.saturating_sub(rows.iter().map(Vec::len).sum()) as f32) * row_h
+                + 6.0;
         }
-        cy = cy.max(y + 12.0)
-            + (stat_rows.saturating_sub(rows.iter().map(Vec::len).sum()) as f32) * row_h
-            + 6.0;
 
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
         // As wide as the lane at that scale (all of the panel at full size), centred.
@@ -1388,7 +1680,7 @@ impl Preview {
         }
         self.box_rect = Some([bx, by, bw, bh]);
         c.hit(bx, by, lane_end.min(c.width) - bx, bh, Hit::Preview);
-        let loaded = loaded.is_some();
+        let loaded = is_loaded;
         if loaded {
             let graph_start = c.shapes.len();
             self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], button);
@@ -1494,6 +1786,82 @@ pub use crate::config::PREVIEW_SIZE;
 
 /// Space between the stats in the details.
 const STAT_GAP: f32 = 10.0;
+
+/// The details in song select's main menu look (`Preview::bare`): how tall the map picture's
+/// banner is and where the title starts on it (under the leaderboard button's row), the rows'
+/// heights (the mapper's line, the difficulty's chip, the stat tiles, the Don/Kat bar with its
+/// counts, the pp chips, what a TJA course leaves out) and the gaps between the blocks.
+const BANNER_H: f32 = 96.0;
+const BANNER_TOP: f32 = 30.0;
+const MAPPER_H: f32 = 13.0;
+const CHIP_H: f32 = 18.0;
+const TILE_H: f32 = 30.0;
+const BAR_H: f32 = 14.0;
+const PP_H: f32 = 16.0;
+const LEFT_OUT_H: f32 = 12.0;
+const BLOCK_GAP: f32 = 8.0;
+/// The banner's strips (it fades out down them) and how far down it stays whole.
+const BANNER_STRIPS: usize = 12;
+const BANNER_WHOLE: f32 = 0.45;
+
+/// The bare details' text, laid out before anything is drawn (the panel's height follows it):
+/// the title at the title size on one line, or two lines a step smaller; the artist one step
+/// below the title, on one line.
+struct Bare {
+    title_size: f32,
+    title: Vec<String>,
+    artist_size: f32,
+    artist: String,
+    left_out: bool,
+    head: f32,
+}
+
+impl Bare {
+    fn new(e: &Entry, iw: f32, left_out: bool) -> Bare {
+        use crate::style::text::{BODY, HEADING, TITLE};
+        let (title_size, title, artist_size) = if Canvas::text_width(TITLE, &e.meta.title) <= iw {
+            (TITLE, vec![e.meta.title.clone()], HEADING)
+        } else {
+            (HEADING, wrap(HEADING, iw, &e.meta.title, 2), BODY)
+        };
+        let artist = Canvas::fit(artist_size, iw, &e.meta.artist);
+        let head = BANNER_TOP
+            + title.len() as f32 * (Canvas::text_height(title_size) + 4.0)
+            + Canvas::text_height(artist_size)
+            + 6.0
+            + MAPPER_H
+            + BLOCK_GAP
+            + CHIP_H
+            + BLOCK_GAP
+            + TILE_H
+            + BLOCK_GAP
+            + BAR_H
+            + BLOCK_GAP
+            + PP_H
+            + if left_out { 4.0 + LEFT_OUT_H } else { 0.0 }
+            + 10.0;
+        Bare {
+            title_size,
+            title,
+            artist_size,
+            artist,
+            left_out,
+            head,
+        }
+    }
+}
+
+/// What the bare details show of the map besides its entry.
+struct BareShown<'a> {
+    stars: Option<f32>,
+    status: Option<(&'a str, u32)>,
+    liked: Option<bool>,
+    /// Once the map is read: its BPM, length and notes.
+    details: Option<Details>,
+    left_out: Option<&'a str>,
+    /// How far the details read with the map have faded in.
+    fade: f32,
+}
 
 /// The label of the row of what a TJA course leaves out, said plainly as the other details are.
 fn left_out_label() -> &'static str {
