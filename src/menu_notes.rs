@@ -350,9 +350,13 @@ pub fn draw(
 }
 
 /// How many more routes song select has behind it than the menu: the same song, more universes.
-pub const MORE: usize = 12;
-/// How bright those are next to a route of the menu's (they're many: each is fainter).
-const MORE_ALPHA: f32 = 0.45;
+/// Few: song select is for reading, a crowd of notes under its text is noise.
+pub const MORE: usize = 5;
+/// How bright those are next to a route of the menu's (each is fainter).
+const MORE_ALPHA: f32 = 0.3;
+/// They carry every `MORE_THIN`th note of the song: the beat's still there, a dense map's
+/// stream isn't poured down each of them.
+const MORE_THIN: usize = 2;
 /// How long the more routes take to clear off on the way back to the menu (ms).
 pub const DRAIN_MS: f32 = 700.0;
 
@@ -469,7 +473,11 @@ pub fn draw_more(c: &mut Canvas, view: &View, clock: f32, shift: usize, crowd: C
         }
         let start = view.notes.partition_point(|n| n.time < from);
         let end = start + view.notes[start..].partition_point(|n| n.time <= until);
-        for note in view.notes[start..end].iter().rev() {
+        for (n, note) in view.notes[start..end].iter().enumerate().rev() {
+            // By its place in the song, so a note stays on its route or off it as time goes.
+            if (start + n) % MORE_THIN != 0 {
+                continue;
+            }
             let along = ((note.time - view.time) / ms) as f32 + push;
             let [x, y] = route_point(route, along, secs, width, swell);
             let x = x + dx;
@@ -564,6 +572,55 @@ mod tests {
             );
             assert!(m.route.ms > 1000.0 && m.depth > 0.0);
         }
+    }
+
+    #[test]
+    fn song_selects_routes_are_few_and_carry_every_other_note() {
+        assert!(more().len() <= 5, "a few routes, not a crowd");
+        // Every other note a kat: on the routes, only one of the two kinds.
+        let notes = |kat_odd: bool| -> Vec<Ghost> {
+            (0..800)
+                .map(|i| Ghost {
+                    time: f64::from(i) * 60.0,
+                    kat: (i % 2 == 1) == kat_odd,
+                    big: false,
+                })
+                .collect()
+        };
+        let kats = |notes: &[Ghost]| {
+            let mut c = Canvas {
+                width: 853.3,
+                ..Default::default()
+            };
+            let crowd = Crowd {
+                shown: 1.0,
+                cam: 1.0,
+                kiai: 0.0,
+                kick: 0.0,
+                drain: None,
+            };
+            draw_more(&mut c, &View::of(notes, 20_000.0), 0.0, 0, crowd);
+            let kat: Vec<[f32; 3]> = multiverse::get()
+                .iter()
+                .map(|u| {
+                    let [r, g, b, _] = rgba(u.kat(), 1.0);
+                    [r, g, b]
+                })
+                .collect();
+            c.shapes
+                .iter()
+                .filter(|sh| {
+                    kat.iter()
+                        .any(|k| k.iter().zip(sh.fill).all(|(a, b)| (a - b).abs() < 1e-4))
+                })
+                .count()
+        };
+        assert_eq!(
+            kats(&notes(true)),
+            0,
+            "the odd notes (kats here) aren't on them"
+        );
+        assert!(kats(&notes(false)) > 0, "the even ones are");
     }
 
     #[test]

@@ -836,6 +836,15 @@ fn draw_songs(
 /// The routes behind song select past the menu's own (and those too, `base`) in the frame at
 /// `now`: `shown` of the way in, the camera `cam` of the way to song select, clearing off if it's
 /// leaving.
+/// How bright the menu's three note routes are behind song select: half, for its text to read
+/// over them (the menu is loud, song select is for reading). `cam` is how far the camera is
+/// towards song select, so they quieten as it gets there and come back on the way to the menu.
+const ROUTES_CALM: f32 = 0.5;
+
+fn routes_brightness(cam: f32) -> f32 {
+    1.0 - (1.0 - ROUTES_CALM) * cam.clamp(0.0, 1.0)
+}
+
 fn draw_crowd(
     state: &mut State,
     canvas: &mut Canvas,
@@ -868,8 +877,10 @@ fn draw_crowd(
             (1.0 - (into.rem_euclid(len) as f32) / menu::BEAT_MS).clamp(0.0, 1.0) * kiai
         });
     if base {
+        let start = canvas.shapes.len();
         let mut gold = menu_notes::Gold::default();
         menu_notes::draw(canvas, &view, clock, kiai, kick, universe, &mut gold);
+        canvas.fade_since(start, routes_brightness(1.0), 1.0);
     }
     let crowd = menu_notes::Crowd {
         shown,
@@ -895,7 +906,9 @@ fn draw_shift(
 ) {
     let w = canvas.width;
     let ph = menu_shift::phases(t);
+    let routes = canvas.shapes.len();
     draw_menu(state, canvas, frame, Layer::Routes);
+    canvas.fade_since(routes, routes_brightness(ph.cam), 1.0);
     let shown = if into { (t * 2.0).min(1.0) } else { 1.0 };
     draw_crowd(state, canvas, frame.now, false, shown, ph.cam);
     if ph.landed < 1.0 {
@@ -935,5 +948,23 @@ fn draw_shift(
     if let (Some(item), Some(from), Some((to, size))) = (in_air, from, state.play_icon_at) {
         let to = [to[0] + (1.0 - ph.cam) * w, to[1]];
         menu_shift::draw_flight(canvas, item, from, (to, size), ph.flight);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_menus_routes_quieten_behind_song_select_with_the_camera() {
+        assert_eq!(routes_brightness(0.0), 1.0, "the menu: as loud as ever");
+        assert_eq!(routes_brightness(1.0), ROUTES_CALM, "song select: half");
+        let steps: Vec<f32> = (0..=10)
+            .map(|k| routes_brightness(k as f32 / 10.0))
+            .collect();
+        assert!(
+            steps.windows(2).all(|w| w[1] < w[0]),
+            "smoothly on the way: {steps:?}"
+        );
     }
 }
