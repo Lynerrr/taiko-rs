@@ -217,6 +217,10 @@ pub struct Preview {
     /// off the screen's right edge and the timeline's bars on their own. Set by the caller
     /// before `draw_panel`.
     pub bare: bool,
+    /// How far left of its place the panel is drawn (song select sliding to its leaderboard):
+    /// the bare lane's end, at the screen's right edge, goes along with it, so nothing in the
+    /// panel stretches on the way. Set by the caller before `draw_panel`.
+    pub slid: f32,
     /// The map shown is marked EPIC on taiko.rs (set by the caller before `draw_panel`): its pill
     /// stands in the status's place, EPIC being a status of its own.
     pub epic: bool,
@@ -1688,7 +1692,7 @@ impl Preview {
         // the screen's right edge as far as the friends tab there leaves room; the notes come in
         // from its end.
         let lane_end = if self.bare {
-            c.width - crate::social::TAB_ROOM
+            c.width - crate::social::TAB_ROOM - self.slid
         } else {
             bx + bw
         };

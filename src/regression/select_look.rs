@@ -1047,3 +1047,42 @@ fn randoms_die_rolls_when_pressed_and_rests_on_five() {
     let rolled = die(&settled(&mut s, &mut now));
     assert_eq!(rolled, rest, "back on five");
 }
+
+#[test]
+fn nothing_in_the_details_stretches_on_the_way_to_the_leaderboard() {
+    let (mut s, _songs, mut now) = menu_look("select-look-board-slide");
+    s.cfg.animations = true;
+    let c = settled(&mut s, &mut now);
+    let preview = |c: &Canvas| hit_rect(c, |h| *h == Hit::Preview).expect("the lane");
+    let (lane, strip) = (preview(&c), s.preview.mini_board.expect("the strip"));
+    s.mob.flip_board();
+    let mut on_the_way = 0;
+    for _ in 0..12 {
+        now += Duration::from_millis(8);
+        let c = frame(&mut s, now);
+        // Gone once the board is all there; at its place before it sets off.
+        let Some(l) = hit_rect(&c, |h| *h == Hit::Preview) else {
+            continue;
+        };
+        let t = lane[0] - l[0];
+        if t < 2.0 {
+            continue;
+        }
+        on_the_way += 1;
+        let m = s.preview.mini_board.expect("the strip");
+        let shown = |r: [f32; 4]| r[0] + r[2];
+        assert!(
+            (l[2] - lane[2]).abs() < 0.5 || shown(l) >= c.width - 0.5,
+            "the lane as long on the way ({t}): {} vs {}",
+            l[2],
+            lane[2]
+        );
+        assert!(
+            (m[2] - strip[2]).abs() < 0.5,
+            "the board strip as wide on the way ({t}): {} vs {}",
+            m[2],
+            strip[2]
+        );
+    }
+    assert!(on_the_way > 0, "caught on the way");
+}
