@@ -847,10 +847,20 @@ fn shape_shader() -> String {
 }
 
 /// The side of the texture that holds the profile pictures (its top left `PICTURE_CELL` square)
-/// and a map's own pictures (the other squares, `Renderer::set_picture`).
+/// and a map's own pictures (the other squares, `Renderer::set_picture`). On a desktop it's 5 by
+/// 5 squares of 819 pixels: a map's picture across song select's cards and banner stays sharp,
+/// and there's room for the cards on screen and the ones the list is on its way to (a 64 MB
+/// texture). A phone keeps 4 by 4 of 512 (16 MB).
+#[cfg(not(target_os = "android"))]
+const MEDIA_SIDE: u32 = 4096;
+#[cfg(not(target_os = "android"))]
+const PICTURE_GRID: u32 = 5;
+#[cfg(target_os = "android")]
 const MEDIA_SIDE: u32 = 2048;
+#[cfg(target_os = "android")]
+const PICTURE_GRID: u32 = 4;
 /// The side of one map picture's square in that texture.
-pub const PICTURE_CELL: u32 = 512;
+pub const PICTURE_CELL: u32 = MEDIA_SIDE / PICTURE_GRID;
 /// How many map pictures fit at once.
 pub const PICTURE_SLOTS: u32 = (MEDIA_SIDE / PICTURE_CELL) * (MEDIA_SIDE / PICTURE_CELL) - 1;
 const _: () = assert!(crate::avatars::GRID * crate::avatars::CELL <= PICTURE_CELL);
@@ -3678,6 +3688,17 @@ impl<H> Canvas<H> {
         tint: [f32; 4],
     ) -> bool {
         self.picture_cover_clipped(path, rect, rect, tint)
+    }
+
+    /// Asks for the picture at `path` without drawing it, so it's read before it's shown.
+    pub fn want_picture_path(&mut self, path: &std::path::Path) {
+        let key = path_picture_key(path);
+        if !self.picture_paths.iter().any(|(k, _)| *k == key) {
+            self.picture_paths.push((key.clone(), path.to_path_buf()));
+        }
+        if !self.pictures_wanted.contains(&key) {
+            self.pictures_wanted.push(key);
+        }
     }
 
     /// `picture_cover` over `[x, y, w, h]`, but cut to `clip` (a strip of it, say).

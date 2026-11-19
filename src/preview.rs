@@ -1247,6 +1247,17 @@ impl Preview {
         let Some(bg) = background_path(e) else {
             return;
         };
+        // Songs changing fast (Random spammed, the list flown through): a picture not read yet
+        // waits for them to settle, as the map itself does (`DEBOUNCE`).
+        let settling = self
+            .changed_at
+            .is_some_and(|t| crate::render::frame_now().saturating_duration_since(t) < DEBOUNCE);
+        let read = c
+            .picture_slots
+            .contains_key(&crate::render::path_picture_key(&bg));
+        if settling && !read {
+            return;
+        }
         let since = self
             .banner_seen
             .as_ref()
@@ -1259,23 +1270,34 @@ impl Preview {
         };
         let [x, y, w, h] = rect;
         let sh = h / BANNER_STRIPS as f32;
-        let edge = |k: usize| crate::render::snap_to_grid(y + k as f32 * sh);
-        let mut drawn = false;
-        for k in 0..BANNER_STRIPS {
+        // How much of the picture shows in strip `k`.
+        let keep = |k: usize| {
             let mid = (k as f32 + 0.5) / BANNER_STRIPS as f32;
             let t = ((mid - BANNER_WHOLE) / (1.0 - BANNER_WHOLE)).clamp(0.0, 1.0);
-            let keep = 1.0 - t * t * (3.0 - 2.0 * t);
-            let (top, bottom) = (edge(k), edge(k + 1));
-            let strip = [x, top, w, bottom - top];
-            drawn |= c.picture_cover_clipped(&bg, rect, strip, [1.0, 1.0, 1.0, a * keep]);
-            let shade = (0.2 + 0.45 * mid) * keep * a;
-            c.rect(
-                x,
-                top,
-                w,
-                bottom - top,
-                rgba(crate::style::SURFACE_1, shade),
-            );
+            (1.0 - t * t * (3.0 - 2.0 * t)) * a
+        };
+        // Layers of the picture, each from the banner's top down to the end of its strip, so
+        // strip `k` is under layers `k..`: every edge belongs to one layer alone. Strips cut
+        // side by side would meet on shared edges, which the clip's rounding to whole pixels
+        // draws twice (a light line). Layer `k` adds what strip `k` needs over the layers
+        // below it.
+        let dim = BANNER_BRIGHT;
+        let mut drawn = false;
+        for k in 0..BANNER_STRIPS {
+            let below = if k + 1 < BANNER_STRIPS {
+                1.0 - keep(k + 1)
+            } else {
+                1.0
+            };
+            let alpha = if below > 1e-4 {
+                1.0 - (1.0 - keep(k)) / below
+            } else {
+                0.0
+            };
+            let bottom = crate::render::snap_to_grid(y + (k + 1) as f32 * sh);
+            let clip = [x, y, w, bottom - y];
+            let tint = [dim, dim, dim, alpha.max(0.0)];
+            drawn |= c.picture_cover_clipped(&bg, rect, clip, tint);
         }
         if drawn && since.is_none() {
             self.banner_seen = Some((bg, crate::render::frame_now()));
@@ -1803,6 +1825,8 @@ const BLOCK_GAP: f32 = 8.0;
 /// The banner's strips (it fades out down them) and how far down it stays whole.
 const BANNER_STRIPS: usize = 12;
 const BANNER_WHOLE: f32 = 0.45;
+/// How bright the banner's picture is drawn, so the title reads over it.
+const BANNER_BRIGHT: f32 = 0.6;
 
 /// The bare details' text, laid out before anything is drawn (the panel's height follows it):
 /// the title at the title size on one line, or two lines a step smaller; the artist one step
