@@ -300,7 +300,11 @@ impl Screen for SongSelect {
                 // The routes behind lean a little away from the pointer.
                 let routes = canvas.shapes.len();
                 draw_crowd(state, canvas, frame.now, true, 1.0, 1.0);
-                let target = if render::animations() && !crate::mobile::active() {
+                // A pointer off the window (or none) leans nothing.
+                let (mx, my) = canvas.mouse;
+                let pointer = (0.0..=canvas.width).contains(&mx)
+                    && (0.0..=render::VIRTUAL_HEIGHT).contains(&my);
+                let target = if render::animations() && !crate::mobile::active() && pointer {
                     parallax_target(canvas.mouse, canvas.width)
                 } else {
                     [0.0; 2]
@@ -614,6 +618,7 @@ fn draw_songs(
         let actions_h = if bare { ACTIONS_H } else { PAGE_BUTTON_H };
         let panel_h = panel_end - panel_top - actions_h - style::space::SECTION;
         let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
+        let pages = canvas.shapes.len();
         if t < 1.0 {
             let start = canvas.shapes.len();
             // The way to the leaderboard is where the way back is on the board (its
@@ -630,6 +635,7 @@ fn draw_songs(
             if bare {
                 let page = [x - t * step, panel_top, pw, panel_h];
                 style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
+                canvas.glass_last();
             }
             state.preview.title_room = bw + 10.0;
             state.preview.board_w = if bare { bw } else { 0.0 };
@@ -707,6 +713,7 @@ fn draw_songs(
             if bare {
                 let page = [page_x, panel_top, pw, panel_h];
                 style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
+                canvas.glass_last();
             } else {
                 style::panel(canvas, page_x, panel_top, pw, panel_h);
             }
@@ -780,6 +787,17 @@ fn draw_songs(
             }
         }
         canvas.clip_since(board_start, clip[0], clip[1], clip[2], clip[3]);
+        // The pages lean against the pointer a little, the other way to what's behind.
+        if bare && shift.is_none() {
+            let [lx, ly] = state.select.parallax.map(|v| -v * DETAILS_LEAN / PARALLAX);
+            if lx != 0.0 || ly != 0.0 {
+                canvas.transform_since(pages, [0.0, 0.0], 1.0, lx, ly);
+                if let Some((_, area)) = state.frame_clip.as_mut() {
+                    area.x += lx / canvas.width.max(1.0);
+                    area.y += ly / render::VIRTUAL_HEIGHT;
+                }
+            }
+        }
         let play = if state.picking_lobby_map {
             tr!("Pick", "選ぶ", "Выбрать")
         } else if state.pick_to_edit {
@@ -951,6 +969,45 @@ fn routes_brightness(cam: f32) -> f32 {
 /// and how quickly they follow it (`render::approach`, ms).
 const PARALLAX: f32 = 6.0;
 const PARALLAX_TAU: f32 = 160.0;
+/// The map's picture behind leans the routes' way, less (it's further back): up to this much.
+const BG_LEAN: f32 = 3.0;
+/// The details lean the other way, a little (they're nearest).
+const DETAILS_LEAN: f32 = 2.0;
+/// A new map's picture behind song select comes in this much closer (0.04: 4%), easing back.
+const BG_ARRIVE: f32 = 0.04;
+/// How long a new map's picture behind song select fades in (ms).
+pub(crate) const BG_FADE_MS: f32 = 400.0;
+
+/// Song select in the main menu's look on a computer, animations on: its picture behind
+/// leans and arrives (`background_lean`, `background_arrive`).
+fn moving_backdrop(state: &State) -> bool {
+    !state.select.legacy && !mobile::active() && state.scene.is_select() && render::animations()
+}
+
+/// How the map's picture behind song select leans with the pointer (virtual units, the routes'
+/// way, `BG_LEAN` at most) and how far it can lean, which grows with the camera from the menu.
+pub(crate) fn background_lean(state: &State) -> [f32; 3] {
+    if !moving_backdrop(state) {
+        return [0.0; 3];
+    }
+    let there = match &state.menu_shift {
+        Some(shift) => menu_shift::phases(shift.t()).cam,
+        None if !state.on_menu() => 1.0,
+        None => 0.0,
+    };
+    let [dx, dy] = state.select.parallax.map(|v| v * BG_LEAN / PARALLAX);
+    [dx, dy, BG_LEAN * there]
+}
+
+/// How much closer a new map's picture behind song select starts (`BG_ARRIVE`; none on the
+/// menu or elsewhere).
+pub(crate) fn background_arrive(state: &State) -> f32 {
+    if moving_backdrop(state) && !state.on_menu() {
+        BG_ARRIVE
+    } else {
+        0.0
+    }
+}
 
 /// Where the routes lean to with the pointer at `(x, y)` (virtual units) on a `width` wide
 /// screen: away from it, `PARALLAX` at the screen's edges, none in its middle.
@@ -960,6 +1017,20 @@ pub(crate) fn parallax_target((x, y): (f32, f32), width: f32) -> [f32; 2] {
 }
 
 fn draw_crowd(
+    state: &mut State,
+    canvas: &mut Canvas,
+    now: Instant,
+    base: bool,
+    shown: f32,
+    cam: f32,
+) {
+    let first = canvas.shapes.len();
+    draw_crowd_routes(state, canvas, now, base, shown, cam);
+    // Under song select's panels they're seen as through frosted glass.
+    canvas.frost_since(first);
+}
+
+fn draw_crowd_routes(
     state: &mut State,
     canvas: &mut Canvas,
     now: Instant,
@@ -1023,6 +1094,7 @@ fn draw_shift(
     let routes = canvas.shapes.len();
     draw_menu(state, canvas, frame, Layer::Routes);
     canvas.fade_since(routes, routes_brightness(ph.cam), 1.0);
+    canvas.frost_since(routes);
     let shown = if into { (t * 2.0).min(1.0) } else { 1.0 };
     draw_crowd(state, canvas, frame.now, false, shown, ph.cam);
     if ph.landed < 1.0 {
