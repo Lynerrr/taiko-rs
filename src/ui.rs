@@ -3177,17 +3177,14 @@ impl Select {
                             );
                             right -= 2.0;
                         }
-                    } else {
-                        let quiet = if legacy {
-                            0x8a8aa0
-                        } else {
-                            crate::style::ink::CAPTION
-                        };
+                    } else if legacy {
+                        // Legacy only: on the main menu look's cards, over the set's picture,
+                        // it can't be read on many pictures (the open set lists them anyway).
                         c.text_right(
                             x0 + rw - 12.0,
                             diffs_y,
                             8.0,
-                            rgba(quiet, 1.0),
+                            rgba(0x8a8aa0, 1.0),
                             &format!("{n} diff{}", if n == 1 { "" } else { "s" }),
                         );
                     }

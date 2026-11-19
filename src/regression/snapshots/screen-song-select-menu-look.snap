@@ -7,7 +7,6 @@ text  355,30   ctrl+f
 text  420,31   artist
 text   36,58   basics
 text  494,62   basics
-text  416,63   1 diff
 text   36,72   Regression  |  mapped by tests
 text  494,84   Regression
 text   56,92   basics
@@ -16,12 +15,10 @@ text  494,105  mapped by
 text  562,105  tests
 text  742,106  NOT SUBMITTED
 text   48,114  big-notes
-text  416,119  1 diff
 text  769,126  3.08
 text   48,128  Regression  |  mapped by tests
 text  502,128  basics
 text   48,148  rolls-and-swells
-text  416,153  1 diff
 text  500,154  OD
 text  581,154  BPM
 text  663,154  LENGTH
@@ -32,7 +29,6 @@ text  581,162  200
 text  663,162  0:09
 text  744,162  64
 text   49,182  sv-and-kiai
-text  416,187  1 diff
 text  494,187  32 DON
 text  784,187  32 KAT
 text   49,196  Regression  |  mapped by tests
@@ -44,13 +40,10 @@ text  576,214  99%
 text  650,214  98%
 text  743,214  Leaderboard
 text   51,216  stream
-text  416,221  1 diff
 text   51,230  Regression  |  mapped by tests
 text   55,250  low-od
-text  416,255  1 diff
 text   53,264  Regression  |  mapped by tests
 text   57,284  high-od
-text  416,289  1 diff
 text   57,298  Regression  |  mapped by tests
 text  490,337  0:00 / 0:10
 text  661,337  peak 7.0 notes/s at 0:01

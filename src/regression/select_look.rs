@@ -1652,3 +1652,23 @@ fn the_details_and_the_picture_behind_lean_with_the_pointer_the_other_way() {
     );
     assert!(leant[0] > mid[0] - 2.5, "a little: {mid:?} to {leant:?}");
 }
+
+#[test]
+fn set_cards_carry_no_difficulty_count_over_their_pictures() {
+    let (mut s, _songs, mut now) = menu_look_with("select-look-no-count", &many());
+    let c = settled(&mut s, &mut now);
+    let counts = |c: &Canvas| {
+        c.texts
+            .iter()
+            .filter(|(_, t)| t.trim().ends_with(" diffs") || t.trim().ends_with(" diff"))
+            .count()
+    };
+    assert_eq!(counts(&c), 0, "the main menu's look");
+    // Legacy keeps it.
+    let songs = Songs::new("select-look-no-count-legacy", &many());
+    let mut legacy = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut legacy, &mut now);
+    let c = settled(&mut legacy, &mut now);
+    assert!(counts(&c) > 0, "Legacy's cards");
+}
