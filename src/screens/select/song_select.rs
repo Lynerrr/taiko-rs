@@ -459,11 +459,8 @@ fn draw_songs(
         let [top, end] = state.select.frame_span();
         let bottom = top + ph.drop * (end - top);
         canvas.fade_since(left_start, ph.landed, 1.0);
+        // The list's window has no edge: its bottom is where the clip cuts it.
         canvas.clip_since(left_start, 0.0, 0.0, lw + 40.0, bottom);
-        if ph.drop > 0.0 && ph.drop < 1.0 {
-            let edge = render::rgba(style::PANEL_EDGE, ph.landed);
-            canvas.rect(20.0, bottom - 1.5, lw + 8.0, 1.5, edge);
-        }
     }
     // What's right of the list comes with the camera.
     let right_start = canvas.shapes.len();
@@ -471,7 +468,7 @@ fn draw_songs(
     let [x, panel_top, pw, panel_end] = if phone {
         state.mobile_select_panel(canvas.width)
     } else {
-        let x = 24.0 + lw + 12.0;
+        let x = 24.0 + lw + style::space::PAD;
         // Level with the list's frame (the Legacy layout keeps its own).
         let [top, end] = if state.select.legacy {
             [54.0, 436.0]
@@ -532,7 +529,7 @@ fn draw_songs(
         // Under both pages: Legacy's one button, or the lane the menu's look puts the actions on.
         const PAGE_BUTTON_H: f32 = 22.0;
         let actions_h = if bare { ACTIONS_H } else { PAGE_BUTTON_H };
-        let panel_h = panel_end - panel_top - actions_h - 8.0;
+        let panel_h = panel_end - panel_top - actions_h - style::space::SECTION;
         let clip_w = if bare {
             canvas.width - x + 4.0
         } else {
@@ -610,7 +607,12 @@ fn draw_songs(
         let board_start = canvas.shapes.len();
         let page_x = x + (1.0 - t) * step;
         if t > 0.0 {
-            style::panel(canvas, page_x, panel_top, pw, panel_h);
+            if bare {
+                let page = [page_x, panel_top, pw, panel_h];
+                style::surface(canvas, page, 10.0, style::Surface::Raised);
+            } else {
+                style::panel(canvas, page_x, panel_top, pw, panel_h);
+            }
         }
         // Inside the frame, with room right of the rows for their scroll bar.
         let (panel_x, panel_w) = (x, pw);
@@ -697,10 +699,10 @@ fn draw_songs(
             canvas.button(panel_x, by, panel_w, bh, &label, 8.0, hit, true);
         } else {
             // The main menu's look: a lane of its own from beside the list off the screen's
-            // right edge, Mods and Random bare icons on it, and Play its end, filled with the
-            // accent and running off the screen.
+            // right edge (a raised surface, no lines round it), Mods and Random bare icons on
+            // it, and Play its end, filled with the accent and running off the screen.
             let w = canvas.width;
-            style::lane_strip(canvas, [panel_x, by, w - panel_x + 2.0, bh], false);
+            style::lane_surface(canvas, [panel_x, by, w - panel_x + 2.0, bh]);
             let play_x = w - (w * PLAY_SHARE).clamp(120.0, 200.0);
             let mid = by + bh / 2.0;
             let mods_word = tr!("Mods", "Mod", "Моды");

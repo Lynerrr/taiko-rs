@@ -17,6 +17,174 @@ pub const PANEL_EDGE: u32 = 0x3a3a4e;
 /// What deletes: its button, its menu item, the edge of the box asking.
 pub const DANGER: u32 = 0xff6b6b;
 
+// Design tokens: what song select in the main menu's look (all but Legacy) is drawn with, so its
+// surfaces, spacing, text, colours and motion come from one small set instead of ad-hoc values.
+// Surfaces are told apart by their tone and the room between them; an outline is kept for what
+// has the focus or is selected.
+
+/// The surfaces a screen is built of, back to front: the map's picture under its dim (drawn by
+/// the background, nothing to paint), what sits on it (cards, lanes, the list's window) and what
+/// lifts off that (under the pointer, a field to type in).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Surface {
+    Back,
+    Raised,
+    Lifted,
+}
+
+/// The raised surface's tint and how much of what's behind it shows through.
+pub const SURFACE_1: u32 = 0x14121c;
+pub const SURFACE_1_ALPHA: f32 = 0.8;
+/// The lifted surface: the raised one about 6% lighter.
+pub const SURFACE_2: u32 = 0x221f2c;
+pub const SURFACE_2_ALPHA: f32 = 0.85;
+
+/// A surface's fill (the back one is clear).
+pub fn surface_fill(level: Surface) -> [f32; 4] {
+    match level {
+        Surface::Back => rgba(0, 0.0),
+        Surface::Raised => rgba(SURFACE_1, SURFACE_1_ALPHA),
+        Surface::Lifted => rgba(SURFACE_2, SURFACE_2_ALPHA),
+    }
+}
+
+/// `level` over `[x, y, w, h]` with corners of `radius`: its tone alone, no edge round it.
+pub fn surface(c: &mut Canvas, [x, y, w, h]: [f32; 4], radius: f32, level: Surface) {
+    if level == Surface::Back {
+        return;
+    }
+    let fill = surface_fill(level);
+    c.round_rect([x, y], [w, h], radius, fill, fill, 0.0);
+}
+
+/// Room, on a grid of 4 units.
+pub mod space {
+    /// The grid every gap and inset is a step of.
+    #[allow(
+        dead_code,
+        reason = "the song select redesign's cards are laid out on it next"
+    )]
+    pub const GRID: f32 = 4.0;
+    /// Between two cards of a list.
+    #[allow(
+        dead_code,
+        reason = "the song select redesign's cards are parted by it next"
+    )]
+    pub const CARD_GAP: f32 = 4.0;
+    /// Inside a panel, from its edge to what's in it; and between two panels side by side.
+    pub const PAD: f32 = 12.0;
+    /// Between two sections of a panel.
+    pub const SECTION: f32 = 8.0;
+
+    /// `v` on the nearest step of the grid.
+    #[allow(
+        dead_code,
+        reason = "the song select redesign's cards are laid out on it next"
+    )]
+    pub fn snap(v: f32) -> f32 {
+        (v / GRID).round() * GRID
+    }
+}
+
+/// The pixel font's sizes: four, so each step reads as one. Text is snapped to device pixels
+/// (`render::font_px`), so every size stays crisp.
+pub mod text {
+    /// Small labels over values, counts, hints (in capitals where they name something).
+    pub const CAPTION: f32 = 6.0;
+    /// Rows, values, buttons.
+    pub const BODY: f32 = 8.0;
+    /// A panel's heading, a song's title in the list.
+    pub const HEADING: f32 = 12.0;
+    /// The one title of the screen.
+    #[allow(
+        dead_code,
+        reason = "the song select redesign's banner draws with it next"
+    )]
+    pub const TITLE: f32 = 18.0;
+}
+
+/// Text's brightness, for its rank: hierarchy by brightness rather than by size.
+pub mod ink {
+    /// What it is: titles, values, the selection's text.
+    pub const PRIMARY: u32 = 0xffffff;
+    /// About what it is: artist, mapper, the rows not selected (~70%).
+    pub const SECONDARY: u32 = 0xb4b2c4;
+    /// What names the rest: labels, counts, hints (~45%).
+    pub const CAPTION: u32 = 0x74728a;
+}
+
+/// What a colour means. The accent is the primary action and the selection, a star rating's
+/// colour is the selected difficulty's, a status keeps its chip's own; the rest is neutral.
+pub mod role {
+    /// The neutral of a chip or bar that means nothing by its colour (a rating not selected).
+    pub const NEUTRAL: u32 = 0x2c2a38;
+
+    /// The primary action (Play) and what's selected: the accent (`selector_colour` is the same
+    /// with a kiai's gold).
+    pub fn primary() -> u32 {
+        crate::render::accent()
+    }
+
+    /// A difficulty's rating colour: its TJA `level` or its `stars`, neutral without either.
+    pub fn rating(level: Option<f32>, stars: Option<f32>) -> u32 {
+        level.or(stars).map_or(NEUTRAL, crate::stars::color)
+    }
+
+    /// The selected difficulty's text in its rating colour, white without a rating.
+    pub fn rating_ink(level: Option<f32>, stars: Option<f32>) -> u32 {
+        match level.or(stars) {
+            Some(_) => rating(level, stars),
+            None => super::ink::PRIMARY,
+        }
+    }
+}
+
+/// How things move: three durations and two easings for entrances, `render::approach` for what
+/// follows a target (scroll, selection). With animations off everything is there at once.
+pub mod motion {
+    /// A hover, a press, a toggle.
+    #[allow(
+        dead_code,
+        reason = "the song select redesign's cards move with it next"
+    )]
+    pub const MICRO_MS: f32 = 120.0;
+    /// Content coming in: details, cards, a panel's page.
+    pub const CONTENT_MS: f32 = 250.0;
+    /// A scene's move (the camera from the menu into song select).
+    pub const SCENE_MS: f32 = 900.0;
+    /// The time constant of `render::approach` for what follows a target.
+    pub const FOLLOW_TAU_MS: f32 = 45.0;
+
+    /// Quick out, long settle: entrances.
+    pub fn out_quint(t: f32) -> f32 {
+        1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(5)
+    }
+
+    /// Sharper still: what has to be there at once and then settle.
+    #[allow(
+        dead_code,
+        reason = "the song select redesign's song change moves with it next"
+    )]
+    pub fn out_expo(t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        if t >= 1.0 {
+            1.0
+        } else {
+            1.0 - 2f32.powf(-10.0 * t)
+        }
+    }
+
+    /// How far an entrance started at `since` and `ms` long is, through `ease`: 1 at once with
+    /// animations off.
+    pub fn entrance(since: std::time::Instant, ms: f32, ease: fn(f32) -> f32) -> f32 {
+        if !crate::render::animations() {
+            return 1.0;
+        }
+        let now = crate::render::frame_now();
+        ease((now.saturating_duration_since(since).as_secs_f32() * 1000.0 / ms).clamp(0.0, 1.0))
+    }
+}
+
 /// Once a frame: where the music is in its beat (`phase` 0 to 1, None: nothing playing) and
 /// whether it's in a kiai (the frame's `render::Theme`).
 pub fn set_beat(phase: Option<f32>, kiai: bool) {
@@ -122,7 +290,7 @@ pub fn switch(c: &mut Canvas, [x, y]: [f32; 2], on: bool) {
 
 /// The selector's colour now: the accent, or gold in a kiai.
 pub fn selector_colour() -> u32 {
-    if kiai() > 0.5 { GOLD } else { render::accent() }
+    if kiai() > 0.5 { GOLD } else { role::primary() }
 }
 
 /// Corner brackets round `[x, y, w, h]`, `alpha` of their strength, brighter on the beat.
@@ -598,6 +766,13 @@ pub fn lane_strip(c: &mut Canvas, rect: [f32; 4], closed: bool) {
     lane_edges(c, rect, closed);
 }
 
+/// A strip in the menu lane's place as a surface: the raised tone alone, no lines round it (song
+/// select's lane of actions in the main menu's look).
+pub fn lane_surface(c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
+    let fill = surface_fill(Surface::Raised);
+    c.rect(x, y, w, h, fill);
+}
+
 /// The lines of a lane's strip, for over what's drawn in it: an edge along its top and bottom
 /// with a faint second line just inside each, its left end closed, and its right end too when
 /// it stops short of the screen's edge (`closed`).
@@ -637,10 +812,10 @@ pub fn lane_end_button(
     let g = LIGHTS.with(|l| {
         let mut l = l.borrow_mut();
         let g = l.entry(key).or_insert(0.0);
-        render::approach(g, if hover { 1.0 } else { 0.0 }, dt, 45.0);
+        render::approach(g, if hover { 1.0 } else { 0.0 }, dt, motion::FOLLOW_TAU_MS);
         *g
     });
-    let col = render::accent();
+    let col = role::primary();
     for k in 1..=3 {
         let by = k as f32 * 2.5 * g;
         c.round_rect(
@@ -654,11 +829,12 @@ pub fn lane_end_button(
     }
     let fill = tint(col, 0x000000, 0.5 - 0.5 * g);
     c.rect(x, y, w, h, rgba(fill, 0.9 + 0.1 * pulse()));
-    let edge = rgba(tint(col, 0xffffff, 0.35 * g), 1.0);
+    // Its edge only lights under the pointer: at rest the fill alone tells it apart.
+    let edge = rgba(tint(col, 0xffffff, 0.35 * g), g);
     c.rect(x, y, w, 1.5, edge);
     c.rect(x, y + h - 1.5, w, 1.5, edge);
     c.rect(x, y, 1.5, h, edge);
-    let line = rgba(tint(col, 0xffffff, 0.3), 0.3 + 0.3 * g);
+    let line = rgba(tint(col, 0xffffff, 0.3), 0.6 * g);
     c.rect(x, y + 4.0, w, 1.0, line);
     c.rect(x, y + h - 5.0, w, 1.0, line);
     let size = (h * 0.42).clamp(8.0, 11.0);
@@ -740,7 +916,7 @@ pub fn star_pill(c: &mut Canvas, right: f32, y: f32, size: f32, stars: Option<f3
     let text = stars
         .map(|s| format!("{s:.2}"))
         .unwrap_or_else(|| "...".into());
-    rating_pill(c, right, y, size, stars, &text)
+    rating_pill(c, right, y, size, stars, &text, true)
 }
 
 /// A map's rating pill: a TJA course's `level` (its charter's, "8" or "9.5") when it has one,
@@ -753,9 +929,28 @@ pub fn map_pill(
     level: Option<f32>,
     stars: Option<f32>,
 ) -> f32 {
+    map_pill_lit(c, right, y, size, level, stars, true)
+}
+
+/// `map_pill`, in its rating's colour when `lit` (the selected difficulty's), else neutral:
+/// the colour roles of song select in the main menu's look.
+pub fn map_pill_lit(
+    c: &mut Canvas,
+    right: f32,
+    y: f32,
+    size: f32,
+    level: Option<f32>,
+    stars: Option<f32>,
+    lit: bool,
+) -> f32 {
     match level {
-        Some(level) => rating_pill(c, right, y, size, Some(level), &level_text(level)),
-        None => star_pill(c, right, y, size, stars),
+        Some(level) => rating_pill(c, right, y, size, Some(level), &level_text(level), lit),
+        None => {
+            let text = stars
+                .map(|s| format!("{s:.2}"))
+                .unwrap_or_else(|| "...".into());
+            rating_pill(c, right, y, size, stars, &text, lit)
+        }
     }
 }
 
@@ -772,14 +967,16 @@ fn rating_pill(
     size: f32,
     stars: Option<f32>,
     text: &str,
+    lit: bool,
 ) -> f32 {
     let text = text.to_string();
     let tw = Canvas::text_width(size, &text);
     let (w, h) = (tw + size * 1.6 + 6.0, size + 6.0);
     let x = right - w;
     let (bg, fg) = match stars {
+        Some(_) if !lit => (role::NEUTRAL, ink::SECONDARY),
         Some(s) => {
-            let col = crate::stars::color(s);
+            let col = role::rating(None, Some(s));
             // Dark text on the light end of the spectrum, light text on the dark end.
             let luma = 0.299 * (col >> 16 & 0xff) as f32
                 + 0.587 * (col >> 8 & 0xff) as f32
@@ -939,6 +1136,42 @@ mod tests {
             over.hits[0].rect[0] == 700.0 && over.hits[0].rect[2] > 150.0,
             "to the screen's edge"
         );
+    }
+
+    #[test]
+    fn a_rating_pill_is_in_its_colour_only_when_lit() {
+        let fills = |lit: bool| {
+            let mut c = Canvas::default();
+            map_pill_lit(&mut c, 100.0, 10.0, 8.0, None, Some(5.2), lit);
+            c.shapes.first().map(|s| s.fill).expect("a pill")
+        };
+        assert_eq!(fills(true), rgba(crate::stars::color(5.2), 1.0));
+        assert_eq!(fills(false), rgba(role::NEUTRAL, 1.0));
+        // The same width either way: a row doesn't move when its difficulty is selected.
+        let width = |lit: bool| {
+            map_pill_lit(
+                &mut Canvas::default(),
+                100.0,
+                10.0,
+                8.0,
+                None,
+                Some(5.2),
+                lit,
+            )
+        };
+        assert_eq!(width(true), width(false));
+    }
+
+    #[test]
+    fn the_easings_run_from_nothing_to_all() {
+        for ease in [motion::out_quint, motion::out_expo] {
+            assert_eq!(ease(0.0), 0.0);
+            assert_eq!(ease(1.0), 1.0);
+            assert!(ease(0.5) > 0.5, "out: past halfway at half the time");
+            assert_eq!(ease(2.0), 1.0);
+        }
+        assert_eq!(space::snap(13.0), 12.0);
+        assert_eq!(space::snap(14.5), 16.0);
     }
 
     #[test]

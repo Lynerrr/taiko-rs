@@ -11,7 +11,7 @@ use crate::render::{self, rgba};
 use crate::style;
 
 /// How long the way to song select takes (ms), and the way back, of that.
-pub const MS: f32 = 900.0;
+pub const MS: f32 = crate::style::motion::SCENE_MS;
 pub const BACK: f32 = 0.7;
 
 /// When each part starts and ends, as parts of the whole way (0 to 1).

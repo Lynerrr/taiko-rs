@@ -2144,10 +2144,12 @@ impl Select {
             // The search row and the list are one window: the panel runs from above the row
             // down the list, a line between them. Not while a mod's customization covers the
             // top of the screen: it has the row's place.
+            // A raised surface, no edge round it and no line under the row: the search field's
+            // own lifted tone sets the row apart.
             if !self.covered {
                 let (top, bottom) = (row - 6.0, self.list_bottom() + 4.0);
-                crate::style::panel(c, 20.0, top, lw + 8.0, bottom - top);
-                c.rect(24.0, self.frame_top() - 5.0, lw, 1.0, rgba(0x3a3a4e, 1.0));
+                let rect = [20.0, top, lw + 8.0, bottom - top];
+                crate::style::surface(c, rect, 10.0, crate::style::Surface::Raised);
             }
             // The way back: an arrow and where it goes, as bare as the menu's icons.
             let back = if self.to_menu {
@@ -2179,7 +2181,7 @@ impl Select {
                     right,
                     row + 8.0,
                     7.0,
-                    rgba(0x9a9ab0, 1.0),
+                    rgba(crate::style::ink::CAPTION, 1.0),
                     &Canvas::fit(7.0, right - x, &summary),
                 );
             }
@@ -2319,9 +2321,19 @@ impl Select {
                 1.0,
             );
         } else {
-            // No box: a line under the text, lit while typing.
-            let lit = if self.searching { 1.5 } else { 1.0 };
-            c.rect(left, row + 21.0, search_w, lit, edge);
+            // A lifted field, no edge; while typing a line of the accent under the text (the
+            // focus).
+            let field = [left, row, search_w, 24.0];
+            crate::style::surface(c, field, 6.0, crate::style::Surface::Lifted);
+            if self.searching {
+                c.rect(
+                    left + 6.0,
+                    row + 21.0,
+                    (search_w - 12.0).max(0.0),
+                    1.5,
+                    edge,
+                );
+            }
         }
         // The filters on, as tokens at the start of the box: the text goes after them.
         let token_room = search_w * 0.6;
@@ -2347,7 +2359,12 @@ impl Select {
             } else {
                 short
             };
-            (Canvas::fit(10.0, room, &format!("{hint}{caret}")), 0x6f6f86)
+            let quiet = if legacy {
+                0x6f6f86
+            } else {
+                crate::style::ink::CAPTION
+            };
+            (Canvas::fit(10.0, room, &format!("{hint}{caret}")), quiet)
         } else {
             let full = format!("search: {}{caret}", self.filter);
             let text = if Canvas::text_width(10.0, &full) <= room {
@@ -2657,8 +2674,11 @@ impl Select {
         // The main menu's look: one dark panel the list runs down, rows as lines on it.
         let frame_top = self.frame_top();
         // Outside the Legacy layout it was drawn with the search row, unless that's covered.
-        if legacy || self.covered {
-            crate::style::panel(c, 20.0, frame_top - 4.0, lw + 8.0, bottom - frame_top + 8.0);
+        let frame = [20.0, frame_top - 4.0, lw + 8.0, bottom - frame_top + 8.0];
+        if legacy {
+            crate::style::panel(c, frame[0], frame[1], frame[2], frame[3]);
+        } else if self.covered {
+            crate::style::surface(c, frame, 10.0, crate::style::Surface::Raised);
         }
         let tabs = self.source_tabs();
         if !tabs.is_empty() {
@@ -2678,6 +2698,15 @@ impl Select {
         let fit = |s: String, size: f32, room: f32| {
             Canvas::fit(size, room.max(Canvas::char_width(size) * 4.0), &s)
         };
+        // Under the pointer: Legacy's grey, the main menu's look the lifted surface.
+        let hover_fill = |alpha: f32| {
+            if legacy {
+                rgba(0x24242f, 0.6 * alpha)
+            } else {
+                let [r, g, b, a] = crate::style::surface_fill(crate::style::Surface::Lifted);
+                [r, g, b, a * alpha]
+            }
+        };
         for (row, ry, rh, alpha) in &rows {
             let y = top + ry - self.scroll;
             if y + rh < top || y > bottom || *alpha < 0.02 {
@@ -2688,7 +2717,15 @@ impl Select {
             match row {
                 Row::Section(si) => {
                     let sec = &self.sections[*si];
-                    let col = sec.colour.unwrap_or_else(accent);
+                    // Without a colour of its own a heading is neutral outside Legacy: the
+                    // accent is the selection's.
+                    let col = sec.colour.unwrap_or_else(|| {
+                        if legacy {
+                            accent()
+                        } else {
+                            crate::style::role::NEUTRAL
+                        }
+                    });
                     let open = section_open[*si];
                     let hover = c.hovered(24.0, y, lw, rh - 2.0);
                     let holds_cursor = cursor_section == Some(*si) && !open;
@@ -2698,7 +2735,7 @@ impl Select {
                             [24.0, y],
                             [lw, rh - 3.0],
                             6.0,
-                            rgba(0x24242f, 0.6),
+                            hover_fill(1.0),
                             rgba(0, 0.0),
                             0.0,
                         );
@@ -2752,16 +2789,17 @@ impl Select {
                             0.0,
                         );
                     } else if hover {
-                        c.round_rect(
-                            [24.0, y],
-                            [lw, rh - 4.0],
-                            7.0,
-                            rgba(0x262634, 0.6),
-                            rgba(0, 0.0),
-                            0.0,
-                        );
+                        let fill = if legacy {
+                            rgba(0x262634, 0.6)
+                        } else {
+                            hover_fill(1.0)
+                        };
+                        c.round_rect([24.0, y], [lw, rh - 4.0], 7.0, fill, rgba(0, 0.0), 0.0);
                     }
-                    c.rect(32.0, y + rh - 3.0, lw - 16.0, 1.0, rgba(0x23232f, 1.0));
+                    // Legacy's line under each row; the main menu's look parts rows by room.
+                    if legacy {
+                        c.rect(32.0, y + rh - 3.0, lw - 16.0, 1.0, rgba(0x23232f, 1.0));
+                    }
                     c.hit(24.0, y, lw, *rh, Hit::SongHeader(g.start));
                     // A note for the song, as on the main menu: a don for taiko maps, a kat for
                     // converts; the open song's bigger and lit.
@@ -2845,13 +2883,15 @@ impl Select {
                             .map(|v| v as f32);
                         // A TJA course is ordered by its level, and shows it as its charter wrote it.
                         let level = e.meta.level.filter(|_| self.sort == SortMode::Difficulty);
-                        crate::style::map_pill(
+                        // In its rating's colour only when it's the selected one (Legacy: all).
+                        crate::style::map_pill_lit(
                             c,
                             24.0 + lw - 12.0,
                             diffs_y - 1.0,
                             8.0,
                             level,
                             sorted_by,
+                            legacy || open,
                         );
                     } else if !ladder.is_empty() {
                         let mut right = 24.0 + lw - 12.0;
@@ -2870,11 +2910,16 @@ impl Select {
                             right -= 2.0;
                         }
                     } else {
+                        let quiet = if legacy {
+                            0x8a8aa0
+                        } else {
+                            crate::style::ink::CAPTION
+                        };
                         c.text_right(
                             24.0 + lw - 12.0,
                             diffs_y,
                             8.0,
-                            rgba(0x8a8aa0, 1.0),
+                            rgba(quiet, 1.0),
                             &format!("{n} diff{}", if n == 1 { "" } else { "s" }),
                         );
                     }
@@ -2928,23 +2973,30 @@ impl Select {
                             [44.0, y],
                             [lw - 20.0, rh - 3.0],
                             5.0,
-                            rgba(0x24242f, 0.6 * a),
+                            hover_fill(a),
                             rgba(0, 0.0),
                             0.0,
                         );
                     }
-                    c.rect(52.0, y + rh - 2.0, lw - 36.0, 1.0, rgba(0x1d1d27, a));
+                    if legacy {
+                        c.rect(52.0, y + rh - 2.0, lw - 36.0, 1.0, rgba(0x1d1d27, a));
+                    }
                     c.hit(44.0, y, lw - 20.0, *rh, Hit::SongRow(*i));
-                    let col = if selected { 0xffffff } else { 0xc8c8d8 };
+                    let col = match (selected, legacy) {
+                        (true, _) => crate::style::ink::PRIMARY,
+                        (false, true) => 0xc8c8d8,
+                        (false, false) => crate::style::ink::SECONDARY,
+                    };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
                     let pill = if a > 0.6 {
-                        crate::style::map_pill(
+                        crate::style::map_pill_lit(
                             c,
                             24.0 + lw - 10.0,
                             y + 6.0,
                             7.0,
                             e.meta.level,
                             stars(self.visible[*i]),
+                            legacy || selected,
                         )
                     } else {
                         40.0
@@ -2999,14 +3051,23 @@ impl Select {
             let (track_x, track_w) = (8.0, 8.0);
             let track = bottom - top;
             let hover = c.hovered(track_x - 4.0, top, track_w + 12.0, track);
-            c.round_rect(
-                [track_x, top],
-                [track_w, track],
-                4.0,
-                rgba(0x15151d, if hover { 0.9 } else { 0.6 }),
-                rgba(0x2a2a38, 1.0),
-                1.0,
-            );
+            if legacy {
+                c.round_rect(
+                    [track_x, top],
+                    [track_w, track],
+                    4.0,
+                    rgba(0x15151d, if hover { 0.9 } else { 0.6 }),
+                    rgba(0x2a2a38, 1.0),
+                    1.0,
+                );
+            } else {
+                let level = if hover {
+                    crate::style::Surface::Lifted
+                } else {
+                    crate::style::Surface::Raised
+                };
+                crate::style::surface(c, [track_x, top, track_w, track], 4.0, level);
+            }
             let total = final_y.max(view);
             // Where each heading starts, as a mark on the track.
             if self.headings && self.sections.len() > 1 {
@@ -3023,7 +3084,15 @@ impl Select {
                 [track_x + 1.0, top + pos * (track - thumb)],
                 [track_w - 2.0, thumb],
                 3.0,
-                rgba(if hover { accent() } else { 0x8a8aa8 }, 0.95),
+                // The accent is the selection's outside Legacy: under the pointer, white.
+                rgba(
+                    match (hover, legacy) {
+                        (true, true) => accent(),
+                        (true, false) => crate::style::ink::PRIMARY,
+                        (false, _) => 0x8a8aa8,
+                    },
+                    0.95,
+                ),
                 rgba(0, 0.0),
                 0.0,
             );
@@ -3047,14 +3116,19 @@ impl Select {
                 let label = Canvas::fit(10.0, lw - 40.0, &self.sections[si].label);
                 let bw = Canvas::text_width(10.0, &label) + 24.0;
                 let by = (py - 13.0).clamp(top, bottom - 26.0);
-                c.round_rect(
-                    [30.0, by],
-                    [bw, 26.0],
-                    6.0,
-                    rgba(0x15151d, 0.96),
-                    rgba(accent(), 1.0),
-                    1.5,
-                );
+                if legacy {
+                    c.round_rect(
+                        [30.0, by],
+                        [bw, 26.0],
+                        6.0,
+                        rgba(0x15151d, 0.96),
+                        rgba(accent(), 1.0),
+                        1.5,
+                    );
+                } else {
+                    let fill = rgba(crate::style::SURFACE_2, 0.96);
+                    c.round_rect([30.0, by], [bw, 26.0], 6.0, fill, fill, 0.0);
+                }
                 c.text(42.0, by + 8.0, 10.0, rgba(0xffffff, 1.0), &label);
             }
         }

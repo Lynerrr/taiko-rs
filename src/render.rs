@@ -2954,15 +2954,20 @@ pub fn set_frame_time(now: Option<std::time::Instant>) {
     FRAME_TIME.with(|t| t.set(now));
 }
 
+/// The frame's time (what the run loop set), or the clock's outside a frame.
+pub fn frame_now() -> std::time::Instant {
+    FRAME_TIME
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(std::time::Instant::now)
+}
+
 /// Eased-out progress (0 to 1) of an animation started at `since` lasting `ms`; 1 with
 /// animations off.
 pub fn progress(since: std::time::Instant, ms: f32) -> f32 {
     if !animations() {
         return 1.0;
     }
-    let now = FRAME_TIME
-        .with(std::cell::Cell::get)
-        .unwrap_or_else(std::time::Instant::now);
+    let now = frame_now();
     let t = (now.saturating_duration_since(since).as_secs_f32() * 1000.0 / ms).clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)
 }

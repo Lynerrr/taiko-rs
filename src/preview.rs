@@ -1086,7 +1086,15 @@ impl Preview {
         let fade = self
             .ready_at
             .filter(|_| ready)
-            .map(|t| crate::render::progress(t, 180.0))
+            .map(|t| {
+                // Bare: content's entrance from the design tokens; boxed as it was.
+                use crate::style::motion;
+                if self.bare {
+                    motion::entrance(t, motion::CONTENT_MS, motion::out_quint)
+                } else {
+                    crate::render::progress(t, 180.0)
+                }
+            })
             .unwrap_or(0.0);
         let loaded = self.map.as_ref().filter(|(mi, _, _, _)| *mi == i && ready);
 
@@ -1235,12 +1243,22 @@ impl Preview {
 
         let mut cy = y + 12.0;
         for line in &title {
-            c.text(lx, cy, 12.0, rgba(0xffffff, 1.0), line);
+            c.text(
+                lx,
+                cy,
+                crate::style::text::HEADING,
+                rgba(0xffffff, 1.0),
+                line,
+            );
             cy += title_step;
         }
         cy += 3.0;
+        // Outside the bare look the panel keeps its own greys.
+        let bare = self.bare;
+        let ink = |bare_ink: u32, boxed: u32| if bare { bare_ink } else { boxed };
         for line in &artist {
-            c.text(lx, cy, 9.0, rgba(0xc8c8d8, 1.0), line);
+            let col = ink(crate::style::ink::SECONDARY, 0xc8c8d8);
+            c.text(lx, cy, 9.0, rgba(col, 1.0), line);
             cy += body_step;
         }
         cy += 4.0;
@@ -1262,14 +1280,13 @@ impl Preview {
                 Some((label, col)) => {
                     let lw = Canvas::text_width(7.0, label) + 12.0;
                     let sx = x + w - 14.0 - epic_w - lw;
-                    c.round_rect(
-                        [sx, cy],
-                        [lw, 13.0],
-                        6.5,
-                        rgba(col, 0.15),
-                        rgba(col, 0.9),
-                        1.0,
-                    );
+                    // Bare, the chip is its colour's tone alone, no edge.
+                    let (fill, edge) = if bare {
+                        (rgba(col, 0.22), 0.0)
+                    } else {
+                        (rgba(col, 0.15), 1.0)
+                    };
+                    c.round_rect([sx, cy], [lw, 13.0], 6.5, fill, rgba(col, 0.9), edge);
                     c.text_centered(sx + lw / 2.0, cy + 3.0, 7.0, rgba(col, 1.0), label);
                     lw + 8.0
                 }
@@ -1301,13 +1318,20 @@ impl Preview {
             lx,
             cy + (13.0 - th_small) / 2.0,
             8.0,
-            rgba(0x8a8aa0, 1.0),
+            rgba(ink(crate::style::ink::CAPTION, 0x8a8aa0), 1.0),
             &mapper,
         );
         cy += 13.0 + 6.0;
         crate::style::map_pill(c, x + w - 14.0, cy + 3.0, 9.0, e.meta.level, stars);
+        // The difficulty's name: bare, in its rating's colour (the accent is Play's and the
+        // selection's), else the accent.
+        let version_ink = if bare {
+            crate::style::role::rating_ink(e.meta.level, stars)
+        } else {
+            accent()
+        };
         for line in &version {
-            c.text(lx, cy + 3.0, 9.0, rgba(accent(), 1.0), line);
+            c.text(lx, cy + 3.0, 9.0, rgba(version_ink, 1.0), line);
             cy += body_step;
         }
         cy += (15.0 - version.len() as f32 * body_step).max(0.0) + 6.0;
@@ -1321,8 +1345,14 @@ impl Preview {
                     if *label == "OD" && c.hovered(sx, cy - 2.0, cell_w(cell), row_h) {
                         od_hovered = Some((sx, cy + row_h));
                     }
-                    sx += c.text(sx, cy, 8.0, rgba(0x8a8aa0, *alpha), &format!("{label} "));
-                    sx += c.text(sx, cy, 8.0, rgba(0xe8e8f4, *alpha), value) + STAT_GAP;
+                    let (label_ink, value_ink) = if bare {
+                        (crate::style::ink::CAPTION, crate::style::ink::PRIMARY)
+                    } else {
+                        (0x8a8aa0, 0xe8e8f4)
+                    };
+                    let size = crate::style::text::BODY;
+                    sx += c.text(sx, cy, size, rgba(label_ink, *alpha), &format!("{label} "));
+                    sx += c.text(sx, cy, size, rgba(value_ink, *alpha), value) + STAT_GAP;
                 }
                 cy += row_h;
             }
@@ -1420,7 +1450,7 @@ impl Preview {
                     bx + bw - 6.0
                 },
                 by + bh - 10.0,
-                6.0,
+                crate::style::text::CAPTION,
                 rgba(0x6f6f86, 1.0),
                 if crate::mobile::active() {
                     "tap: fullscreen"
