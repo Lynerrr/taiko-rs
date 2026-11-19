@@ -9140,6 +9140,17 @@ impl State {
         self.stars.clear();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
+        // Song select's cards show every set's background: small copies made ahead read fast.
+        if self.cfg.main_menu {
+            let mut seen = std::collections::HashSet::new();
+            let paths: Vec<PathBuf> = self
+                .library
+                .iter()
+                .filter_map(preview::background_path)
+                .filter(|p| seen.insert(p.clone()))
+                .collect();
+            self.pictures.prewarm(paths);
+        }
         // Keep whatever was typed into the search box while scanning, and the sort.
         let filter = std::mem::take(&mut self.select.filter);
         let played = std::mem::take(&mut self.select.played);

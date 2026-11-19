@@ -327,26 +327,57 @@ fn the_details_open_on_a_banner_of_the_maps_picture_fading_out() {
         .pretend_loaded(&render::path_picture_key(&bg), 16.0 / 9.0);
     let c = settled(&mut s, &mut now);
     let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
-    // Right of the list: the banner's strips, top to bottom (the card's own copy is in the list).
-    let strips: Vec<f32> = c
+    // Right of the list: the banner's layers of the picture, each cut to its clip.
+    let layers: Vec<(f32, [f32; 4])> = c
         .shapes
         .iter()
-        .filter(|sh| picture(sh) && sh.center[0] > 28.0 + lw)
-        .map(|sh| sh.fill[3])
+        .enumerate()
+        .filter(|(_, sh)| picture(sh) && sh.center[0] > 28.0 + lw)
+        .map(|(i, sh)| {
+            let clip = c
+                .clips
+                .iter()
+                .find(|(r, _)| r.contains(&i))
+                .map(|(_, rect)| *rect)
+                .expect("a layer is cut to its strip");
+            (sh.fill[3], clip)
+        })
         .collect();
-    assert!(strips.len() >= 6, "a banner in strips: {strips:?}");
-    assert!(
-        (strips[0] - 1.0).abs() < 1e-3,
-        "whole at the top: {strips:?}"
+    assert!(layers.len() >= 6, "a banner in layers: {layers:?}");
+    // How much of the picture shows at a height: the layers over it, together.
+    let shown = |y: f32| {
+        1.0 - layers
+            .iter()
+            .filter(|(_, r)| y >= r[1] && y < r[1] + r[3])
+            .map(|(a, _)| 1.0 - a)
+            .product::<f32>()
+    };
+    let (top, bottom) = (
+        layers.iter().map(|(_, r)| r[1]).fold(f32::MAX, f32::min),
+        layers.iter().map(|(_, r)| r[1] + r[3]).fold(0.0, f32::max),
     );
+    let seen: Vec<f32> = (0..48)
+        .map(|k| shown(top + (k as f32 + 0.5) / 48.0 * (bottom - top)))
+        .collect();
+    assert!((seen[0] - 1.0).abs() < 1e-3, "whole at the top: {seen:?}");
     assert!(
-        strips.windows(2).all(|w| w[1] <= w[0] + 1e-4),
-        "fading out downwards: {strips:?}"
+        seen.windows(2).all(|w| w[1] <= w[0] + 1e-4),
+        "fading out downwards: {seen:?}"
     );
-    assert!(
-        strips[strips.len() - 1] < 0.1,
-        "gone at its bottom: {strips:?}"
-    );
+    assert!(seen[47] < 0.1, "gone at its bottom: {seen:?}");
+    // No two layers end on the same edge: a shared edge is where rounding the clips to whole
+    // pixels draws the picture twice, as a light line across it.
+    let ends: Vec<f32> = layers.iter().map(|(_, r)| r[1] + r[3]).collect();
+    for (k, e) in ends.iter().enumerate() {
+        assert!(
+            layers.iter().all(|(_, r)| (r[1] - e).abs() > 0.01),
+            "a layer starts where another ends: {layers:?}"
+        );
+        assert!(
+            ends.iter().skip(k + 1).all(|o| (o - e).abs() > 0.01),
+            "two layers end alike: {ends:?}"
+        );
+    }
 }
 
 #[test]
@@ -382,5 +413,155 @@ fn don_and_kat_are_one_bar_split_in_proportion() {
     assert!(
         (share - dons / (dons + kats)).abs() < 1e-3,
         "{share} of {dons}/{kats}"
+    );
+}
+
+#[test]
+fn a_cards_shade_has_no_seams() {
+    let (mut s, _songs, mut now) = menu_look("select-look-shade");
+    let i = s.select.selected().expect("a map is selected");
+    let bg = preview::background_path(&s.library[i]).expect("it names a picture");
+    s.pictures
+        .pretend_loaded(&render::path_picture_key(&bg), 16.0 / 9.0);
+    let c = settled(&mut s, &mut now);
+    let open = open_card(&c, &s);
+    // The shade over the open card's picture: plain shapes in the card's dark surface colour.
+    let dark = render::rgba(style::SURFACE_1, 1.0);
+    let layers: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, dark) && inside(sh.center, open, 0.0))
+        .filter(|sh| sh.half[1] * 2.0 > open[3] * 0.8)
+        .map(rect)
+        .collect();
+    assert!(layers.len() >= 8, "a shade in layers: {layers:?}");
+    // All from the card's left, each to its own right edge: no edge shared by two of them (a
+    // light seam at some pixel sizes).
+    let left = layers[0][0];
+    assert!(
+        layers.iter().all(|r| (r[0] - left).abs() < 0.01),
+        "{layers:?}"
+    );
+    let rights: Vec<f32> = layers.iter().map(|r| r[0] + r[2]).collect();
+    for (k, r) in rights.iter().enumerate() {
+        assert!(
+            rights.iter().skip(k + 1).all(|o| (o - r).abs() > 0.01),
+            "two layers end alike: {rights:?}"
+        );
+    }
+    // Darkest at the left, under the title, lighter to the right.
+    let through = |x: f32| {
+        layers
+            .iter()
+            .zip(c.shapes.iter().filter(|sh| {
+                plain(sh)
+                    && same_rgb(sh.fill, dark)
+                    && inside(sh.center, open, 0.0)
+                    && sh.half[1] * 2.0 > open[3] * 0.8
+            }))
+            .filter(|(r, _)| x >= r[0] && x < r[0] + r[2])
+            .map(|(_, sh)| 1.0 - sh.fill[3])
+            .product::<f32>()
+    };
+    let (l, r) = (
+        through(left + 2.0),
+        through(rights.iter().fold(0.0, |m: f32, v| m.max(*v)) - 2.0),
+    );
+    assert!(
+        1.0 - l > 0.8 && (1.0 - r - 0.4).abs() < 0.05,
+        "shade {} to {}",
+        1.0 - l,
+        1.0 - r
+    );
+}
+
+#[test]
+fn flying_through_songs_asks_for_no_pictures_until_the_list_settles() {
+    let songs = Songs::new("select-look-hold", &many());
+    let cfg = Config {
+        main_menu: true,
+        accent: ACCENT,
+        animations: true,
+        ..harness::config()
+    };
+    let mut entries = songs.entries();
+    for e in &mut entries {
+        e.meta.background = Some("bg.png".into());
+    }
+    let mut s = state_with(cfg, entries);
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    let asked = |c: &Canvas| {
+        c.pictures_wanted
+            .iter()
+            .filter(|k| k.starts_with(render::PATH_PICTURE_PREFIX))
+            .count()
+    };
+    let mut c = frame(&mut s, now);
+    for _ in 0..60 {
+        now += Duration::from_millis(16);
+        c = frame(&mut s, now);
+    }
+    assert!(asked(&c) > 0, "the cards ask for their pictures");
+    // A song every other frame, as Random spammed or an arrow held: once they come faster than
+    // the list gets to them, nothing new is asked for.
+    for k in 0..16 {
+        if k % 2 == 0 {
+            press(&mut s, KeyCode::ArrowRight, now);
+        }
+        now += Duration::from_millis(16);
+        c = frame(&mut s, now);
+        if k >= 2 {
+            assert_eq!(
+                asked(&c),
+                0,
+                "frame {k}: pictures asked while the list flies"
+            );
+        }
+    }
+    // Settled: they're asked for again.
+    for _ in 0..30 {
+        now += Duration::from_millis(16);
+        c = frame(&mut s, now);
+    }
+    assert!(asked(&c) > 0, "once it settles the cards ask again");
+}
+
+#[test]
+fn a_jump_reads_the_pictures_where_the_list_is_going_on_its_way() {
+    let songs = Songs::new("select-look-ahead", &many());
+    let cfg = Config {
+        main_menu: true,
+        accent: ACCENT,
+        animations: true,
+        ..harness::config()
+    };
+    let mut entries = songs.entries();
+    for e in &mut entries {
+        e.meta.background = Some("bg.png".into());
+    }
+    let mut s = state_with(cfg, entries);
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    for _ in 0..60 {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    // Far down the list, as Random goes: the set it lands on isn't on screen yet.
+    let to = s.select.song_groups().len() - 3;
+    let row = s.select.song_groups()[to].start;
+    s.select.set_cursor(row);
+    let key = |i: usize| {
+        let e = &s.library[s.select.visible_index(i)];
+        render::path_picture_key(&preview::background_path(e).expect("a picture"))
+    };
+    let (landing, next) = (key(row), key(s.select.song_groups()[to + 1].start));
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    let drawn = cards(&c).iter().any(|(i, _)| *i == row);
+    assert!(!drawn, "not on screen yet");
+    assert!(
+        c.pictures_wanted.contains(&landing) && c.pictures_wanted.contains(&next),
+        "the set it lands on and its neighbours are asked for at once"
     );
 }

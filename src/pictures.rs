@@ -32,13 +32,30 @@ fn external(name: &str) -> bool {
     name.starts_with(COVER_PREFIX) || name.starts_with(PATH_PREFIX)
 }
 
+/// At most this many pictures read by path at once (song select's cards and banner): flying
+/// through the list or spamming Random would start a read for every set passing by, and all of
+/// them decoding at once makes the game stutter. The ones still wanted next frame are asked again.
+const MAX_PATH_READS: usize = 3;
+/// How many read pictures go into their slots (and up to the GPU) a frame.
+const PLACE_PER_FRAME: usize = 3;
+
 /// How long a picture that couldn't be read waits before it is looked for again.
 const RETRY: Duration = Duration::from_secs(2);
 
 /// What one animation's frames may take together: past it they're kept smaller, at the next of
 /// `SIDES`, and blown back up to the cell when shown.
 const MAX_ANIMATION_BYTES: usize = 160 << 20;
-const SIDES: [u32; 5] = [PICTURE_CELL, 384, 256, 192, 128];
+const SIDES: [u32; 5] = [
+    PICTURE_CELL,
+    if PICTURE_CELL / 2 > 384 {
+        PICTURE_CELL / 2
+    } else {
+        384
+    },
+    256,
+    192,
+    128,
+];
 /// The most frames kept of one animation; it loops over those.
 const MAX_FRAMES: usize = 1200;
 /// Frames saved to show for 10 ms or less show for this long, as browsers do (a GIF saved with
@@ -98,6 +115,12 @@ pub struct Pictures {
     /// When the failed ones are tried again (a file put in the folder later, or fixed).
     retry_at: Instant,
     uploads: Vec<(u32, Vec<u8>)>,
+    /// Read and waiting for their slot: a few go up a frame (`update`).
+    arrived: Vec<(String, Image)>,
+    /// Where small copies of the pictures read by path are kept (`read_by_path`); none in tests.
+    thumbs: Option<PathBuf>,
+    /// Calls off the copies being made ahead (`prewarm`).
+    prewarm: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// The animated pictures in slots, and the frame each slot shows.
     playing: HashMap<String, (Image, usize)>,
     tx: Sender<Loaded>,
@@ -115,6 +138,13 @@ impl Default for Pictures {
             failed: Vec::new(),
             retry_at: Instant::now(),
             uploads: Vec::new(),
+            arrived: Vec::new(),
+            thumbs: if cfg!(test) {
+                None
+            } else {
+                crate::config::cache_dir().map(|d| d.join("thumbs"))
+            },
+            prewarm: None,
             playing: HashMap::new(),
             tx,
             rx,
@@ -134,6 +164,36 @@ impl Pictures {
         let slot = slots.len() as u32;
         slots.insert(name.to_string(), (slot, aspect));
         self.slots = Arc::new(slots);
+    }
+
+    /// Makes the small copies of the pictures at `paths` that aren't made yet, on a thread of
+    /// its own, one at a time with a pause between: song select's cards then read in a few ms
+    /// each, the first time they're seen too. A new call stops the last one's work.
+    pub fn prewarm(&mut self, paths: Vec<PathBuf>) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let Some(thumbs) = self.thumbs.clone() else {
+            return;
+        };
+        if let Some(stop) = self.prewarm.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        self.prewarm = Some(stop.clone());
+        std::thread::spawn(move || {
+            for path in paths {
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let made = thumb_path(&path, &thumbs).is_some_and(|(_, found)| found.is_some());
+                if !made {
+                    let (Some(dir), Some(file)) = (path.parent(), path.file_name()) else {
+                        continue;
+                    };
+                    let _ = read_by_path(dir, &file.to_string_lossy(), Some(&thumbs));
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        });
     }
 
     pub fn take_uploads(&mut self) -> Vec<(u32, Vec<u8>)> {
@@ -162,6 +222,7 @@ impl Pictures {
                 }
             }
             self.pending.retain(cover);
+            self.arrived.retain(|(n, _)| cover(n));
             self.failed.retain(cover);
             self.playing.retain(|n, _| cover(n));
         }
@@ -178,7 +239,7 @@ impl Pictures {
             }
             self.pending.retain(|n| *n != name);
             match got {
-                Ok(image) => self.place(name, image, wanted),
+                Ok(image) => self.arrived.push((name, image)),
                 Err(e) => {
                     eprintln!("map picture {name}: {e}");
                     self.failed.push(name);
@@ -186,10 +247,33 @@ impl Pictures {
                 }
             }
         }
+        // A few a frame go into their slots and up to the GPU (up to 3 MB each: many in one frame
+        // is a hitch), the ones drawn now first. Read ones no longer drawn wait their turn; past a
+        // texture's worth the oldest are let go.
+        for _ in 0..PLACE_PER_FRAME {
+            let next = self
+                .arrived
+                .iter()
+                .position(|(n, _)| wanted.contains(n))
+                .or((!self.arrived.is_empty()).then_some(0));
+            let Some(i) = next else {
+                break;
+            };
+            let (name, image) = self.arrived.remove(i);
+            self.place(name, image, wanted);
+        }
+        let over = self.arrived.len().saturating_sub(PICTURE_SLOTS as usize);
+        self.arrived.drain(..over);
+        let mut path_reads = self
+            .pending
+            .iter()
+            .filter(|n| n.starts_with(PATH_PREFIX))
+            .count();
         for name in wanted {
             if self.slots.contains_key(name)
                 || self.pending.contains(name)
                 || self.failed.contains(name)
+                || self.arrived.iter().any(|(n, _)| n == name)
             {
                 continue;
             }
@@ -202,11 +286,16 @@ impl Pictures {
                 else {
                     continue;
                 };
+                if path_reads >= MAX_PATH_READS {
+                    continue;
+                }
+                path_reads += 1;
                 self.pending.push(name.clone());
                 let (tx, name) = (self.tx.clone(), name.clone());
                 let file = file.to_string_lossy().into_owned();
+                let thumbs = self.thumbs.clone();
                 std::thread::spawn(move || {
-                    let got = read(&dir, &file);
+                    let got = read_by_path(&dir, &file, thumbs.as_deref());
                     let _ = tx.send((dir, name, got));
                 });
                 continue;
@@ -278,6 +367,95 @@ pub use crate::tko::clips::safe_name;
 
 /// The picture `name` in `dir` (matched ignoring case, as maps from Windows expect).
 fn read(dir: &Path, name: &str) -> Result<Image, String> {
+    let path = locate(dir, name);
+    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    if size > MAX_BYTES {
+        return Err(format!("{} MB is too big", size / 1024 / 1024));
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    decode(&bytes)
+}
+
+/// Where the small copy of the picture at `path` goes in `thumbs` (by the file, its size and
+/// when it was changed, and the cell's size), and the copy if it's there.
+fn thumb_path(path: &Path, thumbs: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+    use std::hash::{Hash, Hasher};
+    let meta = std::fs::metadata(path).ok()?;
+    let changed = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (path, meta.len(), changed, PICTURE_CELL).hash(&mut h);
+    let stem = thumbs.join(format!("{:016x}", h.finish()));
+    let found = ["jpg", "png"]
+        .into_iter()
+        .map(|ext| stem.with_extension(ext))
+        .find(|p| p.is_file());
+    Some((stem, found))
+}
+
+/// `read`, for a picture read by path (song select's backgrounds), through a small copy of it
+/// in `thumbs`: the copy is the picture no wider or taller than a cell (its own shape kept, so
+/// its aspect too), a JPEG (a PNG when it's see-through). Reading that takes a few ms where the
+/// whole picture, decoded and squeezed, takes tens of them. Animations aren't copied.
+fn read_by_path(dir: &Path, name: &str, thumbs: Option<&Path>) -> Result<Image, String> {
+    let path = locate(dir, name);
+    let Some((stem, found)) = thumbs.and_then(|t| thumb_path(&path, t)) else {
+        return read(dir, name);
+    };
+    if let Some(small) = found
+        .and_then(|f| std::fs::read(f).ok())
+        .and_then(|b| image::load_from_memory(&b).ok())
+    {
+        return Ok(still(small));
+    }
+    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    if size > MAX_BYTES {
+        return Err(format!("{} MB is too big", size / 1024 / 1024));
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    if image::guess_format(&bytes).is_ok_and(|f| f == image::ImageFormat::Gif) {
+        return decode(&bytes);
+    }
+    let whole = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+    let small = whole.resize(
+        PICTURE_CELL,
+        PICTURE_CELL,
+        image::imageops::FilterType::Triangle,
+    );
+    if let Some(parent) = stem.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Written beside and moved in, so a half-written copy is never read.
+    let see_through = small.color().has_alpha() && small.to_rgba8().pixels().any(|p| p[3] < 255);
+    let (ext, format, copy) = if see_through {
+        ("png", image::ImageFormat::Png, small.clone())
+    } else {
+        let rgb = image::DynamicImage::ImageRgb8(small.to_rgb8());
+        ("jpg", image::ImageFormat::Jpeg, rgb)
+    };
+    let part = stem.with_extension(format!("{ext}.part"));
+    if copy.save_with_format(&part, format).is_ok() {
+        let _ = std::fs::rename(&part, stem.with_extension(ext));
+    }
+    Ok(still(small))
+}
+
+/// A still picture, squeezed into its cell.
+fn still(img: image::DynamicImage) -> Image {
+    let aspect = img.width().max(1) as f32 / img.height().max(1) as f32;
+    Image {
+        frames: vec![squeeze(img.to_rgba8(), PICTURE_CELL, true)],
+        ends: vec![0.0],
+        side: PICTURE_CELL,
+        aspect,
+    }
+}
+
+/// The file `name` in `dir`, matched ignoring case when it isn't there as written.
+fn locate(dir: &Path, name: &str) -> PathBuf {
     let mut path = dir.join(name);
     if !path.is_file()
         && let Some(found) = std::fs::read_dir(path.parent().unwrap_or(dir))
@@ -294,12 +472,7 @@ fn read(dir: &Path, name: &str) -> Result<Image, String> {
     {
         path = found;
     }
-    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
-    if size > MAX_BYTES {
-        return Err(format!("{} MB is too big", size / 1024 / 1024));
-    }
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    decode(&bytes)
+    path
 }
 
 /// `bytes` (an image file), every frame of it if it is animated.
@@ -656,6 +829,79 @@ mod tests {
         p.update(None, &wanted, &at(0.0), &[]);
         assert!(p.playing.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_few_pictures_by_path_are_read_at_a_time_and_go_up_a_few_a_frame() {
+        let dir =
+            std::env::temp_dir().join(format!("taiko-rs-pictures-few-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths: Vec<(String, PathBuf)> = (0..8)
+            .map(|i| {
+                let path = dir.join(format!("bg{i}.png"));
+                std::fs::write(&path, png(8, 8, [i * 30, 0, 0, 255])).unwrap();
+                (crate::render::path_picture_key(&path), path)
+            })
+            .collect();
+        let wanted: Vec<String> = paths.iter().map(|(k, _)| k.clone()).collect();
+        let mut p = Pictures::default();
+        p.update(None, &wanted, &[], &paths);
+        assert_eq!(p.pending.len(), MAX_PATH_READS, "only a few read at once");
+        let mut most = 0;
+        for _ in 0..400 {
+            p.update(None, &wanted, &[], &paths);
+            most = most.max(p.pending.len());
+            assert!(
+                p.take_uploads().len() <= PLACE_PER_FRAME,
+                "a few go up a frame"
+            );
+            if p.slots().len() == paths.len() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(p.slots().len(), paths.len(), "all read in the end");
+        assert!(most <= MAX_PATH_READS);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_picture_read_by_path_is_kept_small_and_read_back_from_that() {
+        let base =
+            std::env::temp_dir().join(format!("taiko-rs-pictures-thumbs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (dir, thumbs) = (base.join("set"), base.join("thumbs"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = PICTURE_CELL * 2;
+        std::fs::write(dir.join("BG.png"), png(big, big / 2, [200, 40, 40, 255])).unwrap();
+        let first = read_by_path(&dir, "bg.png", Some(&thumbs)).unwrap();
+        let (_, made) = thumb_path(&dir.join("BG.png"), &thumbs).unwrap();
+        let made = made.expect("a small copy is kept");
+        assert_eq!(
+            made.extension().unwrap(),
+            "jpg",
+            "an opaque picture as a JPEG"
+        );
+        let small = image::open(&made).unwrap();
+        assert_eq!(small.width(), PICTURE_CELL, "a cell wide");
+        assert!(
+            small.height().abs_diff(PICTURE_CELL / 2) <= 1,
+            "its shape kept"
+        );
+        // Read again: from the copy, the same shape and size.
+        let again = read_by_path(&dir, "bg.png", Some(&thumbs)).unwrap();
+        assert_eq!((again.aspect, again.side), (first.aspect, first.side));
+        assert!((again.aspect - 2.0).abs() < 0.01, "{}", again.aspect);
+        assert_eq!(
+            again.frames[0].len(),
+            (PICTURE_CELL * PICTURE_CELL * 4) as usize
+        );
+        // The picture changed: a copy of its own.
+        std::fs::write(dir.join("BG.png"), png(big, big, [0, 0, 200, 255])).unwrap();
+        let changed = read_by_path(&dir, "bg.png", Some(&thumbs)).unwrap();
+        assert!((changed.aspect - 1.0).abs() < 0.01, "{}", changed.aspect);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

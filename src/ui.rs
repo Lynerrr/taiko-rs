@@ -365,6 +365,8 @@ pub struct Select {
     /// Where the pointer is while flying through the list (right drag, scrollbar): the heading
     /// passing by shows beside it.
     pub scrubbing: Option<f32>,
+    /// The list is moving (`draw`): the cards ask for no new pictures, only show those read.
+    hold_pictures: bool,
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
     random_history: Vec<usize>,
     rng: u64,
@@ -422,6 +424,8 @@ struct ListAnim {
     card_light: std::collections::HashMap<usize, f32>,
     /// When each card picture (`render::path_picture_key`) was first drawn, to fade it in.
     covers: std::collections::HashMap<String, std::time::Instant>,
+    /// When the transition before this one started (selections coming faster than they land).
+    last_start: Option<std::time::Instant>,
 }
 
 /// The list held by the pointer: it scrolls with it, then flies on and settles on a song.
@@ -473,6 +477,8 @@ const COVER_FADE_MS: f32 = 200.0;
 const COVER_SHADE: (f32, f32) = (0.85, 0.4);
 const BOTTOM_FADE: f32 = 16.0;
 const DIFF_BAR_DIM: f32 = 0.35;
+/// How long after the list has got to a new selection the cards start asking for pictures.
+const PICTURE_SETTLE_MS: f32 = 60.0;
 
 /// What a song's name starts with, as its heading when the list is by artist or title.
 fn initial(name: &str) -> String {
@@ -594,6 +600,7 @@ impl Select {
             scroll_max: 0.0,
             thumb: 0.0,
             scrubbing: None,
+            hold_pictures: false,
             random_history: Vec::new(),
             rng: seed | 1,
         };
@@ -1398,7 +1405,8 @@ impl Select {
             let a = &mut self.anim;
             (a.scroll_from, a.outline_from, a.open_from, a.closing_from) =
                 (a.scroll, a.outline, a.open_now, a.closing_now);
-            a.start = Some(std::time::Instant::now());
+            a.last_start = a.start;
+            a.start = Some(crate::render::frame_now());
             a.ms = 0.0;
         }
     }
@@ -1633,6 +1641,12 @@ impl Select {
     }
 
     /// The songs as ranges of `rows`.
+    /// Tests: the library index of list row `row`.
+    #[cfg(test)]
+    pub fn visible_index(&self, row: usize) -> usize {
+        self.visible[row]
+    }
+
     pub fn song_groups(&self) -> &[std::ops::Range<usize>] {
         &self.groups
     }
@@ -2578,7 +2592,8 @@ impl Select {
                 }
                 a.scroll_from = a.scroll;
                 a.outline_from = a.outline;
-                a.start = Some(std::time::Instant::now());
+                a.last_start = a.start;
+                a.start = Some(crate::render::frame_now());
                 // A release's longer glide applies to the transition it starts, then resets.
                 if a.cursor != Some(usize::MAX) {
                     a.ms = 0.0;
@@ -2722,6 +2737,37 @@ impl Select {
                 [r, g, b, a * alpha]
             }
         };
+        // Flying through the list (the pointer or the scrollbar holding it, or a new selection
+        // before the last one has got there: Random spammed, an arrow held down), the cards show
+        // only the pictures already read, so the sets passing by don't each start one reading.
+        let settle = LIST_ANIM_MS + PICTURE_SETTLE_MS;
+        let ms = |t: std::time::Instant, since: std::time::Instant| {
+            t.saturating_duration_since(since).as_secs_f32() * 1000.0
+        };
+        let now = crate::render::frame_now();
+        let rushed = match (self.anim.start, self.anim.last_start) {
+            (Some(t), Some(last)) => ms(t, last) < settle && ms(now, t) < settle,
+            _ => false,
+        };
+        self.hold_pictures =
+            self.scrubbing.is_some() || self.drag.is_some() || self.free.is_some() || rushed;
+        // On its way to a new selection: the sets where it's going are read meanwhile, so their
+        // cards come in with their pictures.
+        if !legacy
+            && !self.hold_pictures
+            && self.anim.start.is_some_and(|t| ms(now, t) < LIST_ANIM_MS)
+            && let Some(g0) = cursor_group
+        {
+            let above = final_cursor - final_scroll;
+            let up = (above / SONG_H).ceil() as usize + 1;
+            let down = ((view - above) / SONG_H).ceil() as usize + 1;
+            for g in g0.saturating_sub(up)..(g0 + down + 1).min(groups.len()) {
+                let e = &library[self.visible[groups[g].start]];
+                if let Some(bg) = crate::preview::background_path(e) {
+                    c.want_picture_path(&bg);
+                }
+            }
+        }
         let mut lights = std::mem::take(&mut self.anim.card_light);
         let mut covers = std::mem::take(&mut self.anim.covers);
         for (row, ry, rh, alpha) in &rows {
@@ -3304,22 +3350,31 @@ impl Select {
             let inner = [x + 1.0, y + 1.0, w - 2.0, h - 2.0];
             // Flying through the list (right-drag): only pictures already read, so hundreds of
             // sets passing by don't each start one reading.
-            let flying = self.scrubbing.is_some() && !c.picture_slots.contains_key(&key);
+            let flying = self.hold_pictures && !c.picture_slots.contains_key(&key);
             if !flying && c.picture_cover(&bg, inner, [1.0, 1.0, 1.0, a]) {
                 if since.is_none() {
                     covers.insert(key, crate::render::frame_now());
                 }
                 const BANDS: usize = 16;
                 let bw = inner[2] / BANDS as f32;
-                for b in 0..BANDS {
+                let shade = |b: usize| {
                     let t = b as f32 / (BANDS - 1) as f32;
-                    let shade = COVER_SHADE.0 + (COVER_SHADE.1 - COVER_SHADE.0) * t;
-                    // Band edges on device pixels, each band starting where the last ends: no
-                    // seam (a gap or an overlap) shows between them.
-                    let edge = |b: usize| crate::render::snap_to_grid(inner[0] + b as f32 * bw);
-                    let (l, r) = (edge(b), edge(b + 1));
-                    let col = rgba(style::SURFACE_1, shade * a);
-                    c.rect(l, inner[1], r - l, inner[3], col);
+                    (COVER_SHADE.0 + (COVER_SHADE.1 - COVER_SHADE.0) * t) * a
+                };
+                // Layers from the card's left edge to the end of each band, so band `b` is
+                // under layers `b..`: every edge belongs to one layer alone (bands side by side
+                // meet on shared edges, which show as light seams at some pixel sizes). Layer `b`
+                // adds what band `b` needs over the layers right of it.
+                for b in 0..BANDS {
+                    let below = if b + 1 < BANDS {
+                        1.0 - shade(b + 1)
+                    } else {
+                        1.0
+                    };
+                    let alpha = 1.0 - (1.0 - shade(b)) / below;
+                    let r = crate::render::snap_to_grid(inner[0] + (b + 1) as f32 * bw);
+                    let col = rgba(style::SURFACE_1, alpha.max(0.0));
+                    c.rect(inner[0], inner[1], r - inner[0], inner[3], col);
                 }
             }
         }
