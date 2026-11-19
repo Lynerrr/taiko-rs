@@ -170,6 +170,7 @@ pub(super) fn render_loop(
             pixel_scale,
             avatar_uploads,
             picture_uploads,
+            card_uploads,
         ) = {
             let mut s = lock(&state);
             if s.quit {
@@ -206,6 +207,7 @@ pub(super) fn render_loop(
                 if s.cfg.half_resolution { 2 } else { 1 },
                 s.avatars.take_uploads(),
                 s.pictures.take_uploads(),
+                s.card_pictures.take_uploads(),
             )
         };
         // GPU waits and uploads never hold the input/state mutex.
@@ -229,6 +231,9 @@ pub(super) fn render_loop(
         }
         for (slot, rgba) in picture_uploads {
             renderer.set_picture(slot, &rgba);
+        }
+        for (slot, rgba) in card_uploads {
+            renderer.set_card(slot, &rgba);
         }
         if let Some(atlas) = atlas {
             renderer.set_sprites(&atlas);
@@ -1188,6 +1193,7 @@ impl State {
             again: Default::default(),
             avatars,
             pictures: pictures::Pictures::default(),
+            card_pictures: crate::card_pictures::CardPictures::default(),
             admin: false,
             crash,
             crash_sent,

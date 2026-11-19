@@ -19,6 +19,7 @@ struct Gpu {
     globals: wgpu::Buffer,
     group: wgpu::BindGroup,
     font: wgpu::Texture,
+    cards: wgpu::Texture,
     revision: u64,
 }
 
@@ -86,6 +87,7 @@ impl Gpu {
             ..Default::default()
         });
         let (view, font) = make_font_texture(&device, &queue);
+        let cards = card_texture(&device);
         let group = Renderer::shape_bind_group(
             &device,
             &queue,
@@ -95,6 +97,7 @@ impl Gpu {
             &sampler,
             &view,
             &view,
+            &cards.create_view(&Default::default()),
             &Atlas::default(),
         );
         Self {
@@ -104,6 +107,7 @@ impl Gpu {
             globals,
             group,
             font,
+            cards,
             revision: 0,
         }
     }
@@ -339,4 +343,43 @@ fn font_gpu_large_titles_use_native_density_rasters() {
             image::save_buffer(path, &pixels, w, h, image::ColorType::Rgba8).unwrap();
         }
     }
+}
+
+#[test]
+fn card_pictures_gpu_draw_their_own_strip() {
+    let mut gpu = Gpu::new();
+    let [w, h] = CARD_CELL;
+    let strip = |rgb: [u8; 3]| -> Vec<u8> {
+        (0..w * h)
+            .flat_map(|_| [rgb[0], rgb[1], rgb[2], 255])
+            .collect()
+    };
+    // Its neighbours in the texture, beside and below it, in other colours.
+    let per = CARD_SIDE[0] / w;
+    let slot = per + 1;
+    for (s, rgb) in [
+        (slot - 1, [255, 0, 0]),
+        (slot, [0, 255, 0]),
+        (slot + 1, [0, 0, 255]),
+        (slot - per, [255, 255, 0]),
+        (slot + per, [255, 0, 255]),
+    ] {
+        write_card(&gpu.queue, &gpu.cards, s, &strip(rgb));
+    }
+    let path = std::path::Path::new("/songs/a/bg.png");
+    let mut canvas = Canvas::<()>::default();
+    canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), slot)].into());
+    // As wide as the target and a third of it tall: its middle, cut to it.
+    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4]));
+    let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
+    let at = |x: u32, y: u32| {
+        let i = ((y * width + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    for (x, y) in [(10, 42), (128, 64), (245, 85), (128, 41), (128, 86)] {
+        assert_eq!(at(x, y), [0, 255, 0, 255], "its own strip at {x}, {y}");
+    }
+    // As tall as the rect (its width is cut by the canvas's clip, which this doesn't apply).
+    assert_eq!(at(128, 36)[3], 0, "nothing above it");
+    assert_eq!(at(128, 92)[3], 0, "nothing below it");
 }

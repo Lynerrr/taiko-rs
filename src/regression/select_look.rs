@@ -228,9 +228,9 @@ fn every_set_card_on_screen_asks_for_its_own_picture() {
         let e = &s.library[s.select.row_map(row).expect("a set's map")];
         let bg = preview::background_path(e).expect("it names a picture");
         assert!(
-            c.picture_paths
+            c.cards_wanted
                 .iter()
-                .any(|(k, p)| *p == bg && *k == render::path_picture_key(&bg)),
+                .any(|(k, p, drawn)| *p == bg && *k == render::path_picture_key(&bg) && *drawn),
             "{} asks for its picture",
             e.meta.title
         );
@@ -422,8 +422,8 @@ fn a_cards_shade_has_no_seams() {
     let (mut s, _songs, mut now) = menu_look("select-look-shade");
     let i = s.select.selected().expect("a map is selected");
     let bg = preview::background_path(&s.library[i]).expect("it names a picture");
-    s.pictures
-        .pretend_loaded(&render::path_picture_key(&bg), 16.0 / 9.0);
+    s.card_pictures
+        .pretend_loaded(&render::path_picture_key(&bg), [0.5, 0.5, 0.5]);
     let c = settled(&mut s, &mut now);
     let open = open_card(&c, &s);
     // The shade over the open card's picture: plain shapes in the card's dark surface colour.
@@ -561,9 +561,207 @@ fn a_jump_reads_the_pictures_where_the_list_is_going_on_its_way() {
     let c = frame(&mut s, now);
     let drawn = cards(&c).iter().any(|(i, _)| *i == row);
     assert!(!drawn, "not on screen yet");
+    let card = |k: &String| c.cards_wanted.iter().any(|w| w.0 == *k);
     assert!(
-        c.pictures_wanted.contains(&landing) && c.pictures_wanted.contains(&next),
-        "the set it lands on and its neighbours are asked for at once"
+        card(&landing) && card(&next),
+        "the cards of the set it lands on and its neighbours are asked for at once"
+    );
+    assert!(
+        c.pictures_wanted.contains(&landing),
+        "and the banner's picture of the set it lands on"
+    );
+}
+
+/// Sixty sets, each naming a picture: screens of them.
+fn many_sets(tag: &str) -> (State, Songs, Instant) {
+    let charts: Vec<maps::Chart> = (0..60)
+        .map(|i| maps::Chart {
+            name: Box::leak(format!("set-{i:02}").into_boxed_str()),
+            ..maps::basics()
+        })
+        .collect();
+    menu_look_with(tag, &charts)
+}
+
+/// The picture key of the set whose first row is `row`.
+fn set_key(s: &State, row: usize) -> String {
+    let e = &s.library[s.select.row_map(row).expect("a set's map")];
+    render::path_picture_key(&preview::background_path(e).expect("it names a picture"))
+}
+
+/// A card's picture drawn (`render::Canvas::card_picture`): its slot in `params[3]` below
+/// -100000.
+fn card_picture(s: &Shape) -> bool {
+    s.params[3] <= -100_000.0
+}
+
+/// The cards wholly in the list's view (their hits not cut by its ends): first row and where.
+fn cards_in_view(c: &Canvas, s: &State) -> Vec<(usize, [f32; 4])> {
+    let [_, end] = s.select.frame_span();
+    cards(c)
+        .into_iter()
+        .filter(|(_, r)| r[1] >= s.select.list_top() && r[1] + r[3] <= end && r[3] > 25.0)
+        .collect()
+}
+
+/// Drags the list up by `by` units over `frames` frames, then wheels it on down a notch a
+/// frame for `frames` more, calling `each` with every frame (drawn twice: a frame's hits come
+/// back with the next one, and no time passes between the two, so nothing moves).
+fn drag_then_wheel(
+    s: &mut State,
+    now: &mut Instant,
+    by: f32,
+    frames: usize,
+    mut each: impl FnMut(&State, &Canvas, &str),
+) {
+    for k in 1..=frames {
+        s.select.drag_to(-by * k as f32 / frames as f32);
+        *now += Duration::from_millis(16);
+        frame(s, *now);
+        let c = frame(s, *now);
+        each(s, &c, "dragging");
+    }
+    s.select.drag_end(&s.library);
+    for _ in 0..frames {
+        s.wheel(-1);
+        *now += Duration::from_millis(16);
+        frame(s, *now);
+        let c = frame(s, *now);
+        each(s, &c, "wheeling");
+    }
+}
+
+#[test]
+fn dragging_or_wheeling_the_list_draws_every_card_on_screen_with_its_picture() {
+    let (mut s, _songs, mut now) = many_sets("select-look-fly-drawn");
+    // Every strip in, as the read-ahead has them by the time their cards come into view.
+    let groups: Vec<usize> = s.select.song_groups().iter().map(|g| g.start).collect();
+    for &row in &groups {
+        let key = set_key(&s, row);
+        s.card_pictures.pretend_loaded(&key, [0.3, 0.4, 0.5]);
+    }
+    let c = settled(&mut s, &mut now);
+    let first = cards_in_view(&c, &s)[0].0;
+    let mut seen = std::collections::HashSet::new();
+    drag_then_wheel(&mut s, &mut now, 600.0, 12, |s, c, how| {
+        let shown = cards_in_view(c, s);
+        assert!(shown.len() >= 5, "{how}: cards on screen");
+        for (row, r) in shown {
+            seen.insert(row);
+            let pictured = c
+                .shapes
+                .iter()
+                .any(|sh| card_picture(sh) && inside(sh.center, r, 0.5) && sh.fill[3] > 0.05);
+            assert!(
+                pictured,
+                "{how}: the card of row {row} at {r:?} shows its picture"
+            );
+        }
+    });
+    assert!(
+        seen.iter().any(|&r| r > first + 20),
+        "the list went a long way down"
+    );
+}
+
+#[test]
+fn dragging_or_wheeling_the_list_reads_the_cards_ahead_of_it() {
+    let (mut s, _songs, mut now) = many_sets("select-look-fly-ahead");
+    settled(&mut s, &mut now);
+    let rows: Vec<usize> = s.select.song_groups().iter().map(|g| g.start).collect();
+    drag_then_wheel(&mut s, &mut now, 600.0, 12, |s, c, how| {
+        let shown = cards_in_view(c, s);
+        let wanted = |row: usize| c.cards_wanted.iter().find(|w| w.0 == set_key(s, row));
+        for (row, _) in &shown {
+            assert!(
+                wanted(*row).is_some_and(|w| w.2),
+                "{how}: the card of row {row} asks for its picture as it's drawn"
+            );
+        }
+        // Not drawn yet: the sets below the screen (the way it goes) and fewer above it.
+        let (top, bottom) = (shown[0].0, shown[shown.len() - 1].0);
+        let ahead = rows
+            .iter()
+            .filter(|&&r| r > bottom && wanted(r).is_some_and(|w| !w.2))
+            .count();
+        let behind = rows
+            .iter()
+            .filter(|&&r| r < top && wanted(r).is_some_and(|w| !w.2))
+            .count();
+        let below = rows.iter().filter(|&&r| r > bottom).count();
+        assert!(
+            ahead >= shown.len().min(below),
+            "{how}: at least a screen read ahead ({ahead} of {below})"
+        );
+        assert!(
+            ahead >= behind.min(below),
+            "{how}: more ahead than behind ({ahead}, {behind})"
+        );
+    });
+}
+
+#[test]
+fn a_card_shows_its_pictures_colour_until_the_picture_is_in_then_fades_it_in() {
+    let (mut s, _songs, mut now) = menu_look_with("select-look-card-colour", &many());
+    s.cfg.animations = true;
+    let c = settled(&mut s, &mut now);
+    // The open set's card: not dimmed, so its picture's at full once in.
+    let card = open_card(&c, &s);
+    let (row, _) = cards_in_view(&c, &s)
+        .into_iter()
+        .find(|(_, r)| *r == card)
+        .expect("the open card in view");
+    let key = set_key(&s, row);
+    let colour = [0.2, 0.6, 0.9];
+    s.card_pictures.pretend_colour(&key, colour);
+    let in_card = |c: &Canvas, f: &dyn Fn(&Shape) -> bool| -> Vec<Shape> {
+        c.shapes
+            .iter()
+            .filter(|sh| inside(sh.center, card, 0.5) && f(sh))
+            .copied()
+            .collect()
+    };
+    let coloured = |sh: &Shape| plain(sh) && same_rgb(sh.fill, [0.2, 0.6, 0.9, 1.0]);
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert_eq!(
+        in_card(&c, &coloured).len(),
+        1,
+        "the picture's colour stands in for it"
+    );
+    assert!(in_card(&c, &card_picture).is_empty(), "no picture yet");
+    // It comes in: over the colour, from nothing.
+    s.card_pictures.pretend_loaded(&key, colour);
+    let mut last = 0.0f32;
+    let mut first = true;
+    for _ in 0..8 {
+        now += Duration::from_millis(16);
+        let c = frame(&mut s, now);
+        let pic = in_card(&c, &card_picture);
+        assert_eq!(pic.len(), 1, "the picture drawn");
+        let a = pic[0].fill[3];
+        if first {
+            assert!(a < 0.2, "it starts all but clear, not at once: {a}");
+            first = false;
+        }
+        assert!(a >= last, "it only fades in: {last} then {a}");
+        last = a;
+        assert_eq!(
+            in_card(&c, &coloured).len(),
+            1,
+            "the colour under it meanwhile"
+        );
+    }
+    for _ in 0..20 {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    let c = frame(&mut s, now);
+    let pic = in_card(&c, &card_picture);
+    assert!(pic[0].fill[3] > 0.99, "in: at full");
+    assert!(
+        in_card(&c, &coloured).is_empty(),
+        "the colour gone under it"
     );
 }
 

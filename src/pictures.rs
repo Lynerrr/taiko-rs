@@ -581,7 +581,7 @@ fn squeeze(img: image::RgbaImage, side: u32, straight: bool) -> Vec<u8> {
     px
 }
 
-fn premultiply(px: &mut [u8]) {
+pub(crate) fn premultiply(px: &mut [u8]) {
     for p in px.as_chunks_mut::<4>().0 {
         let a = u16::from(p[3]);
         for v in &mut p[..3] {

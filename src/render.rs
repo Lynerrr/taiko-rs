@@ -364,6 +364,9 @@ pub struct Renderer {
     /// Profile pictures, a grid of `avatars::CELL` squares (`Renderer::set_avatar`).
     avatar_texture: wgpu::Texture,
     avatar_view: wgpu::TextureView,
+    /// Song select's card pictures, a grid of `CARD_CELL` strips (`Renderer::set_card`).
+    card_texture: wgpu::Texture,
+    card_view: wgpu::TextureView,
     instances: wgpu::Buffer,
     capacity: usize,
     supported_modes: Vec<wgpu::PresentMode>,
@@ -827,6 +830,57 @@ fn fs(i: V) -> @location(0) vec4<f32> {
 
 /// The shapes shader, its `sprites` array as long as there are sprites and the font atlas laid
 /// out like `font::atlas`.
+/// Puts a card's picture (a `CARD_CELL` strip, premultiplied RGBA) in `slot` of the cards'
+/// texture.
+fn write_card(queue: &wgpu::Queue, texture: &wgpu::Texture, slot: u32, rgba: &[u8]) {
+    let [w, h] = CARD_CELL;
+    if slot >= CARD_SLOTS || rgba.len() != (w * h * 4) as usize {
+        return;
+    }
+    let per = CARD_SIDE[0] / w;
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: slot % per * w,
+                y: slot / per * h,
+                z: 0,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * w),
+            rows_per_image: Some(h),
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+/// The cards' texture (`CARD_SIDE`), empty.
+fn card_texture(device: &wgpu::Device) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("card pictures"),
+        size: wgpu::Extent3d {
+            width: CARD_SIDE[0],
+            height: CARD_SIDE[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
 fn shape_shader() -> String {
     SHADER
         .replace("SPRITE_COUNT", &SPRITES.to_string())
@@ -844,6 +898,10 @@ fn shape_shader() -> String {
         .replace("AVATAR_CELL", &crate::avatars::CELL.to_string())
         .replace("MEDIA_SIDE", &MEDIA_SIDE.to_string())
         .replace("PICTURE_CELL", &PICTURE_CELL.to_string())
+        .replace("CARD_CELL_X", &CARD_CELL[0].to_string())
+        .replace("CARD_CELL_Y", &CARD_CELL[1].to_string())
+        .replace("CARD_SIDE_X", &CARD_SIDE[0].to_string())
+        .replace("CARD_SIDE_Y", &CARD_SIDE[1].to_string())
 }
 
 /// The side of the texture that holds the profile pictures (its top left `PICTURE_CELL` square)
@@ -867,6 +925,25 @@ const _: () = assert!(crate::avatars::GRID * crate::avatars::CELL <= PICTURE_CEL
 /// `Shape::params` w for map picture `slot` is -`PICTURE_BASE` - slot.
 const PICTURE_BASE: f32 = 1000.0;
 
+/// One of song select's card pictures: the middle strip of a map's picture, as wide for its
+/// height as a card (`Renderer::set_card`). They have a texture of their own, of hundreds of
+/// strips, so the cards on screen and the ones the list is heading to are all there at once.
+#[cfg(not(target_os = "android"))]
+pub const CARD_CELL: [u32; 2] = [1024, 64];
+#[cfg(not(target_os = "android"))]
+const CARD_SIDE: [u32; 2] = [4096, 4096];
+#[cfg(target_os = "android")]
+pub const CARD_CELL: [u32; 2] = [512, 32];
+#[cfg(target_os = "android")]
+const CARD_SIDE: [u32; 2] = [2048, 1024];
+/// How many card pictures fit at once.
+pub const CARD_SLOTS: u32 = (CARD_SIDE[0] / CARD_CELL[0]) * (CARD_SIDE[1] / CARD_CELL[1]);
+/// A card picture's width over its height.
+pub const CARD_ASPECT: f32 = CARD_CELL[0] as f32 / CARD_CELL[1] as f32;
+/// `Shape::params` w for card picture `slot` is -`CARD_BASE` - slot.
+const CARD_BASE: f32 = 100_000.0;
+const _: () = assert!(CARD_BASE > PICTURE_BASE + PICTURE_SLOTS as f32);
+
 const SHADER: &str = r#"
 struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32, origin: vec2<f32>, _pad2: vec2<f32> };
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -875,6 +952,7 @@ struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32, origin: vec2
 @group(0) @binding(3) var samp: sampler;
 @group(0) @binding(4) var font: texture_2d<f32>;
 @group(0) @binding(5) var avatars: texture_2d<f32>;
+@group(0) @binding(6) var cards: texture_2d<f32>;
 
 struct Inst {
     @location(0) center: vec2<f32>,
@@ -940,6 +1018,18 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 
 fn shade(in: VOut) -> vec4<f32> {
+    if (in.params.w < -99999.5) {
+        // A card's picture (premultiplied): its strip stretched over the quad, tinted by fill.
+        let slot = u32(-in.params.w - 99999.5);
+        let per = CARD_SIDE_Xu / CARD_CELL_Xu;
+        let cell = vec2<f32>(f32(slot % per), f32(slot / per));
+        let size = vec2<f32>(f32(CARD_CELL_X), f32(CARD_CELL_Y));
+        let edge = vec2<f32>(0.5) / size;
+        let uv = clamp(in.local / (2.0 * in.half) + 0.5, edge, vec2<f32>(1.0) - edge);
+        let side = vec2<f32>(f32(CARD_SIDE_X), f32(CARD_SIDE_Y));
+        let t = textureSampleLevel(cards, samp, (cell + uv) * size / side, 0.0);
+        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a;
+    }
     if (in.params.w < -999.5) {
         // A map's picture (premultiplied), its square stretched over the quad, tinted by fill.
         let slot = u32(-in.params.w - 999.5) + 1u;
@@ -1224,6 +1314,16 @@ impl Renderer {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let (font_view, font_texture) = make_font_texture(&device, &queue);
@@ -1254,6 +1354,8 @@ impl Renderer {
             view_formats: &[],
         });
         let avatar_view = avatar_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let card_texture = card_texture(&device);
+        let card_view = card_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = Self::shape_bind_group(
             &device,
             &queue,
@@ -1263,6 +1365,7 @@ impl Renderer {
             &sampler,
             &font_view,
             &avatar_view,
+            &card_view,
             &Atlas::default(),
         );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1541,6 +1644,8 @@ impl Renderer {
             font_revision: 0,
             avatar_texture,
             avatar_view,
+            card_texture,
+            card_view,
             instances,
             capacity,
             supported_modes: caps.present_modes,
@@ -1607,6 +1712,7 @@ impl Renderer {
             &self.sampler,
             &self.font_view,
             &self.avatar_view,
+            &self.card_view,
             atlas,
         );
     }
@@ -1643,6 +1749,11 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
+    }
+
+    /// Puts a card's picture (a `CARD_CELL` strip, premultiplied RGBA) in `slot`.
+    pub fn set_card(&mut self, slot: u32, rgba: &[u8]) {
+        write_card(&self.queue, &self.card_texture, slot, rgba);
     }
 
     /// Puts a map's picture (`PICTURE_CELL` square, premultiplied RGBA) in `slot`.
@@ -1688,6 +1799,7 @@ impl Renderer {
         sampler: &wgpu::Sampler,
         font: &wgpu::TextureView,
         avatars: &wgpu::TextureView,
+        cards: &wgpu::TextureView,
         atlas: &Atlas,
     ) -> wgpu::BindGroup {
         // The texture can't be empty: no images is one transparent pixel.
@@ -1756,6 +1868,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(avatars),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(cards),
                 },
             ],
         })
@@ -3043,6 +3159,13 @@ pub struct Canvas<H> {
     /// Where the animated ones are in their frames (ms since their layer began), by name; the
     /// first layer to show a picture in a frame sets it.
     pub picture_times: Vec<(String, f64)>,
+    /// Song select's card pictures in their texture, by picture key (`path_picture_key`): slots.
+    pub card_slots: std::sync::Arc<std::collections::HashMap<String, u32>>,
+    /// The card pictures' average colours known, by picture key (`card_colour`).
+    pub card_colours: std::sync::Arc<std::collections::HashMap<String, [f32; 3]>>,
+    /// Card pictures asked for this frame: picture key, file, and whether a card draws it now
+    /// (`card_picture`) or it is only read ahead (`want_card`).
+    pub cards_wanted: Vec<(String, std::path::PathBuf, bool)>,
 }
 
 // By hand: a derive would ask `H: Default` of the hit type.
@@ -3071,6 +3194,9 @@ impl<H> Default for Canvas<H> {
             pictures_wanted: Default::default(),
             picture_paths: Default::default(),
             picture_times: Default::default(),
+            card_slots: Default::default(),
+            card_colours: Default::default(),
+            cards_wanted: Default::default(),
         }
     }
 }
@@ -3270,6 +3396,7 @@ impl<H> Canvas<H> {
         self.pictures_wanted.clear();
         self.picture_paths.clear();
         self.picture_times.clear();
+        self.cards_wanted.clear();
         self.disc = None;
         self.glitch = None;
         self.hits.clear();
@@ -3721,6 +3848,58 @@ impl<H> Canvas<H> {
         let drawn = self.picture(&key, x + w / 2.0, y + h / 2.0, h.max(w / aspect), 0.0, tint);
         self.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
         drawn
+    }
+
+    /// Song select's card picture of the map picture at `path` over all of `[x, y, w, h]`: the
+    /// picture's middle strip, cut to it, tinted by `tint`. Asks for it; false while it isn't in
+    /// (nothing drawn).
+    pub fn card_picture(
+        &mut self,
+        path: &std::path::Path,
+        [x, y, w, h]: [f32; 4],
+        tint: [f32; 4],
+    ) -> bool {
+        let key = path_picture_key(path);
+        let slot = self.card_slots.get(&key).copied();
+        self.ask_card(key, path, true);
+        let Some(slot) = slot else {
+            return false;
+        };
+        // Covering the rect: as tall as it, or as wide when it's wider for its height than a strip.
+        let (sw, sh) = if w > h * CARD_ASPECT {
+            (w, w / CARD_ASPECT)
+        } else {
+            (h * CARD_ASPECT, h)
+        };
+        let start = self.shapes.len();
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [sw / 2.0, sh / 2.0],
+            fill: tint,
+            border: CLEAR,
+            params: [0.0, 0.0, 0.0, -CARD_BASE - slot as f32],
+            angle: 0.0,
+        });
+        self.clip_since(start, x, y, w, h);
+        true
+    }
+
+    /// Asks for the card picture of the map picture at `path` without drawing it, so it's in
+    /// before its card comes into view.
+    pub fn want_card(&mut self, path: &std::path::Path) {
+        self.ask_card(path_picture_key(path), path, false);
+    }
+
+    fn ask_card(&mut self, key: String, path: &std::path::Path, drawn: bool) {
+        match self.cards_wanted.iter_mut().find(|w| w.0 == key) {
+            Some(w) => w.2 |= drawn,
+            None => self.cards_wanted.push((key, path.to_path_buf(), drawn)),
+        }
+    }
+
+    /// The average colour of the card picture of the map picture at `path`, once known.
+    pub fn card_colour(&self, path: &std::path::Path) -> Option<[f32; 3]> {
+        self.card_colours.get(&path_picture_key(path)).copied()
     }
 
     /// Where an animated picture `file` is to be in its frames this frame: `since` ms into them
