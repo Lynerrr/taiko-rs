@@ -6799,6 +6799,18 @@ impl State {
             }
             return;
         }
+        // Over a field of the pp simulator: the wheel steps it, up for more.
+        if self.scene.is_select()
+            && let Some(hit::Hit::PpSimField(field) | hit::Hit::PpSimStep(field, _)) =
+                self.hit_at(vx, vy)
+        {
+            if let Some(sim) = &mut self.preview.sim {
+                for _ in 0..notches.unsigned_abs() {
+                    sim.step(field, notches.signum());
+                }
+            }
+            return;
+        }
         let on_board = self
             .board_rect
             .is_some_and(|[bx, by, bw, bh]| vx >= bx && vx <= bx + bw && vy >= by && vy <= by + bh);
@@ -15020,6 +15032,8 @@ impl State {
                     sim.step(field, dir);
                 }
             }
+            // The wheel's: a click between a field's - and + does nothing.
+            Hit::PpSimField(_) => {}
             Hit::PlayerFolders => {
                 if let Some(p) = &mut self.player {
                     p.folders_open = !p.folders_open;

@@ -1901,3 +1901,44 @@ fn many_sets_charts() -> Vec<maps::Chart> {
         })
         .collect()
 }
+
+#[test]
+fn the_wheel_over_a_pp_simulator_field_steps_it() {
+    let (mut s, _songs, mut now) = menu_look("select-look-pp-wheel");
+    settled(&mut s, &mut now);
+    s.click(Hit::PpSim, None);
+    let c = settled(&mut s, &mut now);
+    let field = |c: &Canvas, f: u8| {
+        hit_rect(c, |h| *h == Hit::PpSimField(f)).expect("the simulator's field")
+    };
+    let k = (s.window_h / render::VIRTUAL_HEIGHT) as f64;
+    let point = |s: &mut State, r: [f32; 4]| {
+        // Its middle: the value, between its - and +.
+        let (px, py) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        s.mouse = (px as f64 * k, py as f64 * k);
+    };
+    let before = s.preview.sim.expect("open");
+    point(&mut s, field(&c, 0));
+    s.wheel(-2);
+    let sim = s.preview.sim.expect("still open");
+    assert!(sim.accuracy < before.accuracy, "down: less accuracy");
+    assert_eq!(sim.misses, before.misses, "misses untouched");
+    s.wheel(2);
+    assert_eq!(
+        s.preview.sim.unwrap().accuracy,
+        before.accuracy,
+        "and back up"
+    );
+    let c = settled(&mut s, &mut now);
+    point(&mut s, field(&c, 1));
+    s.wheel(3);
+    assert_eq!(
+        s.preview.sim.unwrap().misses,
+        before.misses + 3,
+        "up: more misses"
+    );
+    // A click on the field itself does nothing.
+    let at = s.preview.sim.unwrap();
+    s.click(Hit::PpSimField(1), None);
+    assert_eq!(s.preview.sim.unwrap().misses, at.misses);
+}
