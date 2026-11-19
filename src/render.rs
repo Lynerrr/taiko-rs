@@ -344,48 +344,22 @@ impl PresentChoice {
 struct Globals {
     screen_px: [f32; 2],
     px_per_unit: f32,
-    /// How soft frosted shapes are behind glass (`GLASS_BLUR` in pixels; 0 without glass).
-    blur: f32,
+    _pad: f32,
     /// Where virtual (0, 0) is, in pixels of the image drawn to.
     origin: [f32; 2],
     _pad2: [f32; 2],
-    /// The glass surfaces (`Canvas::glass`), two rows each: centre and half size (pixels),
-    /// then corner radius and strength (0 for none).
-    glass: [[f32; 4]; 2 * GLASS_MAX],
 }
-
-/// How many glass surfaces a frame blurs what's behind (the biggest ones).
-pub const GLASS_MAX: usize = 4;
-/// How soft the shapes behind a glass surface are drawn (virtual units).
-pub const GLASS_BLUR: f32 = 7.0;
-/// `Shape::params[3]` of a plain shape that softens behind glass (`Canvas::frost_since`).
-pub const FROST: f32 = 5.0;
 
 impl Globals {
     /// Pixel globals for an image `screen` big, `ppu` pixels to a unit, virtual (0, 0) at
-    /// `origin`, with `glass` (virtual units: centre, half size, radius, strength).
-    fn new(screen: [f32; 2], ppu: f32, origin: [f32; 2], glass: &[[f32; 6]]) -> Globals {
-        let mut rows = [[0.0; 4]; 2 * GLASS_MAX];
-        for (k, g) in glass.iter().take(GLASS_MAX).enumerate() {
-            rows[2 * k] = [
-                g[0] * ppu + origin[0],
-                g[1] * ppu + origin[1],
-                g[2] * ppu,
-                g[3] * ppu,
-            ];
-            rows[2 * k + 1] = [g[4] * ppu, g[5], 0.0, 0.0];
-        }
+    /// `origin`.
+    fn new(screen: [f32; 2], ppu: f32, origin: [f32; 2]) -> Globals {
         Globals {
             screen_px: screen,
             px_per_unit: ppu,
-            blur: if glass.is_empty() {
-                0.0
-            } else {
-                GLASS_BLUR * ppu
-            },
+            _pad: 0.0,
             origin,
             _pad2: [0.0; 2],
-            glass: rows,
         }
     }
 }
@@ -458,8 +432,6 @@ pub struct Renderer {
     /// The background's lean with the pointer (virtual units) and how far it can lean at most
     /// (the picture is drawn that much closer, so its edges never show).
     pub bg_pan: [f32; 3],
-    /// The glass surfaces this frame (`Canvas::glass_rects`).
-    pub glass: Vec<[f32; 6]>,
     pub present: PresentChoice,
     pub adapter_name: String,
     /// The graphics API it draws with.
@@ -948,11 +920,11 @@ fn card_texture(device: &wgpu::Device) -> wgpu::Texture {
     })
 }
 
-/// The stages of the shape shader that read each of its bindings: the globals (0) both, as the
-/// fragment stage reads the panes of glass there; the rest the fragment stage alone.
+/// The stages of the shape shader that read each of its bindings: the globals (0) the vertex
+/// stage, the rest the fragment stage.
 fn shape_binding_stages(binding: u32) -> wgpu::ShaderStages {
     if binding == 0 {
-        wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT
+        wgpu::ShaderStages::VERTEX
     } else {
         wgpu::ShaderStages::FRAGMENT
     }
@@ -960,7 +932,6 @@ fn shape_binding_stages(binding: u32) -> wgpu::ShaderStages {
 
 fn shape_shader() -> String {
     SHADER
-        .replace("GLASS_ROWS", &(2 * GLASS_MAX).to_string())
         .replace("SPRITE_COUNT", &SPRITES.to_string())
         .replace("SPRITE_LAST", &(SPRITES - 1).to_string())
         .replace("CUSTOM_BASE", &format!("{:.1}", crate::system_font::BASE))
@@ -1023,7 +994,7 @@ const CARD_BASE: f32 = 100_000.0;
 const _: () = assert!(CARD_BASE > PICTURE_BASE + PICTURE_SLOTS as f32);
 
 const SHADER: &str = r#"
-struct Globals { screen_px: vec2<f32>, px_per_unit: f32, blur: f32, origin: vec2<f32>, _pad2: vec2<f32>, glass: array<vec4<f32>, GLASS_ROWS> };
+struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32, origin: vec2<f32>, _pad2: vec2<f32> };
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var<uniform> sprites: array<vec4<f32>, SPRITE_COUNT>;
 @group(0) @binding(2) var atlas: texture_2d<f32>;
@@ -1055,9 +1026,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     let corner = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u)) * 2.0 - 1.0;
     // Everything below is in physical pixels so anti-aliasing is exactly one pixel wide.
     let half_px = inst.half * g.px_per_unit;
-    // A frosted shape's softened edge reaches out past it (`Canvas::frost_since`).
-    let frost = select(0.0, g.blur, inst.params.w > 4.5 && inst.params.w < 5.5);
-    let pad = 1.5 + max(inst.params.z, 0.0) * g.px_per_unit + frost;
+    let pad = 1.5 + max(inst.params.z, 0.0) * g.px_per_unit;
     let local = corner * (half_px + vec2<f32>(pad));
     let center_px = inst.center * g.px_per_unit + g.origin;
     // Rotated shapes turn their quad; the fragment works in the shape's own (unrotated) frame.
@@ -1084,21 +1053,6 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
 fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     let q = abs(p) - b + vec2<f32>(r);
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
-}
-
-// How much glass (`Canvas::glass`) is over pixel `p`: 0 outside every pane, up to its strength
-// inside one.
-fn glass_at(p: vec2<f32>) -> f32 {
-    var k = 0.0;
-    for (var i = 0u; i < GLASS_ROWSu; i += 2u) {
-        let box = g.glass[i];
-        let more = g.glass[i + 1u];
-        if (more.y > 0.0) {
-            let r = min(more.x, min(box.z, box.w));
-            k = max(k, more.y * clamp(0.5 - sd_round_box(p - box.xy, box.zw, r), 0.0, 1.0));
-        }
-    }
-    return k;
 }
 
 @fragment
@@ -1213,20 +1167,13 @@ fn shade(in: VOut) -> vec4<f32> {
     let r = min(in.params.x, min(in.half.x, in.half.y));
     let d = sd_round_box(in.local, in.half, r);
     let glow = in.params.z;
-    // Frosted, behind glass: its edges spread `s` pixels as if blurred, a small shape's middle
-    // fainter with it. Anywhere else (s 0.5) the one-pixel edge as always.
-    var s = 0.5;
-    if (in.params.w > 4.5 && in.params.w < 5.5 && g.blur > 0.0) {
-        s = max(0.5, glass_at(in.pos.xy) * g.blur);
-    }
-    let peak = min(1.0, (min(in.half.x, in.half.y) + 0.5) / s);
     var color: vec4<f32>;
     if (glow > 0.0) {
         // Soft falloff outside the shape, used for hit flashes and kiai glow.
         let a = clamp(1.0 - d / glow, 0.0, 1.0);
         color = vec4<f32>(in.fill.rgb, in.fill.a * a * a);
     } else {
-        let coverage = clamp(0.5 - d / (2.0 * s), 0.0, 1.0) * peak;
+        let coverage = clamp(0.5 - d, 0.0, 1.0);
         if (in.params.w > 2.5 && in.params.w < 3.5) {
             // `Canvas::shade_across`: fill at the left edge, border at the right.
             let u = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
@@ -1234,7 +1181,7 @@ fn shade(in: VOut) -> vec4<f32> {
             color = vec4<f32>(c.rgb, c.a * coverage);
         } else {
             let bw = in.params.y;
-            let inner = clamp(0.5 - (d + bw) / (2.0 * s), 0.0, 1.0);
+            let inner = clamp(0.5 - (d + bw), 0.0, 1.0);
             let c = mix(in.border, in.fill, select(1.0, inner, bw > 0.0));
             color = vec4<f32>(c.rgb, c.a * coverage);
         }
@@ -1786,7 +1733,6 @@ impl Renderer {
             bg_blur: 0.0,
             bg_arrive: 0.0,
             bg_pan: [0.0; 3],
-            glass: Vec::new(),
             present,
             adapter_name,
             backend: adapter.get_info().backend,
@@ -2406,12 +2352,7 @@ impl Renderer {
             self.capacity = shapes.len().next_power_of_two().min(self.shape_limit());
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
-        let globals = Globals::new(
-            [w as f32, h as f32],
-            ah / VIRTUAL_HEIGHT,
-            [ax, ay],
-            &self.glass,
-        );
+        let globals = Globals::new([w as f32, h as f32], ah / VIRTUAL_HEIGHT, [ax, ay]);
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !shapes.is_empty() {
@@ -2660,12 +2601,7 @@ impl Renderer {
             self.capacity = shapes.len().next_power_of_two().min(self.shape_limit());
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
-        let globals = Globals::new(
-            [w as f32, h as f32],
-            h as f32 / VIRTUAL_HEIGHT,
-            [0.0; 2],
-            &[],
-        );
+        let globals = Globals::new([w as f32, h as f32], h as f32 / VIRTUAL_HEIGHT, [0.0; 2]);
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !shapes.is_empty() {
@@ -3280,9 +3216,6 @@ pub struct Canvas<H> {
     /// A plain opaque rect (shape index) that hides the background under it, so the renderer
     /// needn't draw the background there (`opaque_rect`).
     pub opaque: Option<usize>,
-    /// Surfaces (shape indices, plain round rects) that frost what's behind them: frosted
-    /// shapes under them are drawn soft, as through a blur (`glass_rects`, `frost_since`).
-    pub glass: Vec<usize>,
     /// Which profile pictures the renderer has, by lowercased name: their slots.
     pub avatar_slots: std::sync::Arc<std::collections::HashMap<String, u32>>,
     /// Pictures asked for this frame (lowercased names), so they get fetched.
@@ -3325,7 +3258,6 @@ impl<H> Default for Canvas<H> {
             texts: Default::default(),
             boxes: Default::default(),
             opaque: Default::default(),
-            glass: Vec::new(),
             avatar_slots: Default::default(),
             avatars_wanted: Default::default(),
             picture_slots: Default::default(),
@@ -3542,55 +3474,7 @@ impl<H> Canvas<H> {
         self.texts.clear();
         self.boxes.clear();
         self.opaque = None;
-        self.glass.clear();
         self.width = width;
-    }
-
-    /// Makes the shape just drawn (a plain round rect, a surface) a pane of glass: frosted
-    /// shapes under it are drawn soft (`frost_since`).
-    pub fn glass_last(&mut self) {
-        if let Some(i) = self.shapes.len().checked_sub(1) {
-            self.glass.push(i);
-        }
-    }
-
-    /// Frosts the plain shapes drawn since `start` (not text, pictures or half-cut ones): under
-    /// a pane of glass (`glass_last`) they are drawn soft, as through a blur; anywhere else as
-    /// they are.
-    pub fn frost_since(&mut self, start: usize) {
-        for sh in self.shapes.iter_mut().skip(start) {
-            if sh.params[3] == 0.0 {
-                sh.params[3] = FROST;
-            }
-        }
-    }
-
-    /// The panes of glass as drawn (after transforms, cut to their clips): centre, half size,
-    /// corner radius and strength (their fill's opacity, so one fading in frosts as it comes),
-    /// the biggest `GLASS_MAX`.
-    pub fn glass_rects(&self) -> Vec<[f32; 6]> {
-        let mut panes: Vec<[f32; 6]> = self
-            .glass
-            .iter()
-            .filter_map(|&i| {
-                let sh = self.shapes.get(i)?;
-                let (mut x0, mut y0) = (sh.center[0] - sh.half[0], sh.center[1] - sh.half[1]);
-                let (mut x1, mut y1) = (sh.center[0] + sh.half[0], sh.center[1] + sh.half[1]);
-                for (_, [cx, cy, cw, ch]) in self.clips.iter().filter(|(r, _)| r.contains(&i)) {
-                    (x0, y0) = (x0.max(*cx), y0.max(*cy));
-                    (x1, y1) = (x1.min(cx + cw), y1.min(cy + ch));
-                }
-                let strength = (sh.fill[3] / 0.8).clamp(0.0, 1.0);
-                (x1 > x0 && y1 > y0 && strength > 0.0).then(|| {
-                    let half = [(x1 - x0) / 2.0, (y1 - y0) / 2.0];
-                    let r = sh.params[0].min(half[0]).min(half[1]);
-                    [x0 + half[0], y0 + half[1], half[0], half[1], r, strength]
-                })
-            })
-            .collect();
-        panes.sort_by(|a, b| (b[2] * b[3]).total_cmp(&(a[2] * a[3])));
-        panes.truncate(GLASS_MAX);
-        panes
     }
 
     /// Marks the shape just drawn (a `rect` with alpha 1) as hiding the background under it.
@@ -4819,59 +4703,6 @@ mod tests {
         assert_eq!(super::accent(), 0x123456, "an edit keeps the rest");
         super::set_frame_theme(None);
         super::set_accent(super::DEFAULT_ACCENT);
-    }
-
-    #[test]
-    fn frosting_takes_only_plain_shapes_and_glass_is_its_surface_as_drawn() {
-        use super::{Canvas, FROST, GLASS_MAX};
-        let mut c = Canvas::<()>::default();
-        c.clear(854.0);
-        c.round_rect([0.0, 0.0], [10.0, 10.0], 2.0, [1.0; 4], [1.0; 4], 0.0);
-        let mut picture = c.shapes[0];
-        picture.params[3] = 3.0;
-        c.shapes.push(picture);
-        c.frost_since(0);
-        assert_eq!(c.shapes[0].params[3], FROST);
-        assert_eq!(c.shapes[1].params[3], 3.0, "only plain shapes");
-
-        let mut c = Canvas::<()>::default();
-        c.clear(854.0);
-        c.round_rect(
-            [100.0, 100.0],
-            [200.0, 100.0],
-            8.0,
-            [0.1, 0.1, 0.1, 0.8],
-            [0.0; 4],
-            0.0,
-        );
-        c.glass_last();
-        c.transform_since(0, [0.0, 0.0], 1.0, 10.0, 0.0);
-        c.clip_since(0, 0.0, 0.0, 210.0, 480.0);
-        c.fade_since(0, 0.5, 1.0);
-        let [p] = c.glass_rects()[..] else {
-            panic!("{:?}", c.glass_rects());
-        };
-        // Moved 10 right, cut at 210: 110..210 of it.
-        assert_eq!(&p[..5], &[160.0, 150.0, 50.0, 50.0, 8.0]);
-        assert!((p[5] - 0.5).abs() < 1e-6, "half faded: {}", p[5]);
-
-        let mut c = Canvas::<()>::default();
-        c.clear(854.0);
-        for k in 0..6 {
-            let side = 10.0 + k as f32;
-            c.round_rect(
-                [0.0, 0.0],
-                [side, side],
-                0.0,
-                [0.0, 0.0, 0.0, 0.8],
-                [0.0; 4],
-                0.0,
-            );
-            c.glass_last();
-        }
-        let panes = c.glass_rects();
-        assert_eq!(panes.len(), GLASS_MAX);
-        assert_eq!(panes[0][2], 7.5, "the biggest first");
     }
 
     #[test]
