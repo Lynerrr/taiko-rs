@@ -661,6 +661,7 @@ fn draw_songs(
             };
             state.preview.title_room = bw + 10.0;
             state.preview.bare = bare;
+            state.preview.slid = t * step;
             if let Some(clip) = state.preview.draw_panel(
                 canvas,
                 &state.library,
@@ -678,6 +679,7 @@ fn draw_songs(
             }
             state.preview.title_room = 0.0;
             state.preview.bare = false;
+            state.preview.slid = 0.0;
             if let (Some(rect), Some(i)) = (state.preview.mini_board, state.select.selected()) {
                 draw_mini_board_of(state, canvas, rect, i);
             }
