@@ -1464,7 +1464,48 @@ impl Config {
                 .clamp(0.3, 4.0);
         }
         cfg.read_offset(old_offset, new_offset);
+        cfg.free_menu_keys();
         cfg
+    }
+
+    /// A control a config put on a key the menus run on (`keys::menu_key`) goes back to its own
+    /// key, or to none if something else has that now. Older builds let a preset key go on
+    /// Enter, and song select's Play then changed the playfield's size instead of starting.
+    fn free_menu_keys(&mut self) {
+        use crate::keys::{Chord, Hotkey, menu_key};
+        let taken = |cfg: &Config, c: Chord| {
+            cfg.preset_keys.contains(&c)
+                || cfg.interface_key == c
+                || (!c.modified() && cfg.keys.contains(&c.key))
+                || Hotkey::ALL.iter().any(|&h| cfg.hotkeys.get(h) == Some(c))
+        };
+        let default = Config::default();
+        for i in 0..self.preset_keys.len() {
+            if menu_key(self.preset_keys[i]) {
+                let own = default.preset_keys[i];
+                self.preset_keys[i] = if taken(self, own) {
+                    Chord::plain(NO_KEY)
+                } else {
+                    own
+                };
+            }
+        }
+        if menu_key(self.interface_key) {
+            let own = default.interface_key;
+            self.interface_key = if taken(self, own) {
+                Chord::plain(NO_KEY)
+            } else {
+                own
+            };
+        }
+        for h in Hotkey::ALL {
+            if let Some(c) = self.hotkeys.get(h)
+                && menu_key(c)
+                && !h.defaults().contains(&c)
+            {
+                self.hotkeys.0[h.index()] = h.first_key().filter(|&own| !taken(self, own));
+            }
+        }
     }
 
     /// Settles the offset from the config's lines: `old` is `offset_ms`, `new` is `offset`.

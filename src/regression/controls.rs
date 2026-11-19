@@ -452,3 +452,111 @@ fn held_restart_keeps_play_running_and_accepts_drum_input_without_changing_the_h
     assert!(s.game().unwrap().resuming().is_none());
     assert!(s.pending_restart.as_ref().unwrap().released.is_some());
 }
+
+/// A control an older build put on a key the menus run on gets its own key back when the config
+/// is read, or none if something else has that now. A hotkey whose own key it is keeps it.
+#[test]
+fn a_config_with_a_control_on_a_menu_key_gives_the_key_back_to_the_menus() {
+    let c = Config::parse_text(
+        "preset_keys = F5, Enter\ninterface_key = ArrowUp\nhotkey.random = Backspace\nhotkey.retry = Enter\n",
+    );
+    assert_eq!(c.preset_keys[1].name(), "F6");
+    assert_eq!(c.interface_key.name(), "Shift+Tab");
+    assert_eq!(
+        c.hotkeys.get(keys::Hotkey::Random).map(keys::Chord::name),
+        Some("F2".into())
+    );
+    assert_eq!(
+        c.hotkeys.get(keys::Hotkey::Retry).map(keys::Chord::name),
+        Some("Enter".into())
+    );
+    // F5 went to another control meanwhile: the preset key is left without one.
+    let c = Config::parse_text("preset_keys = Enter, F6\nhotkey.screenshot = F5\n");
+    assert_eq!(c.preset_keys[0], keys::Chord::plain(config::NO_KEY));
+    // With Ctrl, Shift or Alt it's a key of its own, and it stays.
+    let c = Config::parse_text("preset_keys = Shift+Enter, F6\n");
+    assert_eq!(c.preset_keys[0].name(), "Shift+Enter");
+}
+
+/// Enter, Esc, Backspace and the arrows can't go on a control: the menus need them. A drum can
+/// still take them, and a hotkey can go back to its own default (Enter retries).
+#[test]
+fn binding_a_control_to_a_menu_key_is_refused() {
+    let mut s = harness::state_with(harness::config(), Vec::new());
+    s.open_settings();
+    let now = Instant::now();
+    let retry = keys::Hotkey::ALL
+        .iter()
+        .position(|h| *h == keys::Hotkey::Retry)
+        .unwrap();
+    for (item, key) in [
+        (Item::PresetKey(1), "Enter"),
+        (Item::PresetKey(0), "NumpadEnter"),
+        (Item::InterfaceKey, "ArrowLeft"),
+        (Item::Hotkey(retry), "Backspace"),
+    ] {
+        let before = (
+            s.cfg.preset_keys,
+            s.cfg.interface_key,
+            s.cfg.hotkeys.clone(),
+        );
+        s.settings_ui.binding = Some(item);
+        press(&mut s, key, false, now);
+        assert_eq!(
+            (
+                s.cfg.preset_keys,
+                s.cfg.interface_key,
+                s.cfg.hotkeys.clone()
+            ),
+            before,
+            "{key} stays the menus'"
+        );
+        assert!(s.settings_ui.binding.is_none());
+    }
+    s.cfg
+        .hotkeys
+        .set(keys::Hotkey::Retry, keys::Chord::parse("F2"));
+    s.settings_ui.binding = Some(Item::Hotkey(retry));
+    press(&mut s, "Enter", false, now);
+    assert_eq!(
+        s.cfg
+            .hotkeys
+            .get(keys::Hotkey::Retry)
+            .map(keys::Chord::name),
+        Some("Enter".into())
+    );
+    s.settings_ui.binding = Some(Item::Key(0));
+    press(&mut s, "ArrowLeft", false, now);
+    assert_eq!(s.cfg.keys[0], KeyCode::ArrowLeft);
+}
+
+/// The settings show a key that does two jobs in red, with what else it does.
+#[test]
+fn settings_mark_a_key_that_does_two_jobs() {
+    let mut s = harness::state_with(harness::config(), Vec::new());
+    assert_eq!(s.key_clashes(), Vec::new(), "the default keys don't clash");
+    let random = keys::Hotkey::ALL
+        .iter()
+        .position(|h| *h == keys::Hotkey::Random)
+        .unwrap();
+    // As a hand-edited config can have it: F2 is song select's Random too.
+    s.cfg.preset_keys[0] = keys::Chord::plain(KeyCode::F2);
+    s.cfg.interface_key = keys::Chord::plain(KeyCode::Enter);
+    let clashes = s.key_clashes();
+    assert!(clashes.contains(&(Item::PresetKey(0), keys::Clash::With(Item::Hotkey(random)))));
+    assert!(clashes.contains(&(Item::Hotkey(random), keys::Clash::With(Item::PresetKey(0)))));
+    assert!(clashes.contains(&(
+        Item::InterfaceKey,
+        keys::Clash::Menu(keys::Chord::plain(KeyCode::Enter))
+    )));
+    s.open_settings();
+    s.settings_ui.cursor = settings::ITEMS
+        .iter()
+        .position(|(_, i)| *i == Item::PresetKey(0))
+        .unwrap();
+    let c = harness::frame(&mut s, Instant::now());
+    assert!(
+        harness::shows(&c, "same key as"),
+        "the preset key's row says so"
+    );
+}

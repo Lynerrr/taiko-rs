@@ -175,7 +175,7 @@ pub enum Hotkey {
     ExportVideo,
 }
 
-const ANYWHERE: &[Place] = &[
+pub const ANYWHERE: &[Place] = &[
     Place::Select,
     Place::Play,
     Place::Paused,
@@ -515,7 +515,7 @@ impl Hotkey {
         }
     }
 
-    fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         Hotkey::ALL.iter().position(|&h| h == self).unwrap_or(0)
     }
 
@@ -664,6 +664,84 @@ impl Bindings {
         }
         Resolved::Same
     }
+}
+
+/// Keys the menus run on: Enter starts a song and says yes, Esc and Backspace go back, the arrows
+/// move. A control put on one of them without Ctrl, Alt or Shift took that job away from every
+/// menu: a preset key on Enter made song select's Play change the playfield's size instead.
+pub fn menu_key(chord: Chord) -> bool {
+    use KeyCode::*;
+    !chord.modified()
+        && matches!(
+            chord.key,
+            Enter | NumpadEnter | Escape | Backspace | ArrowUp | ArrowDown | ArrowLeft | ArrowRight
+        )
+}
+
+/// A key setting as the clash check sees it: the keys that set it off and where.
+pub struct Bound<T> {
+    pub who: T,
+    pub keys: Vec<Chord>,
+    pub places: &'static [Place],
+    /// Shift held with its key still sets it off (`Hotkey::shift_free`).
+    pub shift_free: bool,
+    /// Whether a menu key is wrong for it (not for a drum, which only plays notes), and the menu
+    /// keys that are its own all the same (Enter retries on the results, Esc pauses).
+    pub menus: bool,
+    pub own: &'static [Chord],
+}
+
+impl<T> Bound<T> {
+    /// A hotkey on `chord`: with its other default keys too when that's its default.
+    pub fn hotkey(who: T, h: Hotkey, chord: Option<Chord>) -> Bound<T> {
+        let keys = match chord {
+            Some(c) if c == h.default() => h.defaults().to_vec(),
+            Some(c) => vec![c],
+            None => Vec::new(),
+        };
+        Bound {
+            who,
+            keys,
+            places: h.places(),
+            shift_free: h.shift_free(),
+            menus: true,
+            own: h.defaults(),
+        }
+    }
+}
+
+/// What's wrong with a key setting's key.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Clash<T> {
+    /// Another setting goes off on the same key, somewhere both work.
+    With(T),
+    /// It's on a key the menus run on (`menu_key`).
+    Menu(Chord),
+}
+
+/// Every key setting whose key does two jobs, and what the other one is. A clash between two
+/// settings is listed for both.
+pub fn clashes<T: Copy>(bound: &[Bound<T>]) -> Vec<(T, Clash<T>)> {
+    let mut out = Vec::new();
+    for (i, a) in bound.iter().enumerate() {
+        if a.menus
+            && let Some(&k) = a.keys.iter().find(|k| menu_key(**k) && !a.own.contains(k))
+        {
+            out.push((a.who, Clash::Menu(k)));
+        }
+        for (j, b) in bound.iter().enumerate() {
+            let shared = a.places.iter().any(|p| b.places.contains(p));
+            let same = a.keys.iter().any(|x| {
+                b.keys
+                    .iter()
+                    .any(|y| x.fits(*y, a.shift_free) || y.fits(*x, b.shift_free))
+            });
+            if i != j && shared && same {
+                out.push((a.who, Clash::With(b.who)));
+            }
+        }
+    }
+    out
 }
 
 /// Keys that type a character (song select's search takes them as letters, not hotkeys). The
