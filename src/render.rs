@@ -1050,7 +1050,15 @@ fn shade(in: VOut) -> vec4<f32> {
         let edge = 0.5 / f32(PICTURE_CELL);
         let uv = clamp(in.local / (2.0 * in.half) + 0.5, vec2<f32>(edge), vec2<f32>(1.0 - edge));
         let t = textureSampleLevel(avatars, samp, (cell + uv) * f32(PICTURE_CELL) / f32(MEDIA_SIDE), 0.0);
-        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a;
+        var cover = 1.0;
+        if (in.params.y > 0.0) {
+            // `Canvas::picture_cover_round_top`: the rect it covers is .yz half, its top
+            // corners .x round.
+            let b = vec2<f32>(in.params.y, in.params.z);
+            let r = select(0.0, min(in.params.x, min(b.x, b.y)), in.local.y < 0.0);
+            cover = clamp(0.5 - sd_round_box(in.local, b, r), 0.0, 1.0);
+        }
+        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover;
     }
     if (in.params.w < -0.5) {
         // A profile picture (premultiplied) from its cell of the avatar texture, rounded.
@@ -3866,6 +3874,26 @@ impl<H> Canvas<H> {
         let start = self.shapes.len();
         let drawn = self.picture(&key, x + w / 2.0, y + h / 2.0, h.max(w / aspect), 0.0, tint);
         self.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
+        drawn
+    }
+
+    /// `picture_cover_clipped` with the top corners of `rect` `radius` round (a banner at the
+    /// top of a rounded panel); its bottom is wherever `clip` cuts it.
+    pub fn picture_cover_round_top(
+        &mut self,
+        path: &std::path::Path,
+        rect: [f32; 4],
+        clip: [f32; 4],
+        tint: [f32; 4],
+        radius: f32,
+    ) -> bool {
+        let start = self.shapes.len();
+        let drawn = self.picture_cover_clipped(path, rect, clip, tint);
+        if let Some(sh) = self.shapes.get_mut(start).filter(|_| drawn) {
+            sh.params[0] = radius;
+            sh.params[1] = rect[2] / 2.0;
+            sh.params[2] = rect[3] / 2.0;
+        }
         drawn
     }
 

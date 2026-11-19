@@ -1430,7 +1430,8 @@ impl Preview {
             let bottom = crate::render::snap_to_grid(y + (k + 1) as f32 * sh);
             let clip = [x, y, w, bottom - y];
             let tint = [dim, dim, dim, alpha.max(0.0)];
-            drawn |= c.picture_cover_clipped(&bg, rect, clip, tint);
+            // At the top of the details' panel, its top corners as round as the panel's.
+            drawn |= c.picture_cover_round_top(&bg, rect, clip, tint, crate::style::radius::CARD);
         }
         if drawn && since.is_none() {
             self.banner_seen = Some((bg, crate::render::frame_now()));
@@ -1649,23 +1650,8 @@ impl Preview {
         let preview_h = band_h * k;
         let h = head + preview_h + after_box;
         self.panel_bottom = y + h;
-        if self.bare {
-            // No panel: only a soft shade under the details, so they read over a bright picture.
-            // Its soft edge reaches out past its shape (`softness`), to the panel's sides.
-            const SOFT: f32 = 20.0;
-            let shade = rgba(0x08080c, 0.38);
-            c.shapes.push(crate::render::Shape {
-                center: [x + w / 2.0, y + head / 2.0],
-                half: [
-                    (w / 2.0 - SOFT).max(4.0),
-                    (head / 2.0 - SOFT + 2.0).max(4.0),
-                ],
-                fill: shade,
-                border: shade,
-                params: [12.0, 0.0, SOFT, 0.0],
-                angle: 0.0,
-            });
-        } else {
+        // Bare, it's on a panel of its own that song select draws under the whole page.
+        if !self.bare {
             c.round_rect(
                 [x, y],
                 [w, h],
@@ -1817,11 +1803,7 @@ impl Preview {
         // Bare, the autoplay is a lane like the menu's, its drum at the left, running on towards
         // the screen's right edge as far as the friends tab there leaves room; the notes come in
         // from its end.
-        let lane_end = if self.bare {
-            c.width - crate::social::TAB_ROOM - self.slid
-        } else {
-            bx + bw
-        };
+        let lane_end = if self.bare { x + w - 10.0 } else { bx + bw };
         // Bare: no lines round it, fading in at its ends (a little out from the drum's side).
         let strip = [bx - LANE_FADE[0], by, lane_end - bx + LANE_FADE[0], bh];
         if self.bare {

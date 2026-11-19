@@ -658,12 +658,7 @@ fn draw_songs(
         const PAGE_BUTTON_H: f32 = 22.0;
         let actions_h = if bare { ACTIONS_H } else { PAGE_BUTTON_H };
         let panel_h = panel_end - panel_top - actions_h - style::space::SECTION;
-        let clip_w = if bare {
-            canvas.width - x + 4.0
-        } else {
-            pw + 4.0
-        };
-        let clip = [x - 2.0, panel_top - 2.0, clip_w, panel_h + 4.0];
+        let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
         if t < 1.0 {
             let start = canvas.shapes.len();
             // The way to the leaderboard is where the way back is on the board (its
@@ -675,6 +670,12 @@ fn draw_songs(
             } else {
                 style::icon_button_width(label, None, 7.0)
             };
+            // The main menu's look: the details on a panel of their own, as the board's page
+            // beside them, so nothing on the right floats over the map's picture.
+            if bare {
+                let page = [x - t * step, panel_top, pw, panel_h];
+                style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
+            }
             state.preview.title_room = bw + 10.0;
             state.preview.bare = bare;
             state.preview.slid = t * step;
@@ -742,7 +743,7 @@ fn draw_songs(
         if t > 0.0 {
             if bare {
                 let page = [page_x, panel_top, pw, panel_h];
-                style::surface(canvas, page, 10.0, style::Surface::Raised);
+                style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
             } else {
                 style::panel(canvas, page_x, panel_top, pw, panel_h);
             }

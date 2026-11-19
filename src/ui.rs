@@ -485,6 +485,8 @@ const CARD_INSET: f32 = 12.0;
 const CARD_HOVER: f32 = 4.0;
 const CARD_DIM: f32 = 0.7;
 const CARD_RADIUS: f32 = 4.0;
+/// How bright the faint edge round a card is (not the open one, which has the selection's).
+const CARD_EDGE: f32 = 0.1;
 /// A set opening: its difficulties drop in from this far above, this many ms apart.
 const DIFF_DROP: f32 = 8.0;
 const DIFF_CASCADE_MS: f32 = 30.0;
@@ -3585,7 +3587,6 @@ impl Select {
                 );
             }
         }
-        let clear = rgba(0, 0.0);
         if open {
             // On the beat its edge and tone light a little; in a kiai the edge turns gold.
             let kiai = style::kiai();
@@ -3599,9 +3600,12 @@ impl Select {
                 rgba(col, 0.8 + 0.2 * beat),
                 1.0,
             );
-        } else if light > 0.0 {
+        } else {
+            // A faint edge round every card, so neighbouring pictures of like colours don't run
+            // into each other; brighter under the pointer.
             let lift = rgba(0xffffff, 0.06 * light);
-            c.round_rect([x, y], [w, h], CARD_RADIUS, lift, clear, 0.0);
+            let edge = rgba(0xffffff, CARD_EDGE + 0.08 * light);
+            c.round_rect([x, y], [w, h], CARD_RADIUS, lift, edge, 1.0);
         }
     }
 

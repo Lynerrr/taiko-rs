@@ -123,17 +123,30 @@ fn many() -> Vec<maps::Chart> {
 fn surfaces_have_no_edge_and_rows_no_lines_under_them() {
     let (mut s, _songs, mut now) = menu_look("select-look-edges");
     let c = settled(&mut s, &mut now);
-    // The selection's outline round the open set's card is the one edge.
+    // The selection's outline round the open set's card is the one strong edge; the other set
+    // cards have a faint white one each, so neighbouring pictures of like colours stay apart.
     let open = open_card(&c, &s);
+    let set_cards = cards(&c);
+    let faint_card_edge = |sh: &Shape| {
+        same_rgb(sh.border, render::rgba(0xffffff, 1.0))
+            && sh.border[3] <= 0.2
+            && set_cards.iter().any(|(_, r)| inside(sh.center, *r, 0.5))
+    };
     let edged: Vec<[f32; 4]> = c
         .shapes
         .iter()
         .filter(|sh| plain(sh) && on_select(sh, &c, &s) && !inside(sh.center, open, 1.0))
         .filter(|sh| sh.params[1] > 0.0 && sh.border[3] > 0.01)
         .filter(|sh| !same_rgb(sh.border, sh.fill) || sh.fill[3] < sh.border[3])
+        .filter(|sh| !faint_card_edge(sh))
         .map(rect)
         .collect();
     assert!(edged.is_empty(), "boxes with an edge round them: {edged:?}");
+    let parted = c.shapes.iter().filter(|sh| faint_card_edge(sh)).count();
+    assert!(
+        parted + 1 >= set_cards.len(),
+        "every set card but the open one parted: {parted}"
+    );
     // No line under the search row or a row of the list: rows are parted by room.
     let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
     let lines: Vec<[f32; 4]> = c
@@ -1359,4 +1372,30 @@ fn play_and_the_lane_of_actions_keep_the_screen_s_margin() {
         "{lane:?}"
     );
     assert_eq!(lane.1, style::radius::CARD);
+}
+
+#[test]
+fn the_details_sit_on_a_panel_of_their_own_and_nothing_of_them_runs_off_it() {
+    let (mut s, _songs, mut now) = menu_look("select-look-right-panel");
+    let c = settled(&mut s, &mut now);
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let raised = style::surface_fill(style::Surface::Raised);
+    // A raised surface, as round as the cards, from beside the list to the screen's margin.
+    let panel = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, raised) && sh.params[0] == style::radius::CARD)
+        .map(rect)
+        .find(|r| r[0] > 24.0 + lw && r[3] > 200.0)
+        .expect("the details' panel");
+    assert!(
+        (panel[0] + panel[2] - (c.width - 24.0)).abs() < 0.5,
+        "{panel:?}"
+    );
+    // The preview's lane ends inside it.
+    let lane = hit_rect(&c, |h| *h == Hit::Preview).expect("the preview lane");
+    assert!(
+        lane[0] + lane[2] <= panel[0] + panel[2],
+        "{lane:?} in {panel:?}"
+    );
 }

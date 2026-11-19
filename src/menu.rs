@@ -655,8 +655,10 @@ impl Menu {
         }
         crate::settings::brand_with(c, |c, x, y, size| eggs.draw_logo(c, x, y, size));
         draw_session(c, f.session);
-        self.draw_flashes(c);
+        // The light from the screen's edges is the screen's, not the menu's: carried off with the
+        // camera it would slide in across song select.
         if !f.shifting {
+            self.draw_flashes(c);
             self.draw_panel(c);
         }
         self.play_song(
@@ -1944,6 +1946,39 @@ mod tests {
         };
         m.draw(&mut c, &f, &mut crate::eggs::MenuEggs::new(1));
         c
+    }
+
+    #[test]
+    fn the_kiai_s_light_from_the_screen_s_edges_stays_off_while_the_camera_moves() {
+        crate::render::set_frame_theme(Some(crate::render::Theme {
+            animations: true,
+            ..crate::render::Theme::default()
+        }));
+        // A gold band the screen's height at its left or right edge.
+        let edge_light = |c: &Canvas| {
+            c.shapes.iter().any(|s| {
+                let [r, g, b, a] = s.fill;
+                (s.half[1] * 2.0 - crate::render::VIRTUAL_HEIGHT).abs() < 1e-3
+                    && a > 0.0
+                    && r > 0.0
+                    && g / r > 0.7
+                    && b / r < 0.5
+            })
+        };
+        let kicked = || {
+            let mut m = Menu::new();
+            m.kiai = 1.0;
+            m.beat_at = m.clock;
+            m
+        };
+        assert!(
+            edge_light(&frame_with(&mut kicked(), 0.0, true, false)),
+            "on the menu"
+        );
+        assert!(
+            !edge_light(&frame_with(&mut kicked(), 0.0, true, true)),
+            "carried off with the camera it would slide in over song select"
+        );
     }
 
     #[test]
