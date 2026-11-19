@@ -1414,3 +1414,33 @@ fn the_pp_button_opens_a_simulator_of_accuracy_and_misses() {
         "the full-combo chips back"
     );
 }
+
+#[test]
+fn the_list_s_grip_sits_in_the_gap_between_the_cards_and_the_details_panel() {
+    let (mut s, _songs, mut now) = menu_look("select-look-grip");
+    let c = settled(&mut s, &mut now);
+    let grip = hit_rect(&c, |h| *h == Hit::SplitList).expect("the grip");
+    let cards_right = cards(&c)
+        .iter()
+        .map(|(_, r)| r[0] + r[2])
+        .fold(0.0, f32::max);
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let raised = style::surface_fill(style::Surface::Raised);
+    let panel_left = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, raised) && sh.params[0] == style::radius::CARD)
+        .map(rect)
+        .filter(|r| r[0] > 24.0 + lw && r[3] > 200.0)
+        .map(|r| r[0])
+        .fold(f32::MAX, f32::min);
+    let mid = grip[0] + grip[2] / 2.0;
+    assert!(
+        mid > cards_right && mid < panel_left,
+        "between {cards_right} and {panel_left}: {grip:?}"
+    );
+    assert!(
+        (mid - (cards_right + panel_left) / 2.0).abs() < 2.0,
+        "in the gap's middle: {mid} of {cards_right}..{panel_left}"
+    );
+}
