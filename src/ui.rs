@@ -467,9 +467,14 @@ struct FreeScroll {
     song: Option<std::path::PathBuf>,
 }
 
-/// How far a notch of the wheel moves the list, and how quickly.
+/// How far a notch of the wheel moves the list, and how quickly: slow enough that the cards are
+/// seen gliding, not jumping three rows on (which, the cards all alike, reads as standing still).
 const WHEEL_STEP: f32 = SONG_ROW_H * 3.0;
-const WHEEL_TAU: f32 = 45.0;
+const WHEEL_TAU: f32 = 110.0;
+/// How far a notch past an end of the list pushes it before it springs back.
+const WHEEL_END_BUMP: f32 = 10.0;
+/// From a list moved by hand to a song picked in it: a longer glide the farther it goes.
+const FROM_FREE_MS: (f32, f32) = (260.0, 520.0);
 const SCRUB_TAU: f32 = 20.0;
 const THROW_TAU: f32 = 130.0;
 
@@ -1446,7 +1451,13 @@ impl Select {
     pub fn scroll_by(&mut self, notches: i32, library: &[Entry]) {
         let max = self.scroll_max;
         let glide = self.free(library, WHEEL_TAU);
-        glide.goal = (glide.goal + notches as f32 * WHEEL_STEP).clamp(0.0, max);
+        let goal = glide.goal + notches as f32 * WHEEL_STEP;
+        // Past an end: a little push the list springs back from, so the wheel is never dead.
+        let past = goal - goal.clamp(0.0, max);
+        if past != 0.0 && crate::render::animations() && (glide.now - glide.goal).abs() < 1.0 {
+            glide.now += past.signum() * WHEEL_END_BUMP;
+        }
+        glide.goal = goal.clamp(0.0, max);
     }
 
     /// Back to following the selection, gliding there from wherever the list is.
@@ -2660,11 +2671,11 @@ impl Select {
         let final_scroll = (final_cursor - view * 0.4).clamp(0.0, max_scroll);
         let final_outline = top + final_cursor - final_scroll;
         // Another song selected: the list goes to it.
-        if self
+        let from_free = self
             .free
             .as_ref()
-            .is_some_and(|f| f.song.as_deref() != self.selected_folder(library))
-        {
+            .is_some_and(|f| f.song.as_deref() != self.selected_folder(library));
+        if from_free {
             self.free = None;
         }
 
@@ -2700,6 +2711,11 @@ impl Select {
                 // A release's longer glide applies to the transition it starts, then resets.
                 if a.cursor != Some(usize::MAX) {
                     a.ms = 0.0;
+                }
+                // Picked in a list moved by hand: from where it was, at an easy pace.
+                if from_free {
+                    let far = (final_scroll - a.scroll_from).abs();
+                    a.ms = (FROM_FREE_MS.0 + far * 1.2).min(FROM_FREE_MS.1);
                 }
             }
             a.cursor = Some(self.cursor);
