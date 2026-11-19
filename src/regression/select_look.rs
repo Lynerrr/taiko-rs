@@ -1284,3 +1284,57 @@ fn nothing_in_the_details_stretches_on_the_way_to_the_leaderboard() {
     }
     assert!(on_the_way > 0, "caught on the way");
 }
+
+#[test]
+fn the_search_row_has_a_glass_a_quiet_hint_its_key_on_a_cap_and_the_counts_on_a_chip() {
+    let (mut s, _songs, mut now) = menu_look("select-look-search-row");
+    let c = settled(&mut s, &mut now);
+    let field = hit_rect(&c, |h| matches!(h, Hit::TextField)).expect("the search box");
+    let hint = text_at(&c, "click to search").expect("the hint");
+    assert!(
+        c.texts.iter().all(|(_, t)| !t.contains("(ctrl+f)")),
+        "the key isn't in the hint"
+    );
+    // A magnifying glass before the hint: the icon's pixels left of it, inside the box.
+    let glass = c.shapes.iter().any(|sh| {
+        plain(sh)
+            && same_rgb(sh.fill, render::rgba(style::ink::CAPTION, 1.0))
+            && inside(
+                sh.center,
+                [field[0], field[1], hint[0] - field[0], field[3]],
+                0.0,
+            )
+    });
+    assert!(glass, "a glass at the box's start");
+    let key = text_at(&c, "ctrl+f").expect("the key on its cap");
+    assert!(
+        key[0] > field[0] + field[2] * 0.6 && key[0] < field[0] + field[2],
+        "at the box's right end: {key:?} in {field:?}"
+    );
+    let cap = c.shapes.iter().any(|sh| {
+        same_rgb(sh.fill, style::surface_fill(style::Surface::Raised))
+            && inside(key.map(|v| v + 1.0), rect(sh), 0.0)
+            && rect(sh)[2] < 40.0
+    });
+    assert!(cap, "the key sits on a cap");
+    // The counts on a chip of their own beside the search row, not floating at the screen's
+    // right edge.
+    let counts = c
+        .texts
+        .iter()
+        .find(|(_, t)| t.contains(" songs, "))
+        .and_then(|(r, _)| c.shapes.get(r.start))
+        .map(rect)
+        .expect("the counts");
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    assert!(
+        counts[0] > 24.0 + lw && counts[0] < 24.0 + lw + 30.0,
+        "beside the list: {counts:?}"
+    );
+    let chip = c.shapes.iter().any(|sh| {
+        same_rgb(sh.fill, style::surface_fill(style::Surface::Raised))
+            && inside([counts[0] + 1.0, counts[1] + 1.0], rect(sh), 0.0)
+            && rect(sh)[0] < counts[0]
+    });
+    assert!(chip, "on a chip");
+}
