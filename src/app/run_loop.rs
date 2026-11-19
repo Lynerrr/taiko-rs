@@ -1304,6 +1304,7 @@ impl State {
             profile: None,
             online_boards: std::collections::HashMap::new(),
             board_fetch: None,
+            mini_board: Default::default(),
             pending_replay: None,
             changelog: None,
             pending_changelog,
