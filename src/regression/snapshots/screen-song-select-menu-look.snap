@@ -52,9 +52,9 @@ text   53,264  Regression  |  mapped by tests
 text   57,284  high-od
 text  416,289  1 diff
 text   57,298  Regression  |  mapped by tests
-text  490,365  0:00 / 0:10
-text  675,365  peak 7.0 notes/s at 0:01
-text  508,381  click / drag / wheel to scroll - play from where you stop
+text  490,353  0:00 / 0:10
+text  661,353  peak 7.0 notes/s at 0:01
+text  501,369  click / drag / wheel to scroll - play from where you stop
 text  751,428  Play
 text  513,429  Mods
 text  587,429  Random
@@ -72,7 +72,7 @@ hit    45,278   423x34   SongHeader(6)
 hit     4,52     20x402  SongScrollbar
 hit   712,118    16x13   SelectLike
 hit   490,251   330x61   Preview
-hit   488,318   334x44   Preview
+hit   488,318   320x32   Preview
 hit   716,56     95x24   BoardPage
 hit   490,421    56x24   ModsButton
 hit   564,421    70x24   Key(F2)

@@ -1328,9 +1328,10 @@ impl Preview {
         // The lane alone fills the box, laid out as on a 4:3 screen (640 units wide): bigger notes,
         // fewer of them, whatever the panel's shape.
         let (band_top, band_h) = game::lane_only();
-        const GRAPH_H: f32 = 40.0;
+        // Bare, the timeline's bars are lower: quieter, and room under them.
+        let graph_h = if self.bare { BARE_GRAPH_H } else { 40.0 };
         // Under the preview box: the timeline and its button.
-        let after_box = 8.0 + GRAPH_H + 44.0;
+        let after_box = 8.0 + graph_h + 44.0;
         // The preview's height per unit of its size. Smaller, it shows more of the lane ahead in
         // a shorter box: as small as dragged, and smaller still where the panel would otherwise
         // be taller than `h` (the details above it being `head` tall).
@@ -1687,9 +1688,10 @@ impl Preview {
         } else {
             bx + bw
         };
-        let lane = [bx, by, lane_end - bx, bh];
+        // Bare: no lines round it, fading in at its ends (a little out from the drum's side).
+        let strip = [bx - LANE_FADE[0], by, lane_end - bx + LANE_FADE[0], bh];
         if self.bare {
-            crate::style::lane_strip(c, lane, true);
+            crate::style::lane_fade_strip(c, strip, LANE_FADE, 1.0);
         } else {
             c.round_rect(
                 [bx, by],
@@ -1705,7 +1707,13 @@ impl Preview {
         let loaded = is_loaded;
         if loaded {
             let graph_start = c.shapes.len();
-            self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], button);
+            // Bare, as wide as the lane over it, short of its fading end.
+            let gw = if self.bare {
+                lane_end - LANE_FADE[1] / 2.0 - bx
+            } else {
+                bw
+            };
+            self.draw_timeline(c, e, [bx, by + bh + 8.0, gw, graph_h], button);
             // Seeking goes by the music: until this map's plays, a click would move the last one.
             if !playing {
                 self.graph_rect = None;
@@ -1719,7 +1727,7 @@ impl Preview {
                     bx - 1.0,
                     by + bh + 4.0,
                     bw + 2.0,
-                    GRAPH_H + 40.0,
+                    graph_h + 40.0,
                     rgba(0x15151d, 1.0 - fade),
                 );
             }
@@ -1751,15 +1759,20 @@ impl Preview {
         let oy = by - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
-        // The playfield fills the lane: its lines go over it.
+        // Bare, the notes come in out of the lane's fading end.
         if self.bare {
-            crate::style::lane_edges(c, lane, true);
+            for sh in &mut c.shapes[start..] {
+                let t = ((lane_end - sh.center[0]) / LANE_FADE[1]).clamp(0.0, 1.0);
+                let f = t * t * (3.0 - 2.0 * t);
+                sh.fill[3] *= f;
+                sh.border[3] *= f;
+            }
         }
         if button.is_some() {
             // Song select only (download previews have no fullscreen view).
             c.text_right(
                 if self.bare {
-                    lane_end - 8.0
+                    lane_end - LANE_FADE[1] - 4.0
                 } else {
                     bx + bw - 6.0
                 },
@@ -1775,9 +1788,7 @@ impl Preview {
         }
         if fade < 1.0 {
             if self.bare {
-                let start = c.shapes.len();
-                crate::style::lane_strip(c, lane, true);
-                c.fade_since(start, 1.0 - fade, 1.0);
+                crate::style::lane_fade_strip(c, strip, LANE_FADE, 1.0 - fade);
             } else {
                 c.round_rect(
                     [bx, by],
@@ -1808,6 +1819,16 @@ pub use crate::config::PREVIEW_SIZE;
 
 /// Space between the stats in the details.
 const STAT_GAP: f32 = 10.0;
+
+/// Bare: how far the autoplay's lane fades in at its left end (out from the drum's side) and its
+/// right (where the notes come in), and how tall the timeline's bars are.
+const LANE_FADE: [f32; 2] = [10.0, 28.0];
+const BARE_GRAPH_H: f32 = 28.0;
+/// Bare: the timeline's bars, a neutral ink (the accent is Play's and the selection's), kiai's in
+/// gold; how strong they are ahead of the playhead and behind it.
+const KIAI_GOLD: u32 = 0xFFD34D;
+const BARS_AHEAD: f32 = 0.35;
+const BARS_PLAYED: f32 = 0.8;
 
 /// The details in song select's main menu look (`Preview::bare`): how tall the map picture's
 /// banner is and where the title starts on it (under the leaderboard button's row), the rows'
@@ -1951,15 +1972,19 @@ fn draw_graph(
             1.0,
         );
     }
-    for &(s, e) in &g.kiai {
-        c.rect(
-            x_of(s),
-            y + 1.0,
-            (x_of(e) - x_of(s)).max(1.0),
-            h - 2.0,
-            rgba(0xff8a3d, 0.12),
-        );
+    // Boxed, kiai is a tint behind the bars; bare, it's their colour.
+    if boxed {
+        for &(s, e) in &g.kiai {
+            c.rect(
+                x_of(s),
+                y + 1.0,
+                (x_of(e) - x_of(s)).max(1.0),
+                h - 2.0,
+                rgba(0xff8a3d, 0.12),
+            );
+        }
     }
+    let span_at = |px: f32| t0 + f64::from((px - x) / w.max(1.0)) * span;
     // Bars cover the strain sections; the axis starts a little earlier for the intro.
     let (bx0, bx1) = (
         x_of(g.peaks_start),
@@ -1969,14 +1994,26 @@ fn draw_graph(
     let bar_w = (bx1 - bx0) / n as f32;
     for (i, v) in g.bins(n).into_iter().enumerate() {
         let bh = 2.0 + v * (h - 8.0);
-        let col = strain_colour(v);
-        let played = (bx0 + (i as f32 + 0.5) * bar_w) <= x_of(now);
+        let mid = bx0 + (i as f32 + 0.5) * bar_w;
+        let played = mid <= x_of(now);
+        let colour = if boxed {
+            rgba(strain_colour(v), if played { 1.0 } else { 0.55 })
+        } else {
+            let t = span_at(mid);
+            let kiai = g.kiai.iter().any(|&(s, e)| t >= s && t < e);
+            let ink = match (kiai, played) {
+                (true, _) => KIAI_GOLD,
+                (false, true) => crate::style::ink::PRIMARY,
+                (false, false) => crate::style::ink::SECONDARY,
+            };
+            rgba(ink, if played { BARS_PLAYED } else { BARS_AHEAD })
+        };
         c.rect(
             bx0 + i as f32 * bar_w,
             y + h - 3.0 - bh,
             (bar_w - 0.5).max(0.5),
             bh,
-            rgba(col, if played { 1.0 } else { 0.55 }),
+            colour,
         );
     }
     if preview_at >= 0.0 {
@@ -1990,6 +2027,10 @@ fn draw_graph(
         c.rect(mx + 0.75, y - 3.0, 6.0, 4.5, rgba(MARKER, 1.0));
     }
     let hx = x_of(now);
+    if !boxed {
+        // A soft glow round the playhead.
+        c.glow(hx, y + h / 2.0, 3.0, 6.0, rgba(0xffffff, 0.18));
+    }
     c.rect(hx - 0.75, y - 2.0, 1.5, h + 4.0, rgba(0xffffff, 0.95));
     c.text(
         x,

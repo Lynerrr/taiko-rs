@@ -695,3 +695,126 @@ fn a_song_landing_in_the_target_flashes_it() {
         }
     }
 }
+
+/// Where a text starting with `s` is drawn: its first letter's top left.
+fn text_at(c: &Canvas, s: &str) -> Option<[f32; 2]> {
+    c.texts
+        .iter()
+        .find(|(_, t)| t.starts_with(s))
+        .and_then(|(r, _)| c.shapes.get(r.start))
+        .map(|sh| {
+            let r = rect(sh);
+            [r[0], r[1]]
+        })
+}
+
+#[test]
+fn the_preview_lane_has_no_lines_round_it_and_fades_in_at_its_ends() {
+    let (mut s, _songs, mut now) = menu_look("select-look-lane");
+    let c = settled(&mut s, &mut now);
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let right_of_list = |sh: &&Shape| plain(sh) && sh.center[0] > 28.0 + lw;
+    // The strip: layers of the panel's fill, each from one end's step to the other's.
+    let fill = render::rgba(style::PANEL, 1.0);
+    let layers: Vec<([f32; 4], f32)> = c
+        .shapes
+        .iter()
+        .filter(right_of_list)
+        .filter(|sh| same_rgb(sh.fill, fill) && sh.half[0] * 2.0 > 100.0)
+        .map(|sh| (rect(sh), sh.fill[3]))
+        .collect();
+    assert!(layers.len() >= 4, "a strip in layers: {layers:?}");
+    let [_, y, _, h] = layers[0].0;
+    assert!(
+        layers.iter().all(|(r, _)| r[1] == y && r[3] == h),
+        "{layers:?}"
+    );
+    for (k, (a, _)) in layers.iter().enumerate() {
+        for (b, _) in &layers[k + 1..] {
+            assert!(
+                (a[0] - b[0]).abs() > 0.01 && (a[0] + a[2] - b[0] - b[2]).abs() > 0.01,
+                "two layers share an edge: {a:?} {b:?}"
+            );
+        }
+    }
+    let left = layers.iter().map(|(r, _)| r[0]).fold(f32::MAX, f32::min);
+    let right = layers.iter().map(|(r, _)| r[0] + r[2]).fold(0.0, f32::max);
+    // No lines along it or across its ends.
+    let edge = render::rgba(style::PANEL_EDGE, 1.0);
+    let lines: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(right_of_list)
+        .filter(|sh| same_rgb(sh.fill, edge))
+        .map(rect)
+        .filter(|r| r[1] < y + h + 2.0 && r[1] + r[3] > y - 2.0)
+        .filter(|r| r[0] < right + 2.0 && r[0] + r[2] > left - 2.0)
+        .collect();
+    assert!(lines.is_empty(), "lines round the lane: {lines:?}");
+    let strength = |x: f32| {
+        1.0 - layers
+            .iter()
+            .filter(|(r, _)| x >= r[0] && x < r[0] + r[2])
+            .map(|(_, a)| 1.0 - a)
+            .product::<f32>()
+    };
+    let middle = strength((left + right) / 2.0);
+    assert!(middle > 0.9, "whole in the middle: {middle}");
+    assert!(
+        strength(left + 0.5) < 0.2 && strength(right - 0.5) < 0.2,
+        "faint at its ends"
+    );
+}
+
+#[test]
+fn the_timeline_is_quiet_and_its_kiai_in_gold() {
+    let (mut s, _songs, mut now) = menu_look("select-look-timeline");
+    let path = s
+        .library
+        .iter()
+        .find(|e| e.meta.title == "sv-and-kiai")
+        .map(|e| e.path.clone())
+        .expect("a map with kiai");
+    s.select.select_path(&s.library, &path);
+    let c = settled(&mut s, &mut now);
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let [_, ty] = text_at(&c, "0:00 / ").expect("the timeline's time");
+    // The bars: thin shapes over the timeline, its 28 units up from the time under it.
+    let (top, bottom) = (ty - 5.0 - 30.0, ty - 5.0);
+    let green = render::rgba(0x86E05A, 1.0);
+    let in_text = |i: usize| c.texts.iter().any(|(r, _)| r.contains(&i));
+    let bars: Vec<&Shape> = c
+        .shapes
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !in_text(*i))
+        .map(|(_, sh)| sh)
+        .filter(|sh| plain(sh) && sh.center[0] > 28.0 + lw)
+        .filter(|sh| sh.half[0] * 2.0 < 3.0 && sh.center[1] > top && sh.center[1] < bottom)
+        .filter(|sh| !same_rgb(sh.fill, green))
+        .collect();
+    assert!(bars.len() > 20, "a timeline of bars: {}", bars.len());
+    let (gold, ahead, played) = (
+        render::rgba(0xFFD34D, 1.0),
+        render::rgba(style::ink::SECONDARY, 1.0),
+        render::rgba(style::ink::PRIMARY, 1.0),
+    );
+    for sh in &bars {
+        assert!(
+            [gold, ahead, played].iter().any(|c| same_rgb(sh.fill, *c)),
+            "a bar in a loud colour: {:?}",
+            sh.fill
+        );
+        if same_rgb(sh.fill, ahead) {
+            assert!(
+                sh.fill[3] <= 0.36,
+                "ahead of the playhead, quiet: {}",
+                sh.fill[3]
+            );
+        }
+    }
+    assert!(
+        bars.iter().any(|sh| same_rgb(sh.fill, gold)),
+        "its kiai in gold"
+    );
+}
