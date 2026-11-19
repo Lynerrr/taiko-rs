@@ -122,6 +122,67 @@ fn play_moves_the_camera_on_to_song_select_and_back() {
     assert!(left_of(&home, Hit::Key(KeyCode::Enter)).is_none());
 }
 
+/// How opaque each card's name (a set's title, a difficulty's version) is in the song list on
+/// `c` (its first shape's alpha), with how far down it is.
+fn titles(c: &Canvas, s: &State) -> Vec<(String, f32, f32)> {
+    let names: std::collections::HashSet<&str> = s
+        .library
+        .iter()
+        .flat_map(|e| [e.meta.title.as_str(), e.meta.version.as_str()])
+        .collect();
+    let list_right = 24.0 + ui::Select::list_width(c.width, s.cfg.song_list_share);
+    c.texts
+        .iter()
+        .filter(|(r, t)| {
+            names.contains(t.trim()) && r.start < r.end && c.shapes[r.start].center[0] < list_right
+        })
+        .map(|(r, t)| {
+            let sh = &c.shapes[r.start];
+            (t.trim().to_string(), sh.center[1], sh.fill[3])
+        })
+        .collect()
+}
+
+#[test]
+fn the_list_drops_in_card_by_card_on_the_way_from_the_menu() {
+    let (mut s, _songs, mut now) = on_menu("menu-shift-cards", true);
+    s.menu_click(0);
+    let mut frames = vec![titles(&run(&mut s, &mut now, 0), &s)];
+    now += Duration::from_millis(16);
+    assert!(s.menu_shift.is_some(), "on its way");
+    while s.menu_shift.is_some() {
+        frames.push(titles(&run(&mut s, &mut now, 0), &s));
+        now += Duration::from_millis(16);
+        assert!(frames.len() < 200, "the way never ends");
+    }
+    let settled = titles(&run(&mut s, &mut now, 32), &s);
+    let mut at_rest: Vec<(String, f32, f32)> = settled.into_iter().filter(|t| t.2 > 0.05).collect();
+    at_rest.sort_by(|a, b| a.1.total_cmp(&b.1));
+    assert!(at_rest.len() >= 4, "a list to drop in: {at_rest:?}");
+    let (top, last) = (&at_rest[0], at_rest.last().unwrap());
+    // How far on the way in a title is, of how it rests.
+    let shown = |f: &[(String, f32, f32)], name: &str, rest: f32| {
+        f.iter()
+            .filter(|t| t.0 == name)
+            .map(|t| t.2 / rest)
+            .fold(0.0f32, f32::max)
+    };
+    let one_by_one = frames
+        .iter()
+        .any(|f| shown(f, &top.0, top.2) > 0.9 && shown(f, &last.0, last.2) < 0.1);
+    assert!(
+        one_by_one,
+        "the top card is in while the last one isn't yet: {top:?} {last:?}"
+    );
+    // No card comes in before the one above it.
+    for f in &frames {
+        for w in at_rest.windows(2) {
+            let (a, b) = (shown(f, &w[0].0, w[0].2), shown(f, &w[1].0, w[1].2));
+            assert!(b <= a + 0.05, "{} before {}: {b} {a}", w[1].0, w[0].0);
+        }
+    }
+}
+
 #[test]
 fn back_halfway_turns_round_with_the_menu_that_was_left() {
     let (mut s, _songs, mut now) = on_menu("menu-shift-turn", true);
