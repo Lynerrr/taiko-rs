@@ -24,6 +24,14 @@ const MAX_BYTES: u64 = 24 * 1024 * 1024;
 /// `download::covers_dir` whatever map folder is followed.
 pub const COVER_PREFIX: &str = "@cover/";
 
+/// Names starting with this are read from a path of their own (`Canvas::picture_cover`).
+pub use crate::render::PATH_PICTURE_PREFIX as PATH_PREFIX;
+
+/// A picture that doesn't come from the followed map folder.
+fn external(name: &str) -> bool {
+    name.starts_with(COVER_PREFIX) || name.starts_with(PATH_PREFIX)
+}
+
 /// How long a picture that couldn't be read waits before it is looked for again.
 const RETRY: Duration = Duration::from_secs(2);
 
@@ -125,10 +133,16 @@ impl Pictures {
 
     /// Follows the map folder `dir`, loads the pictures `wanted` (lowercase file names) and
     /// moves the animated ones to their frames at `times` (ms into them, by name).
-    pub fn update(&mut self, dir: Option<&Path>, wanted: &[String], times: &[(String, f64)]) {
+    pub fn update(
+        &mut self,
+        dir: Option<&Path>,
+        wanted: &[String],
+        times: &[(String, f64)],
+        paths: &[(String, PathBuf)],
+    ) {
         if self.dir.as_deref() != dir {
-            // The covers don't come from the folder: they stay.
-            let cover = |n: &String| n.starts_with(COVER_PREFIX);
+            // The covers and the pictures read by path don't come from the folder: they stay.
+            let cover = |n: &String| external(n);
             self.dir = dir.map(Path::to_path_buf);
             let mut slots = (*self.slots).clone();
             slots.retain(|n, _| cover(n));
@@ -147,7 +161,10 @@ impl Pictures {
         }
         let covers = crate::download::covers_dir();
         while let Ok((from, name, got)) = self.rx.try_recv() {
-            if Some(&from) != self.dir.as_ref() && from != covers {
+            let ours = Some(&from) == self.dir.as_ref()
+                || (name.starts_with(COVER_PREFIX) && from == covers)
+                || name.starts_with(PATH_PREFIX);
+            if !ours {
                 continue;
             }
             self.pending.retain(|n| *n != name);
@@ -165,6 +182,24 @@ impl Pictures {
                 || self.pending.contains(name)
                 || self.failed.contains(name)
             {
+                continue;
+            }
+            // Read by path: the file the canvas named it for (no folder to stay inside).
+            if name.starts_with(PATH_PREFIX) {
+                let Some((dir, file)) = paths
+                    .iter()
+                    .find(|(k, _)| k == name)
+                    .and_then(|(_, p)| Some((p.parent()?.to_path_buf(), p.file_name()?)))
+                else {
+                    continue;
+                };
+                self.pending.push(name.clone());
+                let (tx, name) = (self.tx.clone(), name.clone());
+                let file = file.to_string_lossy().into_owned();
+                std::thread::spawn(move || {
+                    let got = read(&dir, &file);
+                    let _ = tx.send((dir, name, got));
+                });
                 continue;
             }
             let (dir, file) = match name.strip_prefix(COVER_PREFIX) {
@@ -583,7 +618,7 @@ mod tests {
         let wanted = vec!["fx.gif".to_string(), "logo.png".to_string()];
         let at = |t: f64| vec![("fx.gif".to_string(), t), ("logo.png".to_string(), t)];
         for _ in 0..400 {
-            p.update(Some(&dir), &wanted, &at(0.0));
+            p.update(Some(&dir), &wanted, &at(0.0), &[]);
             if p.slots().len() == 2 {
                 break;
             }
@@ -595,21 +630,21 @@ mod tests {
         let fx = first.iter().find(|u| u.0 == slot).unwrap();
         assert_eq!(&fx.1[..4], &red);
         // Same frame: nothing goes up again; the next frame: just the animation's.
-        p.update(Some(&dir), &wanted, &at(50.0));
+        p.update(Some(&dir), &wanted, &at(50.0), &[]);
         assert!(p.take_uploads().is_empty());
-        p.update(Some(&dir), &wanted, &at(150.0));
+        p.update(Some(&dir), &wanted, &at(150.0), &[]);
         let next = p.take_uploads();
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].0, slot);
         assert_eq!(&next[0].1[..4], &green);
         // Two frames within one: only the last goes up.
-        p.update(Some(&dir), &wanted, &at(210.0));
-        p.update(Some(&dir), &wanted, &at(310.0));
+        p.update(Some(&dir), &wanted, &at(210.0), &[]);
+        p.update(Some(&dir), &wanted, &at(310.0), &[]);
         let ups = p.take_uploads();
         assert_eq!(ups.len(), 1);
         assert_eq!(&ups[0].1[..4], &green, "310 ms: the second frame again");
         // Another folder: the animation goes with it.
-        p.update(None, &wanted, &at(0.0));
+        p.update(None, &wanted, &at(0.0), &[]);
         assert!(p.playing.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -635,7 +670,7 @@ mod tests {
         let mut p = Pictures::default();
         let wanted = vec!["logo.png".to_string(), "missing.png".to_string()];
         for _ in 0..400 {
-            p.update(Some(&dir), &wanted, &[]);
+            p.update(Some(&dir), &wanted, &[], &[]);
             if p.slots().contains_key("logo.png") && p.failed.len() == 1 {
                 break;
             }
@@ -646,11 +681,11 @@ mod tests {
         assert_eq!(p.failed, vec!["missing.png".to_string()]);
         // Put in the folder afterwards, it is found on a later look (not straight away).
         std::fs::write(dir.join("missing.png"), png(10, 10, [0, 0, 0, 255])).unwrap();
-        p.update(Some(&dir), &wanted, &[]);
+        p.update(Some(&dir), &wanted, &[], &[]);
         assert!(!p.slots().contains_key("missing.png"));
         p.retry_at = Instant::now();
         for _ in 0..400 {
-            p.update(Some(&dir), &wanted, &[]);
+            p.update(Some(&dir), &wanted, &[], &[]);
             if p.slots().contains_key("missing.png") {
                 break;
             }
@@ -658,7 +693,7 @@ mod tests {
         }
         assert!(p.slots().contains_key("missing.png"), "{:?}", p.failed);
         // Another folder: nothing of this one is kept.
-        p.update(None, &wanted, &[]);
+        p.update(None, &wanted, &[], &[]);
         assert!(p.slots().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -674,22 +709,66 @@ mod tests {
         let wanted = vec![name.clone()];
         // Without a map folder too.
         for _ in 0..400 {
-            p.update(None, &wanted, &[]);
+            p.update(None, &wanted, &[], &[]);
             if p.slots().contains_key(&name) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(p.slots().get(&name).map(|s| s.1), Some(3.0));
-        p.update(Some(&std::env::temp_dir()), &wanted, &[]);
+        p.update(Some(&std::env::temp_dir()), &wanted, &[], &[]);
         assert!(
             p.slots().contains_key(&name),
             "a cover outlives the map folder"
         );
         // Nothing climbs out of the covers' folder either.
         let bad = format!("{COVER_PREFIX}../x.png");
-        p.update(None, std::slice::from_ref(&bad), &[]);
+        p.update(None, std::slice::from_ref(&bad), &[], &[]);
         assert!(p.failed.contains(&bad));
         let _ = std::fs::remove_file(covers.join(&file));
+    }
+
+    #[test]
+    fn pictures_by_path_load_from_anywhere_and_stay_when_the_map_folder_changes() {
+        let dir = std::env::temp_dir().join(format!("taiko-rs-by-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Set A")).unwrap();
+        // The file as a map names it, in another case than on disk.
+        std::fs::write(
+            dir.join("Set A").join("BG.png"),
+            png(32, 18, [1, 2, 3, 255]),
+        )
+        .unwrap();
+        let path = dir.join("Set A").join("bg.png");
+        let name = crate::render::path_picture_key(&path);
+        assert!(name.starts_with(PATH_PREFIX));
+        assert_eq!(
+            name,
+            name.to_ascii_lowercase(),
+            "the canvas's lowercase names fit it"
+        );
+        let mut p = Pictures::default();
+        let wanted = vec![name.clone()];
+        let paths = vec![(name.clone(), path.clone())];
+        for _ in 0..400 {
+            p.update(None, &wanted, &[], &paths);
+            if p.slots().contains_key(&name) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let aspect = p.slots().get(&name).map(|s| s.1);
+        assert!(
+            aspect.is_some_and(|a| (a - 32.0 / 18.0).abs() < 1e-3),
+            "{:?}",
+            p.failed
+        );
+        p.update(Some(&dir), &wanted, &[], &paths);
+        assert!(p.slots().contains_key(&name), "it outlives the map folder");
+        // Without its path given there's nothing to read: it isn't asked for or failed.
+        let other = crate::render::path_picture_key(&dir.join("nope.png"));
+        p.update(None, std::slice::from_ref(&other), &[], &[]);
+        assert!(!p.pending.contains(&other) && !p.failed.contains(&other));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

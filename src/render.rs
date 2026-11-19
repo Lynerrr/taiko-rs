@@ -3028,6 +3028,8 @@ pub struct Canvas<H> {
     pub picture_slots: std::sync::Arc<std::collections::HashMap<String, (u32, f32)>>,
     /// Map pictures drawn this frame (file names, lowercase), for the app to load.
     pub pictures_wanted: Vec<String>,
+    /// The files behind the pictures drawn by path this frame (`picture_cover`): key and path.
+    pub picture_paths: Vec<(String, std::path::PathBuf)>,
     /// Where the animated ones are in their frames (ms since their layer began), by name; the
     /// first layer to show a picture in a frame sets it.
     pub picture_times: Vec<(String, f64)>,
@@ -3057,6 +3059,7 @@ impl<H> Default for Canvas<H> {
             avatars_wanted: Default::default(),
             picture_slots: Default::default(),
             pictures_wanted: Default::default(),
+            picture_paths: Default::default(),
             picture_times: Default::default(),
         }
     }
@@ -3210,6 +3213,18 @@ pub fn parse_accent(s: &str) -> Option<u32> {
 
 const CLEAR: [f32; 4] = [0.0; 4];
 
+/// Names of pictures read from a path of their own (`Canvas::picture_cover`) start with this.
+pub const PATH_PICTURE_PREFIX: &str = "@path/";
+
+/// The name a picture read from `path` goes by: the prefix and a hash of the path (the canvas
+/// lowercases names, which a path can't take on a case-sensitive disk).
+pub fn path_picture_key(path: &std::path::Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut h);
+    format!("{PATH_PICTURE_PREFIX}{:016x}", h.finish())
+}
+
 /// What `Canvas::rotate_since` does, on shapes that aren't on the canvas yet (copies of the
 /// playfield).
 pub fn rotate_shapes(
@@ -3243,6 +3258,7 @@ impl<H> Canvas<H> {
         self.input_regions.clear();
         self.avatars_wanted.clear();
         self.pictures_wanted.clear();
+        self.picture_paths.clear();
         self.picture_times.clear();
         self.disc = None;
         self.glitch = None;
@@ -3650,6 +3666,29 @@ impl<H> Canvas<H> {
             angle,
         });
         true
+    }
+
+    /// The picture in the file at `path` (anywhere, not only in the followed map's folder) over
+    /// all of `[x, y, w, h]`, cut to it, tinted by `tint`. False while it's loading (nothing
+    /// drawn).
+    pub fn picture_cover(
+        &mut self,
+        path: &std::path::Path,
+        [x, y, w, h]: [f32; 4],
+        tint: [f32; 4],
+    ) -> bool {
+        let key = path_picture_key(path);
+        if !self.picture_paths.iter().any(|(k, _)| *k == key) {
+            self.picture_paths.push((key.clone(), path.to_path_buf()));
+        }
+        let aspect = self
+            .picture_slots
+            .get(&key)
+            .map_or(1.0, |&(_, a)| a.max(0.01));
+        let start = self.shapes.len();
+        let drawn = self.picture(&key, x + w / 2.0, y + h / 2.0, h.max(w / aspect), 0.0, tint);
+        self.clip_since(start, x, y, w, h);
+        drawn
     }
 
     /// Where an animated picture `file` is to be in its frames this frame: `since` ms into them

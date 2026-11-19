@@ -274,7 +274,7 @@ pub fn audio_path(e: &Entry) -> PathBuf {
         .join(&e.meta.audio_file)
 }
 
-fn background_path(e: &Entry) -> Option<PathBuf> {
+pub(crate) fn background_path(e: &Entry) -> Option<PathBuf> {
     e.meta
         .background
         .as_ref()

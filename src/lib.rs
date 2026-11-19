@@ -12570,6 +12570,7 @@ impl State {
             picture_dir.as_deref(),
             &canvas.pictures_wanted,
             &canvas.picture_times,
+            &canvas.picture_paths,
         );
         canvas.clear(width);
         canvas.input_editor = self
