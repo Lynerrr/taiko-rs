@@ -521,7 +521,7 @@ fn draw_songs(
     state: &mut State,
     canvas: &mut Canvas,
     frame: &Frame,
-    shift: Option<menu_shift::Phases>,
+    shift: Option<(menu_shift::Phases, bool)>,
     play_away: bool,
 ) {
     // DT / HT show on the Mods button instead.
@@ -552,6 +552,11 @@ fn draw_songs(
         canvas.mouse = (f32::MIN, f32::MIN);
     }
     let left_start = canvas.shapes.len();
+    // On the way in from the menu the list's cards drop in one by one (the main menu's look).
+    let cascade = shift
+        .filter(|&(_, into)| into && !phone && !state.select.legacy)
+        .map(|(ph, _)| ph.cascade);
+    state.select.arriving = cascade;
     if phone {
         state.draw_mobile_select(canvas);
     } else {
@@ -565,14 +570,22 @@ fn draw_songs(
         );
     }
     let lw = Select::list_width(canvas.width, state.cfg.song_list_share);
+    state.select.arriving = None;
     // On the way from the menu: the search row comes on over the lane that folded into it,
-    // and the list drops out of it, its bottom edge going down with it.
-    if let Some(ph) = shift {
-        let [top, end] = state.select.frame_span();
-        let bottom = top + ph.drop * (end - top);
-        canvas.fade_since(left_start, ph.landed, 1.0);
-        // The list's window has no edge: its bottom is where the clip cuts it.
-        canvas.clip_since(left_start, 0.0, 0.0, lw + 40.0, bottom);
+    // and the list's cards drop out of it one by one (`Select::draw`). On the way back the list
+    // goes up into it as one window, its bottom edge going up.
+    if let Some((ph, _)) = shift {
+        if cascade.is_some() {
+            let [from, to] = state.select.list_shapes;
+            canvas.fade_between(left_start, from, ph.landed, 1.0);
+            canvas.fade_since(to, ph.landed, 1.0);
+        } else {
+            let [top, end] = state.select.frame_span();
+            let bottom = top + ph.drop * (end - top);
+            canvas.fade_since(left_start, ph.landed, 1.0);
+            // The list's window has no edge: its bottom is where the clip cuts it.
+            canvas.clip_since(left_start, 0.0, 0.0, lw + 40.0, bottom);
+        }
     }
     // What's right of the list comes with the camera.
     let right_start = canvas.shapes.len();
@@ -932,7 +945,7 @@ fn draw_songs(
             ),
         );
     }
-    if let Some(ph) = shift {
+    if let Some((ph, _)) = shift {
         let dx = (1.0 - ph.cam) * canvas.width;
         canvas.transform_since(right_start, [0.0, 0.0], 1.0, dx, 0.0);
     }
@@ -1046,12 +1059,14 @@ fn draw_shift(
             .map_or((0.0, 0.0), menu::Menu::kiai_glow);
         let left = 1.0 - ph.fold;
         let kiai = (edge * left, fill * left);
-        menu_shift::draw_lane(canvas, &menu_shift::lane(t, w, row), 1.0, kiai);
+        // The search row comes on over it as it lands: it gives way as much (the same tone).
+        let alpha = menu_shift::lane_alpha(ph.landed);
+        menu_shift::draw_lane(canvas, &menu_shift::lane(t, w, row), alpha, kiai);
     }
     let in_air = flying.filter(|_| ph.flight > 0.0 && ph.flight < 1.0);
     let songs_hits = canvas.hits.len();
     let play_away = flying.is_some() && ph.flight < 1.0;
-    draw_songs(state, canvas, frame, Some(ph), play_away);
+    draw_songs(state, canvas, frame, Some((ph, into)), play_away);
     let menu_hits = canvas.hits.len();
     let away = flying.filter(|_| ph.flight > 0.0);
     draw_menu(state, canvas, frame, Layer::Front { cam: ph.cam, away });

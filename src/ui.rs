@@ -385,6 +385,12 @@ pub struct Select {
     pub to_menu: bool,
     /// A mod's customization is open over the top of the screen: no way back to show.
     pub covered: bool,
+    /// On the way from the main menu (`menu_shift`): how far the list has come in
+    /// (`Phases::cascade`), its cards dropping out of the search row one after another.
+    pub arriving: Option<f32>,
+    /// Where the list's own shapes start and end on the canvas, as last drawn (the search row's
+    /// are before them, the scroll bar's and the rest after).
+    pub list_shapes: [usize; 2],
 }
 
 /// A play's letter in its colour, the same as on the website.
@@ -562,6 +568,8 @@ impl Select {
             legacy: false,
             to_menu: true,
             covered: false,
+            arriving: None,
+            list_shapes: [0, 0],
             filter: String::new(),
             searching: false,
             sort: SortMode::Artist,
@@ -2849,6 +2857,9 @@ impl Select {
             self.source_switched = None;
         }
         let mut drawn = 0usize;
+        // The drawn row the selection is in, for its outline to come in with it.
+        let mut cursor_row = 0usize;
+        let arriving = self.arriving.filter(|_| !legacy);
         let list_start = c.shapes.len();
         let hits_start = c.hits.len();
         let fit = |s: String, size: f32, room: f32| {
@@ -2974,6 +2985,9 @@ impl Select {
                 Row::Song(g) => {
                     let e = &library[self.visible[g.start]];
                     let open = g.contains(&self.cursor);
+                    if open {
+                        cursor_row = drawn - 1;
+                    }
                     // Under the pointer by where the row is, not where its card has moved to.
                     let hover = !open && c.hovered(24.0, y, lw, rh - 4.0);
                     // The main menu's look: a card with the map's picture. The open set's card
@@ -3189,6 +3203,9 @@ impl Select {
                     let a = *alpha;
                     let e = &library[self.visible[*i]];
                     let selected = *i == self.cursor;
+                    if selected {
+                        cursor_row = drawn - 1;
+                    }
                     // The main menu's look: a slimmer card, a bar of its rating's colour at its
                     // left (full on the selected one).
                     if !legacy {
@@ -3299,6 +3316,14 @@ impl Select {
                     c.fade_since(row_start, ease, 1.0);
                 }
             }
+            // From the main menu: each card drops out of the search row after the one above.
+            if let Some(f) = arriving {
+                let (dy, a) = crate::menu_shift::card_drop(f, drawn - 1);
+                if dy != 0.0 || a < 1.0 {
+                    c.transform_since(row_start, [0.0, 0.0], 1.0, 0.0, dy);
+                    c.fade_since(row_start, a, 1.0);
+                }
+            }
         }
         // Lights gone out are forgotten.
         lights.retain(|_, l| *l > 0.001);
@@ -3311,6 +3336,7 @@ impl Select {
         // The selection outline moves with the same transition.
         // Not with its heading closed: the heading shows where the selection is instead.
         let oy = outline;
+        let outline_start = c.shapes.len();
         if !self.visible.is_empty() && !cursor_hidden && oy > top - DIFF_H && oy < bottom {
             let target = [41.0, oy - 3.0, lw - 14.0, DIFF_H + 3.0];
             crate::style::brackets(c, target, 1.0);
@@ -3340,8 +3366,15 @@ impl Select {
                 }
             }
         }
+        // From the main menu the outline comes in with the selection's card.
+        if let Some(f) = arriving {
+            let (dy, a) = crate::menu_shift::card_drop(f, cursor_row);
+            c.transform_since(outline_start, [0.0, 0.0], 1.0, 0.0, dy);
+            c.fade_since(outline_start, a, 1.0);
+        }
         // Rows scrolling past the edges slide under them instead of over the search row.
         c.clip_since(list_start, 20.0, top - 2.0, lw + 8.0, bottom - top + 4.0);
+        self.list_shapes = [list_start, c.shapes.len()];
         for h in &mut c.hits[hits_start..] {
             let [_, y, _, hh] = &mut h.rect;
             let (y0, y1) = (y.max(top - 2.0), (*y + *hh).min(bottom + 2.0));
