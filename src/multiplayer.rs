@@ -1429,7 +1429,7 @@ fn half_row(c: &mut Canvas, sel: bool, i: usize, x: f32, y: f32, w: f32, label: 
 
 /// Mods as small badges from `x` along `y`, each in its mod select column's colour (as on the
 /// results screen); ones past `room` are counted in a last badge. Hands back their width.
-fn mod_badges(c: &mut Canvas, x: f32, y: f32, mods: Mods, room: f32) -> f32 {
+pub(crate) fn mod_badges(c: &mut Canvas, x: f32, y: f32, mods: Mods, room: f32) -> f32 {
     const SIZE: f32 = 6.5;
     const H: f32 = 11.0;
     const GAP: f32 = 3.0;
