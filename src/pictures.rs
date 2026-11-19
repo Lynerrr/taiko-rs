@@ -876,7 +876,7 @@ mod tests {
         let big = PICTURE_CELL * 2;
         std::fs::write(dir.join("BG.png"), png(big, big / 2, [200, 40, 40, 255])).unwrap();
         let first = read_by_path(&dir, "bg.png", Some(&thumbs)).unwrap();
-        let (_, made) = thumb_path(&dir.join("BG.png"), &thumbs).unwrap();
+        let (_, made) = thumb_path(&locate(&dir, "bg.png"), &thumbs).unwrap();
         let made = made.expect("a small copy is kept");
         assert_eq!(
             made.extension().unwrap(),
