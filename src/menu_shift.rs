@@ -65,11 +65,13 @@ impl Shift {
         }
     }
 
-    /// Back to the menu, from wherever a way to song select was.
+    /// Back to the menu, from wherever a way to song select was. Past the lane's fold (`MORPH_TO`)
+    /// the way in only drops the cards, which the way back doesn't play: it starts there, so the
+    /// camera and the lane move at once, not after a pause with nothing moving.
     pub fn back(from: Option<&Shift>) -> Shift {
         Shift {
             into_songs: false,
-            t: from.map_or(1.0, |s| s.t),
+            t: from.map_or(MORPH_TO, |s| s.t.min(MORPH_TO)),
             menu: None,
             flying: None,
             flight_from: 0.0,

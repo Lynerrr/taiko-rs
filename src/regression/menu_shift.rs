@@ -175,6 +175,21 @@ fn play_again_as_the_menu_slides_back_in_throws_its_note_whole() {
 }
 
 #[test]
+fn back_from_song_select_moves_the_menu_at_once() {
+    let (mut s, _songs, mut now) = on_menu("menu-shift-back-at-once", true);
+    s.menu_click(0);
+    run(&mut s, &mut now, 1200);
+    assert_eq!(shift_t(&s), None, "song select all there");
+    press(&mut s, KeyCode::Escape, now);
+    let first = run(&mut s, &mut now, 0);
+    let at = text_x(&first, "EXIT").expect("the menu, coming");
+    // A hundred milliseconds on, the menu has visibly come in.
+    let later = run(&mut s, &mut now, 96);
+    let moved = text_x(&later, "EXIT").expect("the menu, coming") - at;
+    assert!(moved > 10.0, "the menu moved {moved} in 100 ms");
+}
+
+#[test]
 fn without_animations_song_select_is_simply_there() {
     let (mut s, _songs, mut now) = on_menu("menu-shift-off", false);
     s.menu_click(0);
