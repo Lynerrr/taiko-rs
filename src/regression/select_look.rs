@@ -1791,6 +1791,117 @@ fn the_leaderboard_chip_goes_out_with_the_old_details() {
     );
 }
 
+/// The y of the card of set `row` (its first row), if drawn.
+fn card_y(c: &Canvas, row: usize) -> Option<f32> {
+    cards(c)
+        .into_iter()
+        .find(|(r, _)| *r == row)
+        .map(|(_, r)| r[1])
+}
+
+/// A frame 16 ms on, drawn twice (a frame's hits come back with the next one).
+fn step(s: &mut State, now: &mut Instant) -> Canvas {
+    *now += Duration::from_millis(16);
+    frame(s, *now);
+    frame(s, *now)
+}
+
+#[test]
+fn a_notch_of_the_wheel_glides_the_cards_rather_than_jumping_them() {
+    let (mut s, _songs, mut now) =
+        menu_look_cfg("select-look-wheel-glide", &many_sets_charts(), true);
+    let c = settled(&mut s, &mut now);
+    let row = cards(&c)[2].0;
+    let y0 = card_y(&c, row).expect("a card");
+    s.wheel(-1);
+    let mut ys = Vec::new();
+    for _ in 0..40 {
+        ys.push(card_y(&step(&mut s, &mut now), row).unwrap_or(f32::NAN));
+    }
+    let end = card_y(&settled(&mut s, &mut now), row).expect("still on screen");
+    let total = y0 - end;
+    assert!(total > 60.0, "a notch moves the list up: {y0} to {end}");
+    // Moving on the very first frame, then still on its way for a while: seen gliding.
+    let moved = |k: usize| (y0 - ys[k]) / total;
+    assert!(moved(0) > 0.02, "it moves at once: {ys:?}");
+    assert!(moved(0) < 0.3, "not a jump on the first frame: {ys:?}");
+    assert!(moved(5) < 0.7, "still gliding 100 ms on: {ys:?}");
+    assert!(moved(39) > 0.97, "there in the end: {ys:?}");
+    assert!(
+        ys.windows(2).all(|w| w[1] <= w[0] + 0.01),
+        "one way, no wobble: {ys:?}"
+    );
+}
+
+#[test]
+fn a_notch_past_the_list_s_end_bumps_it_and_it_springs_back() {
+    let (mut s, _songs, mut now) = menu_look_cfg("select-look-wheel-end", &maps::all(), true);
+    settled(&mut s, &mut now);
+    for _ in 0..30 {
+        s.wheel(-1);
+    }
+    let rest = settled(&mut s, &mut now);
+    let row = cards(&rest).last().expect("a card").0;
+    let y0 = card_y(&rest, row).unwrap();
+    s.wheel(-1);
+    let ys: Vec<f32> = (0..6)
+        .map(|_| card_y(&step(&mut s, &mut now), row).unwrap())
+        .collect();
+    assert!(
+        ys.iter().any(|y| y < &(y0 - 2.0)),
+        "the list gives a little at its end: {y0} {ys:?}"
+    );
+    let back = card_y(&settled(&mut s, &mut now), row).unwrap();
+    assert!((back - y0).abs() < 0.1, "and springs back: {y0} {back}");
+}
+
+#[test]
+fn a_set_picked_after_wheeling_glides_to_the_target_without_a_jump() {
+    let (mut s, _songs, mut now) =
+        menu_look_cfg("select-look-wheel-pick", &many_sets_charts(), true);
+    settled(&mut s, &mut now);
+    for _ in 0..4 {
+        s.wheel(-1);
+    }
+    let c = settled(&mut s, &mut now);
+    // A set low on the screen, far from the target.
+    let [_, end] = s.select.frame_span();
+    let (row, r) = cards(&c)
+        .into_iter()
+        .rev()
+        .find(|(_, r)| r[1] + r[3] < end - 30.0)
+        .expect("a card low down");
+    s.click(Hit::SongHeader(row), None);
+    let mut ys = vec![r[1]];
+    for _ in 0..40 {
+        ys.push(card_y(&step(&mut s, &mut now), row).expect("the picked card"));
+    }
+    let to = *ys.last().unwrap();
+    let far = (r[1] - to).abs();
+    assert!(far > 60.0, "it goes a way up to the target: {ys:?}");
+    let biggest = ys
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0, f32::max);
+    assert!(
+        biggest < far * 0.16,
+        "no frame moves it more than a small part of the way: {biggest} of {far}: {ys:?}"
+    );
+    assert!(
+        (ys[18] - to).abs() > 0.5,
+        "still gliding ~290 ms on: {ys:?}"
+    );
+}
+
+fn many_sets_charts() -> Vec<maps::Chart> {
+    (0..60)
+        .map(|i| maps::Chart {
+            name: Box::leak(format!("set-{i:02}").into_boxed_str()),
+            ..maps::basics()
+        })
+        .collect()
+}
+
 #[test]
 fn song_select_s_routes_go_through_the_blur_and_legacy_s_do_not() {
     let (mut s, _songs, mut now) = menu_look_moving("select-look-routes-blur");
