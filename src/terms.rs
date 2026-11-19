@@ -13,7 +13,7 @@ use crate::render::{accent, rgba};
 
 /// The terms' version: raise it when the text changes in substance, and every account is asked
 /// to agree again.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// The terms in the language the game is in (English where there's no translation).
 pub fn text() -> &'static str {
