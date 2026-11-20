@@ -14,8 +14,32 @@ pub const KIAI_GOLD: u32 = GOLD;
 const GLITCH_RED: u32 = 0x9f2137;
 const GLITCH_CYAN: u32 = 0x2a9fb5;
 /// A panel: the main menu's.
-pub const PANEL: u32 = 0x15151d;
-pub const PANEL_EDGE: u32 = 0x3a3a4e;
+pub const PANEL: u32 = tone::PANEL;
+pub const PANEL_EDGE: u32 = tone::EDGE;
+
+/// The main menu's tones, which every screen in its look is drawn with: its panels (the dock,
+/// NOW PLAYING), the edge round them, and its buttons (the music player's under NOW PLAYING),
+/// at rest, under the pointer and the one in the accent.
+pub mod tone {
+    /// A panel's fill, and how much of it covers what's behind (the dock's).
+    pub const PANEL: u32 = 0x15151d;
+    pub const PANEL_ALPHA: f32 = 0.95;
+    /// What floats over a screen (the volume mixer): all but opaque.
+    pub const OVERLAY_ALPHA: f32 = 0.98;
+    /// The neutral edge round a panel or a button at rest, and a button's under the pointer.
+    pub const EDGE: u32 = 0x3a3a4e;
+    pub const EDGE_HOVER: u32 = 0x6a6a88;
+    /// A button's fill, at rest and under the pointer.
+    pub const CONTROL: u32 = 0x23232f;
+    pub const CONTROL_HOVER: u32 = 0x34344a;
+    /// The accent button's fill (the music player's way to the map), at rest and under the
+    /// pointer, and its edge under the pointer.
+    pub const ACCENT_FILL: u32 = 0x2b1a17;
+    pub const ACCENT_FILL_HOVER: u32 = 0x4a221b;
+    pub const ACCENT_EDGE_HOVER: u32 = 0xff6a50;
+    /// How wide an edge is: one unit, a crisp line.
+    pub const LINE: f32 = 1.0;
+}
 /// What deletes: its button, its menu item, the edge of the box asking.
 pub const DANGER: u32 = 0xff6b6b;
 
@@ -34,12 +58,12 @@ pub enum Surface {
     Lifted,
 }
 
-/// The raised surface's tint and how much of what's behind it shows through.
-pub const SURFACE_1: u32 = 0x14121c;
-pub const SURFACE_1_ALPHA: f32 = 0.8;
-/// The lifted surface: the raised one about 6% lighter.
-pub const SURFACE_2: u32 = 0x221f2c;
-pub const SURFACE_2_ALPHA: f32 = 0.85;
+/// The raised surface: the main menu's panel, as all but opaque.
+pub const SURFACE_1: u32 = tone::PANEL;
+pub const SURFACE_1_ALPHA: f32 = tone::PANEL_ALPHA;
+/// The lifted surface: the main menu's button.
+pub const SURFACE_2: u32 = tone::CONTROL;
+pub const SURFACE_2_ALPHA: f32 = 0.97;
 
 /// A surface's fill (the back one is clear).
 pub fn surface_fill(level: Surface) -> [f32; 4] {
@@ -50,8 +74,34 @@ pub fn surface_fill(level: Surface) -> [f32; 4] {
     }
 }
 
-/// `level` over `[x, y, w, h]` with corners of `radius`: its tone alone, no edge round it.
+/// A surface's edge: the main menu's neutral line (the back one has none).
+pub fn surface_edge(level: Surface) -> [f32; 4] {
+    match level {
+        Surface::Back => rgba(0, 0.0),
+        Surface::Raised | Surface::Lifted => rgba(tone::EDGE, 1.0),
+    }
+}
+
+/// `level` over `[x, y, w, h]` with corners of `radius`: its tone and a crisp neutral edge
+/// round it, as the main menu's panels and buttons have.
 pub fn surface(c: &mut Canvas, [x, y, w, h]: [f32; 4], radius: f32, level: Surface) {
+    if level == Surface::Back {
+        return;
+    }
+    let fill = surface_fill(level);
+    c.round_rect(
+        [x, y],
+        [w, h],
+        radius,
+        fill,
+        surface_edge(level),
+        tone::LINE,
+    );
+}
+
+/// `level` as a tile inside a panel (a stat's): its tone alone, no edge. The panel round it has
+/// the edge; one on every block in it would read as a stack of widgets.
+pub fn tile(c: &mut Canvas, [x, y, w, h]: [f32; 4], radius: f32, level: Surface) {
     if level == Surface::Back {
         return;
     }
@@ -98,7 +148,12 @@ pub(crate) mod classic;
 
 pub mod radius {
     pub const SMALL: f32 = 4.0;
-    pub const CARD: f32 = 8.0;
+    /// A button: the main menu's music buttons.
+    pub const CONTROL: f32 = 5.0;
+    /// A panel: NOW PLAYING's.
+    pub const PANEL: f32 = 6.0;
+    /// A card or a strip: as round as a panel.
+    pub const CARD: f32 = PANEL;
 }
 
 /// Room, on a grid of 4 units.
@@ -1174,10 +1229,11 @@ fn rating_pill(
         }
         None => (0x2a2a38, 0x8a8aa0),
     };
+    // A chip with the main menu's small corners, not a pill.
     c.round_rect(
         [x, y - 3.0],
         [w, h],
-        h / 2.0,
+        radius::SMALL,
         rgba(bg, 1.0),
         rgba(bg, 1.0),
         0.0,
@@ -1243,6 +1299,39 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn surfaces_are_the_main_menu_s_panels_and_ratings_chips_not_pills() {
+        let mut c = Canvas::default();
+        surface(
+            &mut c,
+            [10.0, 10.0, 100.0, 40.0],
+            radius::PANEL,
+            Surface::Raised,
+        );
+        let s = &c.shapes[0];
+        assert_eq!(s.fill, rgba(tone::PANEL, tone::PANEL_ALPHA));
+        assert!(s.fill[3] >= 0.95, "all but opaque");
+        assert_eq!((s.border, s.params[1]), (rgba(tone::EDGE, 1.0), tone::LINE));
+        let mut c = Canvas::default();
+        tile(
+            &mut c,
+            [10.0, 10.0, 40.0, 20.0],
+            radius::SMALL,
+            Surface::Raised,
+        );
+        assert_eq!(
+            c.shapes[0].params[1], 0.0,
+            "a tile inside a panel: no edge of its own"
+        );
+        let mut c = Canvas::default();
+        star_pill(&mut c, 400.0, 100.0, 10.0, Some(5.36));
+        assert!(
+            c.shapes[0].params[0] <= radius::SMALL,
+            "a chip's corners: {}",
+            c.shapes[0].params[0]
+        );
+    }
 
     #[test]
     fn a_beat_that_isnt_a_number_lights_nothing() {

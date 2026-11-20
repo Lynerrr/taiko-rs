@@ -300,10 +300,10 @@ impl Screen for SongSelect {
             // 1.0's song select: nothing behind it but the map's picture.
             None if state.select.classic => classic::draw_songs_classic(state, canvas, frame),
             None => {
-                // The routes behind lean a little away from the pointer.
+                // The routes behind lean a little away from the pointer: sharp, as the main
+                // menu's, and calmed (`routes_brightness`) for the text over them.
                 let routes = canvas.shapes.len();
                 draw_crowd(state, canvas, frame.now, true, 1.0, 1.0);
-                canvas.blur_since(routes, routes_blur(state, 1.0));
                 // A pointer off the window (or none) leans nothing.
                 let (mx, my) = canvas.mouse;
                 let pointer = (0.0..=canvas.width).contains(&mx)
@@ -831,6 +831,8 @@ fn draw_songs(
             let w = canvas.width;
             let right = panel_x + panel_w;
             style::lane_surface(canvas, [panel_x, by, right - panel_x, bh]);
+            // The volume mixer comes up above the lane, not over its buttons.
+            state.volume.keep_above(by);
             let play_x = right - (w * PLAY_SHARE).clamp(120.0, 200.0);
             let mods_word = tr!("Mods", "Mod", "Моды");
             let random = tr!("Random", "ランダム", "Случайная");
@@ -1045,17 +1047,6 @@ pub(crate) fn parallax_target((x, y): (f32, f32), width: f32) -> [f32; 2] {
     [off(x, width), off(y, render::VIRTUAL_HEIGHT)]
 }
 
-/// How blurred song select's note routes are (`Canvas::blur_since`), `cam` of the way from
-/// the menu: as far as the map's picture behind them (`State::background_blur`). Legacy and the
-/// phone layout keep them sharp.
-fn routes_blur(state: &State, cam: f32) -> f32 {
-    if state.select.legacy || state.select.classic || crate::mobile::active() {
-        0.0
-    } else {
-        cam
-    }
-}
-
 fn draw_crowd(
     state: &mut State,
     canvas: &mut Canvas,
@@ -1133,8 +1124,6 @@ fn draw_shift(
     canvas.fade_since(routes, routes_brightness(ph.cam), 1.0);
     let shown = if into { (t * 2.0).min(1.0) } else { 1.0 };
     draw_crowd(state, canvas, frame.now, false, shown, ph.cam);
-    // Blurred as the map's picture is, with the camera.
-    canvas.blur_since(routes, routes_blur(state, ph.cam));
     if ph.landed < 1.0 {
         let lw = Select::list_width(w, state.cfg.song_list_share);
         let top = state.select.frame_span()[0];

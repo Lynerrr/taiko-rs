@@ -3113,14 +3113,23 @@ fn draw_tab(c: &mut Canvas, s: &Social, right: f32, middle: f32, lobby_unread: u
     let len = TAB_PAD + TAB_KEY_ROW + reading + TAB_PAD;
     let (x, y) = (right - tab_w(), middle - len / 2.0);
     let hover = c.hovered(x, y, tab_w(), len);
-    c.round_rect(
-        [x, y],
-        [tab_w() + edge_bleed(), len],
-        6.0,
-        rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.92),
-        rgba(0x3a3a4e, 1.0),
-        1.0,
-    );
+    // The main menu's panel, as all but opaque as song select's are, its corners a panel's.
+    {
+        use crate::style::{radius, tone};
+        let fill = if hover {
+            tone::CONTROL_HOVER
+        } else {
+            tone::PANEL
+        };
+        c.round_rect(
+            [x, y],
+            [tab_w() + edge_bleed(), len],
+            radius::PANEL,
+            rgba(fill, tone::PANEL_ALPHA),
+            rgba(if hover { tone::EDGE_HOVER } else { tone::EDGE }, 1.0),
+            tone::LINE,
+        );
+    }
     let cx = x + tab_w() / 2.0;
     let colour = rgba(0xc8c8d8, 1.0);
     if !crate::mobile::active() {

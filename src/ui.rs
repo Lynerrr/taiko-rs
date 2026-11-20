@@ -2264,7 +2264,12 @@ impl Select {
             if !self.covered {
                 let (top, bottom) = (row - 6.0, self.frame_top() - 4.0);
                 let rect = [20.0, top, lw + 8.0, bottom - top];
-                crate::style::surface(c, rect, 8.0, crate::style::Surface::Raised);
+                crate::style::surface(
+                    c,
+                    rect,
+                    crate::style::radius::PANEL,
+                    crate::style::Surface::Raised,
+                );
             }
             // The way back: an arrow and where it goes, as bare as the menu's icons.
             let back = if self.to_menu {
@@ -2444,10 +2449,15 @@ impl Select {
                 1.0,
             );
         } else {
-            // A lifted field, no edge; while typing a line of the accent under the text (the
-            // focus).
+            // A lifted field as the main menu's buttons are; while typing a line of the accent
+            // under the text (the focus).
             let field = [left, row, search_w, 24.0];
-            crate::style::surface(c, field, 6.0, crate::style::Surface::Lifted);
+            crate::style::surface(
+                c,
+                field,
+                crate::style::radius::CONTROL,
+                crate::style::Surface::Lifted,
+            );
             if self.searching {
                 c.rect(
                     left + 6.0,
