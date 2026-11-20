@@ -1271,6 +1271,21 @@ impl Preview {
         c.text(lx + 8.0, ty, text::BODY, rgba(chip_ink, 1.0), &name);
         cy += CHIP_H + BLOCK_GAP;
         self.enter(c, part, 100.0);
+        // The map's name and difficulty, the stats, the pp and the preview: sections split by
+        // a line of the panels' edge, each coming in with what's under it.
+        let divider = |c: &mut Canvas, at: f32| {
+            let at = crate::render::snap_to_grid(at);
+            c.rect(
+                lx,
+                at,
+                iw,
+                crate::style::tone::LINE,
+                rgba(crate::style::tone::EDGE, 1.0),
+            );
+        };
+        let part = c.shapes.len();
+        divider(c, cy - BLOCK_GAP / 2.0);
+        self.enter(c, part, 130.0);
 
         // The stats as tiles: a caption over its value. OD is known at once, the rest when the
         // map is read (they fade in with it).
@@ -1395,6 +1410,7 @@ impl Preview {
         // counting from the last song's; a skeleton while the map is being read. The way to
         // the leaderboard ends the row (song select draws it at `board_at`).
         let part = c.shapes.len();
+        divider(c, cy - BLOCK_GAP / 2.0);
         let pp_now = follow_pp(&mut self.pp_shown, self.potential, c.dt_ms);
         let room = if self.board_w > 0.0 {
             self.board_w + space::CARD_GAP
@@ -1569,6 +1585,10 @@ impl Preview {
                 &what,
             );
         }
+        // Under the pp, the line over the preview (in the gap the layout leaves above it).
+        let part = c.shapes.len();
+        divider(c, y + l.head - PREVIEW_GAP / 2.0);
+        self.enter(c, part, PP_ENTER_MS);
         od_hovered
     }
 
@@ -1656,6 +1676,38 @@ impl Preview {
             let tint = [dim, dim, dim, alpha.max(0.0)];
             // At the top of the details' panel, its top corners as round as the panel's.
             drawn |= c.picture_cover_round_top(&bg, rect, clip, tint, crate::style::radius::CARD);
+        }
+        // A plate of the panel's tone under the title and artist, over the banner's left, fading
+        // out to nothing at its right end: in layers as the picture is, so it fades out downwards
+        // with it and no edge of it shows where the picture has gone.
+        if drawn {
+            let (strength, reach) = BANNER_PLATE;
+            for k in 0..BANNER_STRIPS {
+                let below = if k + 1 < BANNER_STRIPS {
+                    1.0 - keep(k + 1)
+                } else {
+                    1.0
+                };
+                let alpha = if below > 1e-4 {
+                    (1.0 - (1.0 - keep(k)) / below).max(0.0)
+                } else {
+                    0.0
+                };
+                if alpha <= 0.0 {
+                    continue;
+                }
+                let bottom = crate::render::snap_to_grid(y + (k + 1) as f32 * sh);
+                let start = c.shapes.len();
+                let plate = crate::style::SURFACE_1;
+                c.shade_across(
+                    [x, y],
+                    [w * reach, h],
+                    crate::style::radius::CARD,
+                    rgba(plate, strength * alpha),
+                    rgba(plate, 0.0),
+                );
+                c.clip_since(start, x, y, w * reach, bottom - y);
+            }
         }
         if drawn && since.is_none() {
             self.banner_seen = Some((bg, crate::render::frame_now()));
@@ -2413,6 +2465,9 @@ const BARS_PLAYED: f32 = 0.8;
 /// heights (the mapper's line, the difficulty's chip, the stat tiles, the Don/Kat bar with its
 /// counts, the pp chips, what a TJA course leaves out) and the gaps between the blocks.
 const BANNER_H: f32 = 96.0;
+/// The plate under the banner's text: how dark at its left, and how much of the banner it
+/// reaches over.
+const BANNER_PLATE: (f32, f32) = (0.75, 0.65);
 const BANNER_TOP: f32 = 14.0;
 const MAPPER_H: f32 = 13.0;
 const CHIP_H: f32 = 18.0;
@@ -2423,6 +2478,8 @@ const PP_H: f32 = 16.0;
 const SIM_GAP: f32 = 4.0;
 const LEFT_OUT_H: f32 = 12.0;
 const BLOCK_GAP: f32 = 8.0;
+/// Bare, the room between the pp row and the preview under it.
+const PREVIEW_GAP: f32 = 10.0;
 /// The banner's strips (it fades out down them) and how far down it stays whole.
 const BANNER_STRIPS: usize = 12;
 const BANNER_WHOLE: f32 = 0.45;
@@ -2465,7 +2522,7 @@ impl Bare {
             + PP_H
             + if sim { SIM_GAP + PP_H } else { 0.0 }
             + if left_out { 4.0 + LEFT_OUT_H } else { 0.0 }
-            + 10.0;
+            + PREVIEW_GAP;
         Bare {
             title_size,
             title,
@@ -2592,13 +2649,23 @@ fn draw_graph(
             };
             rgba(ink, if played { BARS_PLAYED } else { BARS_AHEAD })
         };
-        c.rect(
-            bx0 + i as f32 * bar_w,
-            y + h - 3.0 - bh,
-            (bar_w - 0.5).max(0.5),
-            bh,
-            colour,
-        );
+        // Bare, each bar's ends on whole pixels, so the bars are as wide as each other.
+        let (left, right) = if boxed {
+            (bx0 + i as f32 * bar_w, bx0 + (i as f32 + 1.0) * bar_w - 0.5)
+        } else {
+            let snap = crate::render::snap_to_grid;
+            (
+                snap(bx0 + i as f32 * bar_w),
+                snap(bx0 + (i as f32 + 1.0) * bar_w - 0.5),
+            )
+        };
+        c.rect(left, y + h - 3.0 - bh, (right - left).max(0.5), bh, colour);
+    }
+    // Bare, the bars stand on a line of the panels' edge.
+    if !boxed {
+        let base = crate::render::snap_to_grid(y + h - 3.0);
+        let edge = rgba(crate::style::tone::EDGE, 1.0);
+        c.rect(x, base, w, crate::style::tone::LINE, edge);
     }
     if preview_at >= 0.0 {
         let px = x_of(preview_at);
