@@ -1206,8 +1206,12 @@ impl Select {
     }
 
     fn regroup(&mut self, library: &[Entry]) {
-        // Row indices change meaning: start the list's motion afresh.
+        // Row indices change meaning: start the list's motion afresh. The card pictures shown
+        // are kept (they go by picture, not row): dropped, every card on screen faded its
+        // picture in again, a blink across the list whenever it was rebuilt.
+        let covers = std::mem::take(&mut self.anim.covers);
         self.anim = ListAnim::default();
+        self.anim.covers = covers;
         self.groups.clear();
         self.group_of.clear();
         let each = self.split_difficulties();
@@ -2688,12 +2692,13 @@ impl Select {
         let a = &mut self.anim;
         if a.cursor != Some(self.cursor) || a.open != open_start {
             if a.cursor.is_none() {
-                // First frame: no motion.
+                // First frame: no motion. The card pictures already shown stay (see `regroup`).
                 *a = ListAnim {
                     open: open_start,
                     open_from: 1.0,
                     scroll_from: final_scroll,
                     outline_from: final_outline,
+                    covers: std::mem::take(&mut a.covers),
                     ..Default::default()
                 };
             } else {
