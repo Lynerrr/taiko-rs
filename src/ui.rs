@@ -501,9 +501,12 @@ const CARD_DIM: f32 = 0.7;
 const CARD_RADIUS: f32 = crate::style::radius::CARD;
 /// How bright the faint edge round a card is (not the open one, which has the selection's).
 const CARD_EDGE: f32 = 0.1;
-/// A set opening: its difficulties drop in from this far above, this many ms apart.
+/// A set opening: its difficulties drop in from this far above, this many ms apart, out from
+/// the selected one both ways, the last of them at most `DIFF_CASCADE_SPAN_MS` after it (a set
+/// of many difficulties drops them in closer together, its selected one first).
 const DIFF_DROP: f32 = 8.0;
 const DIFF_CASCADE_MS: f32 = 30.0;
+const DIFF_CASCADE_SPAN_MS: f32 = 120.0;
 const COVER_FADE_MS: f32 = 200.0;
 const COVER_SHADE: (f32, f32) = (0.85, 0.4);
 const BOTTOM_FADE: f32 = 16.0;
@@ -3341,7 +3344,8 @@ impl Select {
                     c.fade_since(row_start, f * f * (3.0 - 2.0 * f), 1.0);
                 }
             }
-            // A set just opened: its difficulties drop in one after another.
+            // A set just opened: its difficulties drop in one after another, out from the
+            // selected one.
             if !legacy
                 && let Row::Diff(i) = row
                 && let Some((start, at)) = self.anim.opened_at
@@ -3349,8 +3353,16 @@ impl Select {
                 && groups[g].start == start
             {
                 use crate::style::motion;
-                let k = (*i - start) as f32;
-                let since = at + std::time::Duration::from_secs_f32(DIFF_CASCADE_MS * k / 1000.0);
+                let set = &groups[g];
+                let from = if set.contains(&self.cursor) {
+                    self.cursor
+                } else {
+                    start
+                };
+                let far = (from - set.start).max(set.end - 1 - from).max(1) as f32;
+                let step = DIFF_CASCADE_MS.min(DIFF_CASCADE_SPAN_MS / far);
+                let k = i.abs_diff(from) as f32;
+                let since = at + std::time::Duration::from_secs_f32(step * k / 1000.0);
                 let p = motion::entrance(since, motion::CONTENT_MS, motion::out_quint);
                 if p < 1.0 {
                     c.transform_since(row_start, [0.0, 0.0], 1.0, 0.0, -DIFF_DROP * (1.0 - p));
