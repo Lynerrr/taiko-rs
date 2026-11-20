@@ -2097,7 +2097,7 @@ fn the_wheel_over_a_pp_simulator_field_steps_it() {
 }
 
 #[test]
-fn the_preview_lane_fits_its_round_tile_and_its_notes_fade_in_out_of_its_end() {
+fn the_preview_lane_fits_its_round_tile_and_its_notes_slide_in_from_under_its_edge() {
     let plain = |center: [f32; 2], half: [f32; 2], params: [f32; 4]| Shape {
         center,
         half,
@@ -2154,12 +2154,66 @@ fn the_preview_lane_fits_its_round_tile_and_its_notes_fade_in_out_of_its_end() {
     assert!((span(&shapes[4])[1] - (x + 50.0)).abs() < 0.01);
     assert!(span(&shapes[4])[0] > tile_left + round);
     let a = |i: usize| shapes[i].fill[3];
-    assert!(a(5) < 0.05, "at the very end, out of sight: {}", a(5));
-    assert!(a(6) > a(5) && a(6) < 1.0, "coming in: {}", a(6));
-    assert_eq!(a(7), 1.0, "well inside, as it is");
+    // The notes aren't faded near the end: they slide in from under the tile's edge, cut by it
+    // (faded in short of it, they seemed to appear in plain view).
+    for i in [5, 6, 7] {
+        assert_eq!(a(i), 1.0, "note {i} drawn as it is");
+    }
+    assert_eq!(a(1), 1.0, "the band drawn as it is");
+}
+
+#[test]
+fn the_preview_never_draws_the_black_playfield_and_plays_keep_it() {
+    use crate::game::{self, Look};
+    game::set_frame_look(Some(Look {
+        black_lane: true,
+        ..Look::default()
+    }));
+    let drawn = game::with_look(preview::preview_look(game::playfield_look()), || {
+        game::playfield_look()
+    });
+    assert!(!drawn.black_lane, "the preview's lane isn't black");
+    assert!(
+        game::playfield_look().black_lane,
+        "the play's look is as it was after the preview"
+    );
+    game::set_frame_look(None);
+}
+
+#[test]
+fn a_difficulty_rows_rating_bar_is_drawn_over_its_light_and_the_light_is_as_round_as_it() {
+    // The selected row's light (the pointer's is drawn the same way, as round).
+    let (mut s, _songs, mut now) = menu_look("select-look-diff-light");
+    let c = settled(&mut s, &mut now);
+    let cursor = s.select.cursor();
+    let row = hit_rect(&c, |h| *h == Hit::SongRow(cursor)).expect("the selected row");
+    // The row's own shapes, the full-width ones (its card and its light) and its bar.
+    let at_row = |sh: &&Shape| inside(sh.center, row, 0.5);
+    let wide: Vec<(usize, &Shape)> = c
+        .shapes
+        .iter()
+        .enumerate()
+        .filter(|(_, sh)| at_row(sh) && sh.half[0] * 2.0 > row[2] * 0.8)
+        .collect();
+    assert!(wide.len() >= 2, "its card and its light: {}", wide.len());
+    // Its card, then its light over exactly the same box.
+    let card = wide[0];
+    let light = *wide[1..]
+        .iter()
+        .find(|(_, sh)| sh.center == card.1.center && sh.half == card.1.half)
+        .expect("its light over the card");
     assert_eq!(
-        a(1),
-        1.0,
-        "the band itself isn't faded (it ends in its middle)"
+        light.1.params[0], card.1.params[0],
+        "the light as round as the card"
+    );
+    let bar = c
+        .shapes
+        .iter()
+        .enumerate()
+        .find(|(_, sh)| at_row(sh) && sh.half[0] * 2.0 == 3.0)
+        .expect("its rating bar");
+    assert!(
+        bar.0 > light.0,
+        "the bar over the light, not under its corners"
     );
 }
