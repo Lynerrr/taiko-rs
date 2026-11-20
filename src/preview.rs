@@ -1314,7 +1314,7 @@ impl Preview {
         for (k, (caption, value, alpha)) in tiles.iter().enumerate() {
             let part = c.shapes.len();
             let tx = lx + k as f32 * (tw + space::CARD_GAP);
-            surface(
+            crate::style::tile(
                 c,
                 [tx, cy, tw, TILE_H],
                 crate::style::radius::SMALL,

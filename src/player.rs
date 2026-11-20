@@ -237,13 +237,21 @@ pub fn button(
     accent: bool,
 ) {
     let hover = c.hovered(x, y, w, h);
+    use crate::style::{radius, tone};
     let (fill, border) = match (accent, hover) {
-        (true, false) => (0x2b1a17, DON),
-        (true, true) => (0x4a221b, 0xff6a50),
-        (false, false) => (0x23232f, 0x3a3a4e),
-        (false, true) => (0x34344a, 0x6a6a88),
+        (true, false) => (tone::ACCENT_FILL, DON),
+        (true, true) => (tone::ACCENT_FILL_HOVER, tone::ACCENT_EDGE_HOVER),
+        (false, false) => (tone::CONTROL, tone::EDGE),
+        (false, true) => (tone::CONTROL_HOVER, tone::EDGE_HOVER),
     };
-    c.round_rect([x, y], [w, h], 5.0, rgba(fill, 1.0), rgba(border, 1.0), 1.0);
+    c.round_rect(
+        [x, y],
+        [w, h],
+        radius::CONTROL,
+        rgba(fill, 1.0),
+        rgba(border, 1.0),
+        tone::LINE,
+    );
     c.hit(x, y, w, h, Hit::Music(control));
     let icon = match control {
         Control::Prev => &PREV,

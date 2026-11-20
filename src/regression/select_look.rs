@@ -1,5 +1,5 @@
 //! Song select in the main menu's look draws with the design tokens (`style`: surfaces, ink,
-//! colour roles): its surfaces have no edge round them, the accent is only on Play and the
+//! colour roles): its surfaces have the main menu's crisp neutral edge, the accent is only on Play and the
 //! selection, and a rating's colour only on the selected difficulty. The Legacy layout keeps its
 //! own look (its goldens in `screens`).
 
@@ -74,6 +74,11 @@ fn inside([x, y]: [f32; 2], [rx, ry, rw, rh]: [f32; 4], slack: f32) -> bool {
 }
 
 /// A rectangle or rounded box (not a letter, a skin image or a picture).
+/// The main menu's edge round a surface: one unit of its neutral line.
+fn neutral_edge(s: &Shape) -> bool {
+    s.params[1] == style::tone::LINE && same_rgb(s.border, render::rgba(style::tone::EDGE, 1.0))
+}
+
 fn plain(s: &Shape) -> bool {
     (0.0..10.0).contains(&s.params[3])
 }
@@ -130,7 +135,7 @@ fn many() -> Vec<maps::Chart> {
 }
 
 #[test]
-fn surfaces_have_no_edge_and_rows_no_lines_under_them() {
+fn surfaces_have_one_neutral_edge_and_rows_no_lines_under_them() {
     let (mut s, _songs, mut now) = menu_look("select-look-edges");
     let c = settled(&mut s, &mut now);
     // The selection's outline round the open set's card is the one strong edge; the other set
@@ -149,11 +154,29 @@ fn surfaces_have_no_edge_and_rows_no_lines_under_them() {
         .filter(|sh| sh.params[1] > 0.0 && sh.border[3] > 0.01)
         .filter(|sh| !same_rgb(sh.border, sh.fill) || sh.fill[3] < sh.border[3])
         .filter(|sh| !faint_card_edge(sh))
+        // The main menu's edge: one unit of its neutral line, round every surface.
+        .filter(|sh| !neutral_edge(sh))
         // The selector's brackets round the selected difficulty: corners of one outline.
         .filter(|sh| !same_rgb(sh.border, render::rgba(style::selector_colour(), 1.0)))
         .map(rect)
         .collect();
-    assert!(edged.is_empty(), "boxes with an edge round them: {edged:?}");
+    assert!(
+        edged.is_empty(),
+        "boxes with another edge round them: {edged:?}"
+    );
+    // The panels are framed: the search row's strip and the details' page each have one.
+    let framed = c
+        .shapes
+        .iter()
+        .filter(|sh| {
+            neutral_edge(sh) && same_rgb(sh.fill, style::surface_fill(style::Surface::Raised))
+        })
+        .filter(|sh| sh.half[0] * 2.0 > 150.0)
+        .count();
+    assert!(
+        framed >= 2,
+        "the search row and the details framed: {framed}"
+    );
     let parted = c.shapes.iter().filter(|sh| faint_card_edge(sh)).count();
     assert!(
         parted + 1 >= set_cards.len(),
@@ -1013,7 +1036,7 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
     assert_eq!(strips.len(), 1, "one strip: {found:?}");
     let strip = strips[0];
     assert_eq!(strip.params[0], style::radius::SMALL, "its corners round");
-    assert_eq!(strip.params[1], 0.0, "no edge round it");
+    assert!(neutral_edge(strip), "the main menu's edge round it");
     let [left, y, w, h] = rect(strip);
     let right = left + w;
     // From the lane's start (no drum left of it, out past the details' edge), on past the lane's
@@ -2030,29 +2053,46 @@ fn many_sets_charts() -> Vec<maps::Chart> {
 }
 
 #[test]
-fn song_select_s_routes_go_through_the_blur_and_legacy_s_do_not() {
-    let (mut s, _songs, mut now) = menu_look_moving("select-look-routes-blur");
+fn the_volume_mixer_comes_up_opaque_above_the_lane_of_actions() {
+    let (mut s, _songs, mut now) = menu_look("select-look-mixer");
+    s.volume.touch(now);
     let c = settled(&mut s, &mut now);
-    let (range, k) = c.blur.clone().expect("the routes are blurred");
-    assert_eq!(k, 1.0, "wholly, as the picture");
-    // The routes (none drawn here, without music): plain shapes, before song select's own.
-    assert!(
-        c.shapes[range.clone()].iter().all(plain),
-        "plain shapes only: the routes' notes and lines"
-    );
-    assert!(
-        c.texts
-            .iter()
-            .all(|(r, _)| r.end <= range.start || r.start >= range.end),
-        "no text of song select's in it"
-    );
-    // Legacy keeps them as they are.
-    let songs = Songs::new("select-look-routes-blur-legacy", &maps::all());
+    let mixer = c
+        .shapes
+        .iter()
+        .filter(|sh| same_rgb(sh.fill, render::rgba(style::tone::PANEL, 1.0)))
+        .filter(|sh| sh.fill[3] >= 0.95 && sh.half[0] * 2.0 > 200.0 && sh.half[1] * 2.0 > 90.0)
+        .filter(|sh| sh.half[1] * 2.0 < 110.0 && sh.center[0] > c.width / 2.0)
+        .map(rect)
+        .next_back()
+        .expect("the mixer's panel, all but opaque");
+    let overlaps = |a: [f32; 4], b: [f32; 4]| {
+        a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+    };
+    for hit in [
+        Hit::Key(KeyCode::Enter),
+        Hit::ModsButton,
+        Hit::Key(KeyCode::F2),
+    ] {
+        let at = hit_rect(&c, |h| *h == hit).unwrap_or_else(|| panic!("{hit:?} on the lane"));
+        assert!(
+            !overlaps(mixer, at),
+            "the mixer {mixer:?} over {hit:?} at {at:?}"
+        );
+    }
+}
+
+#[test]
+fn song_select_s_routes_are_as_sharp_as_the_menu_s_in_every_layout() {
+    let (mut s, _songs, mut now) = menu_look_moving("select-look-routes-sharp");
+    let c = settled(&mut s, &mut now);
+    assert!(c.blur.is_none(), "the main menu's look: {:?}", c.blur);
+    let songs = Songs::new("select-look-routes-sharp-legacy", &maps::all());
     let mut legacy = state_with(harness::config(), songs.entries());
     let mut now = Instant::now();
     ready(&mut legacy, &mut now);
     let c = settled(&mut legacy, &mut now);
-    assert!(c.blur.is_none(), "{:?}", c.blur);
+    assert!(c.blur.is_none(), "Legacy: {:?}", c.blur);
 }
 
 #[test]

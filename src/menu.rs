@@ -1650,14 +1650,17 @@ fn draw_footer(c: &mut Canvas, f: &Frame) {
     // The same size whatever plays: a long name is cut, and the buttons stay put.
     let w = song_w.min((c.width - 100.0 - (button_w + button_gap) * 4.0).max(120.0));
     let song = Canvas::fit(8.0, w - 22.0, song);
-    c.round_rect(
-        [side, y0 - 6.0],
-        [w, box_h],
-        6.0,
-        rgba(0x15151d, 0.88),
-        rgba(0x3a3a4e, 1.0),
-        1.0,
-    );
+    {
+        use crate::style::{radius, tone};
+        c.round_rect(
+            [side, y0 - 6.0],
+            [w, box_h],
+            radius::PANEL,
+            rgba(tone::PANEL, 0.88),
+            rgba(tone::EDGE, 1.0),
+            tone::LINE,
+        );
+    }
     c.text(
         side + 11.0,
         y0 + crate::mobile::pick(1.0, 3.0),

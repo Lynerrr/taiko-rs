@@ -123,6 +123,8 @@ impl State {
                 }
                 if self.volume.visible(now) {
                     self.volume.draw(canvas, &self.cfg, now);
+                } else {
+                    self.volume.forget_floor();
                 }
             }
             Layer::Social => {
