@@ -2151,16 +2151,16 @@ impl Preview {
         }
         self.box_rect = Some([bx, by, bw, bh]);
         c.hit(bx, by, lane_end.min(c.width) - bx, bh, Hit::Preview);
-        // Bare, the timeline is as wide as the lane over it, short of its fading end.
-        let gw = if self.bare {
-            lane_end - LANE_FADE[1] / 2.0 - bx
+        // Bare, the timeline is as wide as the lane's tile over it, edge to edge.
+        let (gx, gw) = if self.bare {
+            (strip[0], strip[2])
         } else {
-            bw
+            (bx, bw)
         };
         let loaded = is_loaded;
         if loaded {
             let graph_start = c.shapes.len();
-            self.draw_timeline(c, e, [bx, by + bh + 8.0, gw, graph_h], button);
+            self.draw_timeline(c, e, [gx, by + bh + 8.0, gw, graph_h], button);
             // Seeking goes by the music: until this map's plays, a click would move the last one.
             if !playing {
                 self.graph_rect = None;
@@ -2989,6 +2989,47 @@ mod beat_tests {
         for (x, y) in spots {
             assert!(matches!(top(&c, x, y), Some(Hit::SocialPanel)));
         }
+    }
+
+    #[test]
+    fn bare_the_timeline_is_as_wide_as_the_lanes_tile() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.osu"),
+            map.meta.clone(),
+        )];
+        let mut p = Preview {
+            seen: Some(0),
+            ready_for: Some(0),
+            game: Some(new_preview_game(&map, 1.0)),
+            map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+            bare: true,
+            ..Default::default()
+        };
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        p.draw_panel(
+            &mut c, &library, 500.0, 40.0, 340.0, 400.0, 1.0, None, None, None, None,
+        );
+        let [_, by, _, bh] = p.box_rect.expect("the lane");
+        let fill = crate::style::surface_fill(crate::style::Surface::Raised);
+        let tile = c
+            .shapes
+            .iter()
+            .find(|sh| {
+                sh.fill == fill
+                    && sh.params[0] == crate::style::radius::SMALL
+                    && (sh.center[1] - (by + bh / 2.0)).abs() < 0.5
+                    && (sh.half[1] * 2.0 - bh).abs() < 0.5
+            })
+            .expect("the lane's tile");
+        let (left, right) = (tile.center[0] - tile.half[0], tile.center[0] + tile.half[0]);
+        let [gx, _, gw, _] = p.graph_rect.expect("the timeline");
+        assert!(
+            (gx - left).abs() < 0.01 && (gx + gw - right).abs() < 0.01,
+            "the timeline {gx}..{} under the tile {left}..{right}",
+            gx + gw
+        );
     }
 
     #[test]
