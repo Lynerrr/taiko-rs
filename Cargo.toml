@@ -40,6 +40,8 @@ unicode-segmentation = "1.13.3"
 zbus = "3"
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
+# Work made ahead in the background runs at the lowest priority (`pictures::lower_priority`).
+libc = "0.2"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # The clipboard (Ctrl+C / Ctrl+V, F12 screenshots): Windows, macOS, X11 and Wayland compositors

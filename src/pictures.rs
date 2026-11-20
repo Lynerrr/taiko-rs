@@ -121,6 +121,8 @@ pub struct Pictures {
     thumbs: Option<PathBuf>,
     /// Calls off the copies being made ahead (`prewarm`).
     prewarm: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Holds them while a song is played (`hold`).
+    paused: Arc<std::sync::atomic::AtomicBool>,
     /// The animated pictures in slots, and the frame each slot shows.
     playing: HashMap<String, (Image, usize)>,
     tx: Sender<Loaded>,
@@ -145,6 +147,7 @@ impl Default for Pictures {
                 crate::config::cache_dir().map(|d| d.join("thumbs"))
             },
             prewarm: None,
+            paused: Arc::default(),
             playing: HashMap::new(),
             tx,
             rx,
@@ -179,27 +182,45 @@ impl Pictures {
         }
         let stop = Arc::new(AtomicBool::new(false));
         self.prewarm = Some(stop.clone());
-        std::thread::spawn(move || {
-            // The copies made as JPEGs (`THUMB_VERSION` 1) are no longer read.
-            for old in std::fs::read_dir(&thumbs).into_iter().flatten().flatten() {
-                if old.path().extension().is_some_and(|e| e == "jpg") {
-                    let _ = std::fs::remove_file(old.path());
+        let paused = self.paused.clone();
+        let spawned = std::thread::Builder::new()
+            .name("picture copies".into())
+            .spawn(move || {
+                lower_priority();
+                // The copies made as JPEGs (`THUMB_VERSION` 1) are no longer read.
+                for old in std::fs::read_dir(&thumbs).into_iter().flatten().flatten() {
+                    if old.path().extension().is_some_and(|e| e == "jpg") {
+                        let _ = std::fs::remove_file(old.path());
+                    }
                 }
-            }
-            for path in paths {
-                if stop.load(Ordering::Relaxed) {
-                    return;
+                for path in paths {
+                    if !wait_turn(&stop, &paused) {
+                        return;
+                    }
+                    let made = thumb_path(&path, &thumbs).is_some_and(|(_, found)| found.is_some());
+                    if !made {
+                        let (Some(dir), Some(file)) = (path.parent(), path.file_name()) else {
+                            continue;
+                        };
+                        let _ = read_by_path(dir, &file.to_string_lossy(), Some(&thumbs));
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
                 }
-                let made = thumb_path(&path, &thumbs).is_some_and(|(_, found)| found.is_some());
-                if !made {
-                    let (Some(dir), Some(file)) = (path.parent(), path.file_name()) else {
-                        continue;
-                    };
-                    let _ = read_by_path(dir, &file.to_string_lossy(), Some(&thumbs));
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-            }
-        });
+            });
+        if let Err(e) = spawned {
+            eprintln!("picture copies: {e}");
+        }
+    }
+
+    /// Holds the copies being made ahead while a song is played (`on`), or lets them go on.
+    pub fn hold(&self, on: bool) {
+        self.paused.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Tests: the copies made ahead are held.
+    #[cfg(test)]
+    pub fn held(&self) -> bool {
+        self.paused.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn take_uploads(&mut self) -> Vec<(u32, Vec<u8>)> {
@@ -645,6 +666,34 @@ pub fn in_folder(dir: &Path) -> Vec<String> {
     out
 }
 
+/// How often work held while a song is played looks again whether it may go on.
+const HELD_POLL: Duration = Duration::from_millis(100);
+
+/// For work made ahead (`prewarm`), before each piece: waits while it's `held` (a song being
+/// played: decoding pictures takes a whole core, which a low-end CPU can't spare without the game
+/// stuttering), and says whether to go on at all (false once `stop`ped).
+pub(crate) fn wait_turn(
+    stop: &std::sync::atomic::AtomicBool,
+    held: &std::sync::atomic::AtomicBool,
+) -> bool {
+    use std::sync::atomic::Ordering;
+    while held.load(Ordering::Relaxed) && !stop.load(Ordering::Relaxed) {
+        std::thread::sleep(HELD_POLL);
+    }
+    !stop.load(Ordering::Relaxed)
+}
+
+/// Puts the calling thread at the lowest priority (Linux: nice 19, for this thread alone), so
+/// work made ahead only takes the CPU the game and the desktop leave.
+pub(crate) fn lower_priority() {
+    #[cfg(target_os = "linux")]
+    // SAFETY: plain syscalls on this thread's own id; a failure only leaves the priority as it was.
+    unsafe {
+        let tid = libc::gettid();
+        libc::setpriority(libc::PRIO_PROCESS, tid as libc::id_t, 19);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -840,6 +889,27 @@ mod tests {
         p.update(None, &wanted, &at(0.0), &[]);
         assert!(p.playing.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn work_made_ahead_waits_while_held_and_ends_when_stopped() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (stop, held) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(true)),
+        );
+        let (s, h) = (stop.clone(), held.clone());
+        let waiter = std::thread::spawn(move || wait_turn(&s, &h));
+        std::thread::sleep(HELD_POLL * 3);
+        assert!(!waiter.is_finished(), "held: it waits");
+        held.store(false, Ordering::Relaxed);
+        assert!(waiter.join().unwrap(), "let go: it goes on");
+        // Stopped while held: it ends at once instead of waiting for the song to end.
+        held.store(true, Ordering::Relaxed);
+        let (s, h) = (stop.clone(), held.clone());
+        let waiter = std::thread::spawn(move || wait_turn(&s, &h));
+        stop.store(true, Ordering::Relaxed);
+        assert!(!waiter.join().unwrap(), "stopped: no more work");
     }
 
     #[test]

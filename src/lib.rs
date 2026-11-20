@@ -12709,9 +12709,14 @@ impl State {
         self.select.to_menu = self.mp.is_none() && !self.picking_lobby_map;
         self.select.covered = self.customization_tab().is_some();
         // A big library's first analysis waits while a song is being played.
+        let in_song = self.in_song();
         if let Some(info) = &self.mapinfo {
-            info.hold(self.in_song());
+            info.hold(in_song);
         }
+        // So do song select's picture copies made ahead (`prewarm`): decoding a whole library's
+        // backgrounds takes a core for minutes after an update, and a 2-core laptop stutters.
+        self.pictures.hold(in_song);
+        self.card_pictures.hold(in_song);
         self.refresh_play_offset();
         self.follow_map_skin();
         if self.volume_save_at.is_some_and(|at| now >= at) {
