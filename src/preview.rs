@@ -16,6 +16,8 @@ use crate::library::Entry;
 use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 use crate::services::jobs::Job;
 
+mod classic;
+
 /// While scrolling, wait this long after the selection settles before loading, so scrolling
 /// stays cheap. A single change after a quiet moment loads at once.
 const DEBOUNCE: Duration = Duration::from_millis(60);

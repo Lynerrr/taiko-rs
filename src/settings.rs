@@ -1269,9 +1269,9 @@ impl Item {
                 "Где игра стоит по высоте экрана: -100 сверху, 0 по центру, 100 снизу."
             ),
             Item::LegacyMenu => tr!(
-                "The old layout: straight to song select with tabs along the top, no main menu, and Esc asks to quit.",
-                "旧レイアウト: メインメニューなしですぐ選曲画面になり、上にタブが並び、Escは終了を確認します。",
-                "Старый вид: сразу выбор песни с вкладками сверху, без главного меню, Esc спрашивает о выходе."
+                "Song select as 1.0 drew it: a list of rows, the details beside it, Mods, Random and Play under them, and no camera move from the main menu.",
+                "1.0の選曲画面: 行のリスト、その横に詳細、下にMod・ランダム・プレイ。メインメニューからのカメラ移動はありません。",
+                "Выбор песни как в 1.0: список строк, рядом детали, под ними Моды, Случайная и Играть, без перелёта камеры из главного меню."
             ),
             Item::MenuNotesDim => tr!(
                 "How faint the song's notes are on the main menu's lane. 100% hides them. The notes drifting behind the menu stay as they are.",

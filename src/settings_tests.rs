@@ -2312,9 +2312,9 @@ fn one_click_works_a_row_and_every_hotkey_has_one() {
         .iter()
         .position(|(_, it)| *it == Item::LegacyMenu)
         .unwrap();
-    let was = s.cfg.main_menu;
+    let was = s.cfg.legacy_menu;
     s.click(crate::hit::Hit::SettingRow(row), None);
-    assert_ne!(s.cfg.main_menu, was);
+    assert_ne!(s.cfg.legacy_menu, was);
     for i in 0..keys::Hotkey::ALL.len() {
         assert!(
             settings::ITEMS.iter().any(|(_, it)| *it == Item::Hotkey(i)),
@@ -2436,7 +2436,7 @@ fn a_lane_coming_up_under_a_parked_pointer_turns_the_overall_volume() {
 }
 
 #[test]
-fn the_tabs_only_come_back_with_the_legacy_menu() {
+fn the_legacy_menu_is_1_0s_song_select_and_keeps_the_main_menu() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = SongSelect::scene();
@@ -2447,13 +2447,9 @@ fn the_tabs_only_come_back_with_the_legacy_menu() {
             .iter()
             .any(|h| matches!(h.hit, crate::hit::Hit::Tab(i) if h.rect[1] < 50.0 && i < 4))
     };
+    let has = |s: &State, hit: crate::hit::Hit| s.hits.iter().any(|h| h.hit == hit);
     assert!(!tab(&s), "no tabs on top");
-    assert!(s.hits.iter().any(|h| h.hit == crate::hit::Hit::ToMenu));
-    // Download, settings and multiplayer are a step back, on the main menu.
-    assert!(!s.hits.iter().any(|h| h.hit == crate::hit::Hit::Tab(3)));
-    s.click(crate::hit::Hit::ToMenu, None);
-    assert!(s.on_menu());
-
+    assert!(!s.select.classic);
     s.click(
         crate::hit::Hit::SettingRow(
             settings::ITEMS
@@ -2463,11 +2459,17 @@ fn the_tabs_only_come_back_with_the_legacy_menu() {
         ),
         None,
     );
-    assert!(!s.cfg.main_menu);
-    assert!(s.main_menu.is_none(), "the menu goes at once");
+    assert!(s.cfg.legacy_menu && s.cfg.main_menu);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    assert!(tab(&s), "the old tabs");
-    assert!(!s.hits.iter().any(|h| h.hit == crate::hit::Hit::ToMenu));
+    assert!(s.select.classic, "1.0's song select");
+    assert!(!tab(&s), "no tabs: 1.0 had the main menu");
+    assert!(has(&s, crate::hit::Hit::ToMenu));
+    assert!(
+        has(&s, crate::hit::Hit::ModsButton),
+        "Mods, Random and Play under the details"
+    );
+    s.click(crate::hit::Hit::ToMenu, None);
+    assert!(s.on_menu(), "the way back is to the main menu");
 }
 
 #[test]

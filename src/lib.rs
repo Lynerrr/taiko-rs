@@ -2545,7 +2545,7 @@ impl State {
     /// except from the songs, which is what the menu is for leaving to.
     fn menu_open(&mut self, item: menu::Item) {
         // Song select is reached by moving the camera (`menu_shift`), not out of black.
-        let shifts = item == menu::Item::Play && self.cfg.animations && menu_shift::animated();
+        let shifts = item == menu::Item::Play && self.camera_moves();
         if !matches!(item, menu::Item::Exit) && !shifts {
             self.screen_fade = Some(0.0);
         }
@@ -2598,6 +2598,12 @@ impl State {
         pp
     }
 
+    /// The camera moves between the main menu and song select (not in 1.0's look, where song
+    /// select comes up out of black as it did).
+    fn camera_moves(&self) -> bool {
+        self.cfg.animations && menu_shift::animated() && !self.cfg.legacy_menu
+    }
+
     fn leave_menu_for_songs(&mut self, shifts: bool) {
         let left = self.main_menu.take();
         if !shifts {
@@ -2619,7 +2625,7 @@ impl State {
     /// Song select's way back to the main menu: the camera moves back along the menu's lane, the
     /// menu where it was left if the camera hadn't got all the way yet.
     fn back_to_menu(&mut self) {
-        let shifts = self.cfg.animations && menu_shift::animated();
+        let shifts = self.camera_moves();
         // Not yet all the way to song select: the menu it was leaving comes back.
         let (left, from) = match self.menu_shift.take() {
             Some(mut s) if shifts && s.into_songs => (s.menu.take(), Some(s)),
@@ -3151,7 +3157,7 @@ impl State {
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
             Item::EpilepsyWarning => on(c.epilepsy_warning),
-            Item::LegacyMenu => on(!c.main_menu),
+            Item::LegacyMenu => on(c.legacy_menu),
             Item::Letterbox => on(c.letterbox),
             Item::LetterboxSize => format!("{}x{}", c.letterbox_size.0, c.letterbox_size.1),
             Item::LetterboxX => format!("{:+.0}%", c.letterbox_pos.0),
@@ -3500,11 +3506,11 @@ impl State {
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::EpilepsyWarning => self.cfg.epilepsy_warning = !self.cfg.epilepsy_warning,
             Item::LegacyMenu => {
-                self.cfg.main_menu = !self.cfg.main_menu;
-                // Gone at once, not just from the next start.
-                if !self.cfg.main_menu {
-                    self.main_menu = None;
-                }
+                self.cfg.legacy_menu = !self.cfg.legacy_menu;
+                // 1.0's song select has the main menu: it comes back from the tabs' old layout.
+                self.cfg.main_menu = true;
+                // No camera left on its way between the looks.
+                self.menu_shift = None;
             }
             Item::MenuNotes => self.cfg.menu_notes = !self.cfg.menu_notes,
             Item::Letterbox => {
@@ -9299,7 +9305,8 @@ impl State {
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
         // Song select's cards show every set's background: small copies made ahead read fast.
-        if self.cfg.main_menu {
+        // 1.0's look has no cards.
+        if self.cfg.main_menu && !self.cfg.legacy_menu {
             let mut seen = std::collections::HashSet::new();
             let paths: Vec<PathBuf> = self
                 .library
@@ -10696,7 +10703,10 @@ impl State {
     /// cards and the banner (they show it sharp). On the way between the menu and song select it
     /// blurs and clears with the camera. Legacy and the phone layout keep it sharp.
     pub(crate) fn background_blur(&self) -> f32 {
-        let look = !self.select.legacy && !mobile::active() && self.scene.is_select();
+        let look = !self.select.legacy
+            && !self.select.classic
+            && !mobile::active()
+            && self.scene.is_select();
         let select = match &self.menu_shift {
             Some(shift) if look => menu_shift::phases(shift.t()).cam,
             _ if look && !self.on_menu() => 1.0,
@@ -12706,6 +12716,7 @@ impl State {
             note_colours: self.cfg.note_colours,
         }));
         self.select.legacy = !self.cfg.main_menu;
+        self.select.classic = self.cfg.legacy_menu && !self.select.legacy;
         self.select.to_menu = self.mp.is_none() && !self.picking_lobby_map;
         self.select.covered = self.customization_tab().is_some();
         // A big library's first analysis waits while a song is being played.
@@ -12876,8 +12887,14 @@ impl State {
             self.stars.poll();
             self.stars.set_mods(self.cfg.mods, self.cfg.scroll_speed);
             let play_rate = self.play_speed().0;
-            // Song select keeps the song's notes behind it too, whichever song it's on.
-            if self.cfg.menu_notes && self.scene.is_select() {
+            // Song select keeps the song's notes behind it too, whichever song it's on (not 1.0's:
+            // only the menu has them).
+            let behind = if self.cfg.legacy_menu {
+                self.on_menu()
+            } else {
+                self.scene.is_select()
+            };
+            if self.cfg.menu_notes && behind {
                 let playing = self.preview_target();
                 self.menu_notes
                     .update(playing, &self.library, &mut self.stars, play_rate);
