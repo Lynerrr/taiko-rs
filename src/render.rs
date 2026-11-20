@@ -929,9 +929,17 @@ fn to_rgb(y: f32, cbcr: vec2<f32>) -> vec3<f32> {
 fn fs(i: V) -> @location(0) vec4<f32> {
     // params: brightness, opacity (for cross-fading into a new background), how far into its
     // blurred copy (the idle screen).
-    let sharp = to_rgb(textureSample(luma, samp, i.uv).r, textureSample(chroma, samp, i.uv).rg);
-    let soft = to_rgb(textureSample(luma_blur, samp, i.uv).r, textureSample(chroma_blur, samp, i.uv).rg);
-    let rgb = mix(sharp, soft, bg.params.z);
+    // Most of the time (a song, song select) nothing is blurred: the blurred copy's two reads are
+    // skipped then, and the picture (the whole screen, every frame) costs about half as much.
+    // The image has no mipmaps, so level 0 is what `textureSample` read too.
+    var rgb = to_rgb(textureSampleLevel(luma, samp, i.uv, 0.0).r, textureSampleLevel(chroma, samp, i.uv, 0.0).rg);
+    if bg.params.z > 0.0 {
+        let soft = to_rgb(
+            textureSampleLevel(luma_blur, samp, i.uv, 0.0).r,
+            textureSampleLevel(chroma_blur, samp, i.uv, 0.0).rg,
+        );
+        rgb = mix(rgb, soft, bg.params.z);
+    }
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * bg.params.x, bg.params.y);
 }
 "#;
@@ -5442,6 +5450,59 @@ mod tests {
             assert!(across[0] * small.0 as f32 >= 1.0 - 1e-5);
             assert!(up[1] * small.1 as f32 >= 1.0 - 1e-5);
         }
+    }
+
+    #[test]
+    fn a_sharp_background_never_reads_its_blurred_copy() {
+        // The background covers the screen every frame: reading the blurred copy too, at no blur
+        // (a song, song select), doubled what it cost a weak GPU.
+        let module = naga::front::wgsl::parse_str(super::BG_SHADER).unwrap();
+        let blurred: Vec<_> = module
+            .global_variables
+            .iter()
+            .filter(|(_, g)| matches!(g.name.as_deref(), Some("luma_blur" | "chroma_blur")))
+            .map(|(h, _)| h)
+            .collect();
+        assert_eq!(blurred.len(), 2);
+        let fs = &module
+            .entry_points
+            .iter()
+            .find(|e| e.name == "fs")
+            .unwrap()
+            .function;
+        // The expressions that read it, by index.
+        let reads: Vec<usize> = fs
+            .expressions
+            .iter()
+            .filter(|(_, e)| match e {
+                naga::Expression::ImageSample { image, .. } => matches!(
+                    fs.expressions[*image],
+                    naga::Expression::GlobalVariable(g) if blurred.contains(&g)
+                ),
+                _ => false,
+            })
+            .map(|(h, _)| h.index())
+            .collect();
+        // How many of them an `Emit` evaluates.
+        let evaluated = |s: &naga::Statement| match s {
+            naga::Statement::Emit(range) => {
+                let r = range.index_range();
+                reads
+                    .iter()
+                    .filter(|&&i| (r.start as usize..r.end as usize).contains(&i))
+                    .count()
+            }
+            _ => 0,
+        };
+        let (mut always, mut sometimes) = (0, 0);
+        for statement in fs.body.iter() {
+            always += evaluated(statement);
+            if let naga::Statement::If { accept, .. } = statement {
+                sometimes += accept.iter().map(evaluated).sum::<usize>();
+            }
+        }
+        assert_eq!(always, 0, "the blurred copy is read only when blurring");
+        assert_eq!(sometimes, 2, "and then both its planes");
     }
 
     #[test]
