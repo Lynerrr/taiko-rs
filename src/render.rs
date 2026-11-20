@@ -2540,16 +2540,11 @@ impl Renderer {
         let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = flatten_clips(clips)
             .into_iter()
             .map(|(range, r)| {
-                let (sw, sh) = (w as f32, h as f32);
-                let x = (ax + r[0] * aw).floor().clamp(0.0, sw - 1.0);
-                let y = (ay + r[1] * ah).floor().clamp(0.0, sh - 1.0);
-                let w = (r[2] * aw).ceil().clamp(1.0, sw - x);
-                let h = (r[3] * ah).ceil().clamp(1.0, sh - y);
                 // Nothing of it shows (an inner clip outside its outer one): no size, not drawn.
                 if r[2] <= 0.0 || r[3] <= 0.0 {
                     return (range, [0; 4]);
                 }
-                (range, [x as u32, y as u32, w as u32, h as u32])
+                (range, scissor([ax, ay, aw, ah], r, [w, h]))
             })
             .collect();
         if shapes.len() > self.capacity {
@@ -2803,15 +2798,11 @@ impl Renderer {
         let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = flatten_clips(clips)
             .into_iter()
             .map(|(range, r)| {
-                let (sw, sh) = (w as f32, h as f32);
-                let x = (r[0] * sw).floor().clamp(0.0, sw - 1.0);
-                let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
-                let cw = (r[2] * sw).ceil().clamp(1.0, sw - x);
-                let ch = (r[3] * sh).ceil().clamp(1.0, sh - y);
                 if r[2] <= 0.0 || r[3] <= 0.0 {
                     return (range.clone(), [0; 4]);
                 }
-                (range.clone(), [x as u32, y as u32, cw as u32, ch as u32])
+                let area = [0.0, 0.0, w as f32, h as f32];
+                (range.clone(), scissor(area, r, [w, h]))
             })
             .collect();
         if shapes.len() > self.capacity {
@@ -3309,6 +3300,53 @@ impl Renderer {
 /// outer rect alone. Overlapping ranges after the first used to be dropped, so in a framed
 /// playfield (a play area smaller than the screen) each slice drew its whole copy of the lane
 /// unclipped, and the last one covered the notes.
+/// A clip rect (`r`, fractions of `area`: `[x, y, w, h]` in pixels of a `size` image) as a
+/// scissor in whole pixels, rounded in: never past its edges (rounded out, what it clips, a lane's
+/// notes against its tile's edge, stuck out by up to a pixel either side). At least 1 pixel.
+fn scissor(area: [f32; 4], r: [f32; 4], [w, h]: [u32; 2]) -> [u32; 4] {
+    // Float noise on an exact pixel edge isn't a pixel in.
+    const EPS: f32 = 1e-3;
+    let span = |o: f32, len: f32, from: f32, size: f32, limit: f32| {
+        let a = (o + from * len - EPS).ceil().clamp(0.0, limit - 1.0);
+        let b = (o + (from + size) * len + EPS)
+            .floor()
+            .clamp(a + 1.0, limit);
+        (a as u32, (b - a) as u32)
+    };
+    let (x, cw) = span(area[0], area[2], r[0], r[2], w as f32);
+    let (y, ch) = span(area[1], area[3], r[1], r[3], h as f32);
+    [x, y, cw, ch]
+}
+
+#[cfg(test)]
+mod scissor_tests {
+    use super::scissor;
+
+    #[test]
+    fn a_clip_is_rounded_in_to_whole_pixels_never_past_its_edges() {
+        let screen = [0.0, 0.0, 1000.0, 500.0];
+        // 100.4 .. 200.6 across, 50.5 .. 150.5 down: 101..200 and 51..150.
+        let r = [0.1004, 0.101, 0.1002, 0.2];
+        assert_eq!(scissor(screen, r, [1000, 500]), [101, 51, 99, 99]);
+        // On whole pixels: exactly them, float noise or not.
+        let r = [0.1, 0.1, 0.2, 0.2];
+        assert_eq!(scissor(screen, r, [1000, 500]), [100, 50, 200, 100]);
+        // In an interface area inset in the image (a letterbox), from its corner.
+        let inset = [20.0, 10.0, 960.0, 480.0];
+        assert_eq!(
+            scissor(inset, [0.5, 0.5, 0.25, 0.25], [1000, 500]),
+            [500, 250, 240, 120]
+        );
+        // Thinner than a pixel, or off the image: still a pixel, on it.
+        assert_eq!(
+            scissor(screen, [0.5004, 0.0, 0.0001, 1.0], [1000, 500])[2],
+            1
+        );
+        let off = scissor(screen, [1.2, 0.0, 0.1, 1.0], [1000, 500]);
+        assert!(off[0] + off[2] <= 1000, "{off:?}");
+    }
+}
+
 fn flatten_clips(
     clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
 ) -> Vec<(std::ops::Range<usize>, [f32; 4])> {
