@@ -277,6 +277,7 @@ impl Screen for SongSelect {
                 state.song_routes_drain = None;
             }
         }
+        let on_songs = shift.is_none() && !frame.on_menu;
         match shift {
             Some((t, into, flying)) => {
                 // The camera carries the routes; the lean starts again from none once it's there.
@@ -316,6 +317,16 @@ impl Screen for SongSelect {
                 canvas.transform_since(routes, [0.0, 0.0], 1.0, dx, dy);
                 draw_songs(state, canvas, frame, None, false);
             }
+        }
+        // Play pressed: this frame is the last, kept to fade out over the map. Song select
+        // gone meanwhile (to the menu), it's dropped.
+        if let Some(i) = state.play_leaving.take()
+            && on_songs
+            && i < state.library.len()
+        {
+            state.ghost_keep = true;
+            state.select_ghost = Some(None);
+            state.start_loading(i);
         }
         None
     }
@@ -447,9 +458,15 @@ fn dice_face(at: Option<Instant>, now: Instant) -> &'static style::Icon {
         [((rolled * style::DICE_ROLL.len() as f32) as usize).min(style::DICE_ROLL.len() - 1)]
 }
 
-/// Play pressed (Enter, or a click on it): the map starts at once, in every layout.
+/// Play pressed (Enter, or a click on it): the map starts at once. With animations on it starts
+/// as this frame is drawn, which is kept to fade out over the map as it loads and starts
+/// (`State::select_ghost_alpha`), instead of a cut.
 fn press_play(state: &mut State, i: usize) {
-    state.start_loading(i);
+    if render::animations() {
+        state.play_leaving = Some(i);
+    } else {
+        state.start_loading(i);
+    }
 }
 
 fn draw_songs(

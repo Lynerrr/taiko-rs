@@ -1074,9 +1074,29 @@ fn play_is_the_menus_play_note_and_its_map_starts_at_once() {
         .filter(|sh| (sh.center[0] - at[0]).hypot(sh.center[1] - at[1]) <= r * 1.2)
         .count();
     assert!(rim > 20, "the Play note's pixels: {rim}");
-    // With animations on too, nothing plays first: the map is loading on the press.
+    // With animations on nothing plays first: the map starts as the frame after the press is
+    // drawn, and that frame is kept to fade out over it (instead of a cut to "Loading").
     press(&mut s, KeyCode::Enter, now);
-    assert_eq!(scene_name(&s), "Loading", "the map at once");
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Loading", "the map at the next frame");
+    assert!(s.ghost_keep, "song select's last frame kept");
+    assert_eq!(
+        s.select_ghost_alpha(now),
+        1.0,
+        "over the map while it loads"
+    );
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let start = now;
+    assert_eq!(s.select_ghost_alpha(start), 1.0, "the play starts under it");
+    let half = s.select_ghost_alpha(start + Duration::from_millis(125));
+    assert!(half > 0.2 && half < 0.8, "fading out: {half}");
+    assert_eq!(
+        s.select_ghost_alpha(start + Duration::from_millis(260)),
+        0.0,
+        "gone a quarter of a second in"
+    );
+    assert!(s.select_ghost.is_none());
 }
 
 #[test]

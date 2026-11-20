@@ -379,6 +379,8 @@ pub(super) fn render_loop(
             }
             renderer.bg_brightness = s.bg_brightness;
             renderer.bg_blur = s.background_blur();
+            renderer.ghost_keep = std::mem::take(&mut s.ghost_keep);
+            renderer.ghost_alpha = s.select_ghost_alpha(now);
             renderer.bg_pan = crate::screens::select::song_select::background_lean(&s);
             renderer.bg_arrive = crate::screens::select::song_select::background_arrive(&s);
             // A new background cross-fades from the previous one.
@@ -1247,6 +1249,9 @@ impl State {
             song_routes_drain: None,
             play_icon_at: None,
             dice_roll: None,
+            play_leaving: None,
+            ghost_keep: false,
+            select_ghost: None,
             screen_fade: None,
             shown_scene: None,
             menu_notes: Default::default(),
