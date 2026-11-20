@@ -1134,62 +1134,55 @@ impl Select {
     }
 
     pub(crate) fn draw_source_tabs(&self, c: &mut Canvas, x: f32, y: f32, w: f32, tabs: &[Source]) {
+        use crate::style::{Surface, ink, radius, surface};
         let tw = w / tabs.len() as f32;
         let shown = self.shown_source();
-        let mut target = None;
         for (k, &s) in tabs.iter().enumerate() {
             let tx = x + k as f32 * tw;
             let on = s == shown;
             let hover = c.hovered(tx, y, tw, SOURCE_TAB_H);
-            // Each tab a chip of its own, as the search row's field is: the raised surface,
-            // lifted under the pointer and while it's the one shown.
+            // Each tab a chip of its own, as the search row's buttons are: the raised surface,
+            // lifted under the pointer and while it's the one shown, which has a bar of the
+            // accent along its bottom (no brackets: those are the list's selection).
             let level = if on || hover {
-                crate::style::Surface::Lifted
+                Surface::Lifted
             } else {
-                crate::style::Surface::Raised
+                Surface::Raised
             };
-            crate::style::surface(
-                c,
-                [tx + 2.0, y + 1.0, tw - 4.0, SOURCE_TAB_H - 3.0],
-                crate::style::radius::SMALL,
-                level,
-            );
+            let chip = [tx + 2.0, y + 1.0, tw - 4.0, SOURCE_TAB_H - 3.0];
+            surface(c, chip, radius::SMALL, level);
+            if on {
+                let [cx, cy, cw, ch] = chip;
+                c.rect(
+                    cx + radius::SMALL,
+                    cy + ch - SOURCE_TAB_BAR - 1.0,
+                    cw - 2.0 * radius::SMALL,
+                    SOURCE_TAB_BAR,
+                    rgba(crate::render::accent(), 1.0),
+                );
+            }
             // What the tab lists, the search and filters as they are.
             let n = self.source_listed[s.index()];
             let label = s.label();
             let count = n.to_string();
             let lw = Canvas::text_width(7.0, label) + 6.0 + Canvas::text_width(6.0, &count);
-            let lx = tx + (tw - lw - 9.0) / 2.0;
-            c.rect(
-                lx,
-                y + 6.5,
-                5.0,
-                5.0,
-                rgba(s.colour(), if on { 1.0 } else { 0.5 }),
-            );
-            let lx = lx + 9.0;
+            let lx = tx + (tw - lw) / 2.0;
             let col = if on {
-                0xffffff
+                ink::PRIMARY
             } else if hover {
                 0xc8c8d8
             } else {
-                0x8a8aa0
+                ink::SECONDARY
             };
             c.text(lx, y + 5.0, 7.0, rgba(col, 1.0), label);
             c.text(
                 lx + Canvas::text_width(7.0, label) + 6.0,
                 y + 6.0,
                 6.0,
-                rgba(0x6f6f86, 1.0),
+                rgba(ink::CAPTION, 1.0),
                 &count,
             );
             c.hit(tx, y, tw, SOURCE_TAB_H, Hit::SongSource(s.index()));
-            if on {
-                target = Some([tx + 2.0, y + 1.0, tw - 4.0, SOURCE_TAB_H - 3.0]);
-            }
-        }
-        if let Some(rect) = target {
-            crate::style::selector(c, "song-source", rect);
         }
     }
 }
@@ -1257,6 +1250,8 @@ fn same_height(row: usize, from: usize, to: usize) -> usize {
 
 /// The height of the source tabs over the list.
 pub(super) const SOURCE_TAB_H: f32 = 18.0;
+/// The bar of the accent along the bottom of the source tab shown.
+const SOURCE_TAB_BAR: f32 = 2.0;
 
 /// A row of the sort or order column: a square lit when it's the one on.
 fn option_row(c: &mut Canvas, [x, y, w, h]: [f32; 4], label: &str, on: bool, alpha: f32, hit: Hit) {

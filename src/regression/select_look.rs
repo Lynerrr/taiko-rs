@@ -466,7 +466,7 @@ fn don_and_kat_are_one_bar_split_in_proportion() {
 }
 
 #[test]
-fn a_cards_shade_is_one_sweep_as_round_as_the_card_over_its_rounded_picture() {
+fn a_cards_shade_is_two_smooth_sweeps_as_round_as_the_card_over_its_rounded_picture() {
     let (mut s, _songs, mut now) = menu_look("select-look-shade");
     let i = s.select.selected().expect("a map is selected");
     let bg = preview::background_path(&s.library[i]).expect("it names a picture");
@@ -474,22 +474,38 @@ fn a_cards_shade_is_one_sweep_as_round_as_the_card_over_its_rounded_picture() {
         .pretend_loaded(&render::path_picture_key(&bg), [0.5, 0.5, 0.5]);
     let c = settled(&mut s, &mut now);
     let open = open_card(&c, &s);
-    // The shade over the open card's picture: one shape (no seams between bands), from the
-    // card's dark surface colour under the title to lighter on the right.
+    // The shade over the open card's picture: one shape over all of it (no seams between bands),
+    // from the card's dark surface colour under the title to light on the right, and a plate
+    // under the text over the left of it, fading out to nothing before the right of the picture.
     let dark = render::rgba(style::SURFACE_1, 1.0);
-    let shades: Vec<&Shape> = c
+    let mut shades: Vec<&Shape> = c
         .shapes
         .iter()
         .filter(|sh| sh.params[3] == render::SHADE_ACROSS && inside(sh.center, open, 0.0))
         .collect();
-    assert_eq!(shades.len(), 1, "one sweep");
-    let shade = shades[0];
-    assert!(same_rgb(shade.fill, dark) && same_rgb(shade.border, dark));
+    assert_eq!(shades.len(), 2, "a sweep and the plate");
+    shades.sort_by(|a, b| rect(b)[2].total_cmp(&rect(a)[2]));
+    let (shade, plate) = (shades[0], shades[1]);
+    for sh in [shade, plate] {
+        assert!(same_rgb(sh.fill, dark) && same_rgb(sh.border, dark));
+        assert_eq!(sh.params[0], shade.params[0], "both as round");
+    }
     assert!(
-        shade.fill[3] > 0.8 && (shade.border[3] - 0.4).abs() < 0.05,
+        shade.fill[3] > 0.85 && shade.border[3] < 0.35,
         "shade {} to {}",
         shade.fill[3],
         shade.border[3]
+    );
+    let (sr, pr) = (rect(shade), rect(plate));
+    assert!(
+        pr[0] == sr[0] && pr[1] == sr[1] && pr[3] == sr[3] && pr[2] < sr[2] * 0.7,
+        "the plate on the left of the picture: {pr:?} of {sr:?}"
+    );
+    assert!(
+        plate.fill[3] > 0.85 && plate.border[3] == 0.0,
+        "dark under the text, gone at its end: {} to {}",
+        plate.fill[3],
+        plate.border[3]
     );
     // Over the picture, both as round as the card (1 in from its edge): no square corner pokes
     // out of it.
@@ -1195,7 +1211,8 @@ fn without_animations_play_starts_the_map_at_once() {
 }
 
 #[test]
-fn mods_and_random_keep_their_place_and_the_mods_on_show_as_badges_under_them() {
+fn mods_random_and_play_are_blocks_of_one_height_and_the_mods_on_show_beside_mods() {
+    let near_rect = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.01);
     let (mut s, _songs, mut now) = menu_look("select-look-mod-badges");
     let c = settled(&mut s, &mut now);
     let mods = |c: &Canvas| hit_rect(c, |h| *h == Hit::ModsButton).expect("Mods");
@@ -1209,35 +1226,58 @@ fn mods_and_random_keep_their_place_and_the_mods_on_show_as_badges_under_them() 
         .map(rect)
         .find(|r| inside([play[0] + 1.0, play[1] + play[3] / 2.0], *r, 0.0))
         .expect("the lane of actions");
-    // The two as one group in the middle of the lane left of Play: what's drawn of them (a
-    // button's hit has 6 units of slack each side) as far from the lane's start as from Play.
+    // Mods from 8 in from the lane's start, Random after it, Play at the end: one height, one
+    // middle line, each a block of its own (what's drawn is what takes the click).
     let (m, r) = (mods(&c), random(&c));
-    let before = m[0] + 6.0 - lane[0];
-    let after = play[0] - (r[0] + r[2] - 6.0);
     assert!(
-        before > 16.0 && (before - after).abs() < 1.0,
-        "{before} before Mods, {after} from Random to Play"
+        (m[0] - lane[0] - 8.0).abs() < 0.5,
+        "Mods 8 in: {m:?} in {lane:?}"
     );
-    let [_, wy] = text_at(&c, "Mods").expect("the word");
-    // Mods on: the two stay where they were across, a little higher, the badges under them.
+    for b in [m, r] {
+        assert!(
+            (b[1] - play[1]).abs() < 0.5 && (b[3] - play[3]).abs() < 0.5,
+            "as tall as Play, on its line: {b:?} {play:?}"
+        );
+        let drawn = c.shapes.iter().any(|sh| {
+            sh.params[0] == style::radius::CONTROL
+                && sh.params[1] == style::tone::LINE
+                && near_rect(rect(sh), b)
+        });
+        assert!(drawn, "a block under {b:?}");
+    }
+    assert!(
+        m[0] + m[2] < r[0] && r[0] + r[2] < play[0],
+        "in order: {m:?} {r:?} {play:?}"
+    );
+    let at_rest = |c: &Canvas, b: [f32; 4]| {
+        c.shapes.iter().any(|sh| {
+            near_rect(rect(sh), b) && same_rgb(sh.fill, render::rgba(style::tone::CONTROL, 1.0))
+        })
+    };
+    assert!(at_rest(&c, m), "Mods at rest with no mods on");
+    // Mods on: Mods stays where it was and is lit, the badges after it on the same line, Random
+    // after them, all short of Play.
     s.cfg.mods = crate::mods::Mods::parse("HD,HR");
     s.select.mods_label = s.cfg.mods.label();
     let c = settled(&mut s, &mut now);
     let (m2, r2) = (mods(&c), random(&c));
     assert!(
-        (m2[0] - m[0]).abs() < 0.01 && (r2[0] - r[0]).abs() < 0.01,
-        "moved across: {m:?} -> {m2:?}, {r:?} -> {r2:?}"
+        (m2[0] - m[0]).abs() < 0.01 && (m2[1] - m[1]).abs() < 0.01,
+        "{m:?} -> {m2:?}"
     );
-    assert!(m2[1] < m[1] && (m2[1] - r2[1]).abs() < 0.01, "up, together");
-    let [_, wy2] = text_at(&c, "Mods").expect("the word");
-    assert!(wy2 < wy, "the word moves up with them");
+    assert!(!at_rest(&c, m2), "Mods lit with mods on");
+    assert!(
+        r2[0] > r[0] && r2[0] + r2[2] < play[0],
+        "Random after the badges: {r2:?}"
+    );
+    let mid = m[1] + m[3] / 2.0;
     for name in ["HD", "HR"] {
         let [x, y] = text_at(&c, name).unwrap_or_else(|| panic!("{name}"));
         assert!(
-            y > wy2 + 8.0 && x >= m2[0] && x < play[0],
-            "{name} under the group: {x}, {y}"
+            x > m2[0] + m2[2] && x < r2[0],
+            "{name} between Mods and Random: {x}"
         );
-        assert!(y < lane[1] + lane[3] - 4.0, "{name} inside the lane: {y}");
+        assert!((y - mid).abs() < 6.0, "{name} on the line: {y} by {mid}");
         let badge = c.shapes.iter().any(|sh| {
             let [bx, by, bw, bh] = rect(sh);
             sh.params[1] > 0.0 && bx < x && bx + bw > x && by < y + 3.0 && by + bh > y + 3.0
@@ -1376,28 +1416,74 @@ fn the_map_s_picture_behind_song_select_is_blurred_to_a_field_of_colour() {
 }
 
 #[test]
+fn the_search_row_sits_under_the_performance_readout_its_buttons_blocks_of_one_height() {
+    let (mut s, _songs, mut now) = menu_look("select-look-search-row");
+    let c = settled(&mut s, &mut now);
+    let menu = hit_rect(&c, |h| *h == Hit::ToMenu).expect("Menu");
+    let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
+    let sort = hit_rect(&c, |h| *h == Hit::SortList).expect("Sort");
+    // The readout (`show_fps`) takes 6 to 22 at the top left: the row starts below it.
+    for r in [menu, search, sort] {
+        assert!(r[1] >= 24.0, "below the readout: {r:?}");
+        assert!(
+            (r[1] + r[3] / 2.0 - (menu[1] + menu[3] / 2.0)).abs() < 0.5,
+            "one row: {r:?} {menu:?}"
+        );
+    }
+    for b in [menu, sort] {
+        assert!(
+            (b[3] - style::BLOCK_H).abs() < 0.01,
+            "a block's height: {b:?}"
+        );
+        let drawn = c.shapes.iter().any(|sh| {
+            sh.params[0] == style::radius::CONTROL
+                && sh.params[1] == style::tone::LINE
+                && rect(sh).iter().zip(b).all(|(a, b)| (a - b).abs() < 0.01)
+        });
+        assert!(drawn, "a block under {b:?}");
+    }
+    // The list starts under the row's strip, not into it.
+    let top = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r[1])
+        .fold(f32::MAX, f32::min);
+    assert!(
+        top > menu[1] + menu[3] + 4.0,
+        "the list under the row: {top}"
+    );
+}
+
+#[test]
 fn play_and_the_lane_of_actions_keep_the_screen_s_margin() {
     let (mut s, _songs, mut now) = menu_look("select-look-play-margin");
     let c = settled(&mut s, &mut now);
     let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
-    let margin = c.width - (play[0] + play[2]);
-    assert!(
-        (margin - 24.0).abs() < 0.5,
-        "Play ends 24 in from the right, as the panel above it: {margin}"
-    );
-    // And the lane under Mods and Random ends with it, both ends round.
+    // The lane under Mods, Random and Play ends 24 in from the right, as the panel above it,
+    // both ends round, and Play sits inside it as the other buttons do: 8 in from its end, top
+    // and bottom.
     let lane = c
         .shapes
         .iter()
         .filter(|sh| plain(sh) && same_rgb(sh.fill, style::surface_fill(style::Surface::Raised)))
         .map(|sh| (rect(sh), sh.params[0]))
-        .find(|(r, _)| (r[1] - play[1]).abs() < 0.5 && (r[3] - play[3]).abs() < 0.5)
+        .find(|(r, _)| inside([play[0] + 1.0, play[1] + play[3] / 2.0], *r, 0.0))
         .expect("the lane of actions");
+    let (lane, round) = lane;
+    let margin = c.width - (lane[0] + lane[2]);
     assert!(
-        (lane.0[0] + lane.0[2] - (play[0] + play[2])).abs() < 0.5,
-        "{lane:?}"
+        (margin - 24.0).abs() < 0.5,
+        "the lane ends 24 in from the right, as the panel above it: {margin}"
     );
-    assert_eq!(lane.1, style::radius::CARD);
+    assert_eq!(round, style::radius::CARD);
+    let ends = [
+        lane[0] + lane[2] - (play[0] + play[2]),
+        play[1] - lane[1],
+        lane[1] + lane[3] - (play[1] + play[3]),
+    ];
+    assert!(
+        ends.iter().all(|e| (e - 8.0).abs() < 0.5),
+        "Play 8 in: {ends:?}"
+    );
 }
 
 #[test]
@@ -1510,14 +1596,22 @@ fn the_full_combo_pp_is_one_button_and_the_way_to_the_board_ends_its_row() {
         way[0] > pp[0] + pp[2],
         "the board's way after it: {pp:?} {way:?}"
     );
-    let lifted = |r: [f32; 4]| {
-        c.shapes.iter().any(|sh| {
-            same_rgb(sh.fill, style::surface_fill(style::Surface::Lifted))
-                && sh.params[0] == style::radius::SMALL
+    // Both blocks of the buttons' tone and edge, as tall as each other.
+    let block = |r: [f32; 4]| {
+        c.shapes.iter().find(|sh| {
+            same_rgb(sh.fill, render::rgba(style::tone::CONTROL, 1.0))
+                && same_rgb(sh.border, render::rgba(style::tone::EDGE, 1.0))
+                && sh.params[0] == style::radius::CONTROL
+                && sh.params[1] == style::tone::LINE
                 && inside([r[0] + r[2] / 2.0, r[1] + r[3] / 2.0], rect(sh), 0.0)
         })
     };
-    assert!(lifted(pp) && lifted(way), "both on chips alike");
+    let (a, b) = (block(pp).map(rect), block(way).map(rect));
+    assert!(
+        a.zip(b)
+            .is_some_and(|(a, b)| (a[1] - b[1]).abs() < 0.5 && (a[3] - b[3]).abs() < 0.5),
+        "both on blocks alike: {a:?} {b:?}"
+    );
     let shown = texts_in(&c, pp);
     for want in ["SS", "99%", "98%"] {
         assert!(shown.iter().any(|t| t == want), "{want} on it: {shown:?}");
