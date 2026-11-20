@@ -2110,13 +2110,22 @@ impl Preview {
         // As wide as the lane at that scale (all of the panel at full size), centred.
         let bw = lane_w * k;
         let (bx, by, bh) = (x + 10.0 + (w - 20.0 - bw) / 2.0, cy, preview_h);
-        // Bare, the autoplay is a lane like the menu's, its drum at the left, running on towards
-        // the screen's right edge as far as the friends tab there leaves room; the notes come in
-        // from its end.
-        let lane_end = if self.bare { x + w - 10.0 } else { bx + bw };
-        // Bare: no lines round it, its corners as round as the tiles' (a little out from the
-        // drum's side).
-        let strip = [bx - LANE_FADE[0], by, lane_end - bx + LANE_FADE[0], bh];
+        // Bare, the autoplay is a lane like the menu's, its drum at the left, running on to the
+        // tiles' right edge; the notes come in from its end.
+        let lane_end = if self.bare {
+            x + w - 14.0 - LANE_FADE[0]
+        } else {
+            bx + bw
+        };
+        // Bare: no lines round it, its corners as round as the tiles', the tile as far out from
+        // the lane at its end as at the drum's side (the lane is cut square to its box, so a
+        // tile ending with it would lose its right corners).
+        let strip = [
+            bx - LANE_FADE[0],
+            by,
+            lane_end - bx + 2.0 * LANE_FADE[0],
+            bh,
+        ];
         // A tile as the stats' are, not a dark box: on a bright picture that read as black.
         if self.bare {
             let r = crate::style::radius::SMALL;
@@ -2497,11 +2506,19 @@ fn draw_graph(
         c.rect(mx + 0.75, y - 3.0, 6.0, 4.5, rgba(MARKER, 1.0));
     }
     let hx = x_of(now);
-    if !boxed {
-        // A soft glow round the playhead.
-        c.glow(hx, y + h / 2.0, 3.0, 6.0, rgba(0xffffff, 0.18));
+    // Bare, the playhead is a plain line of the bars' ink, as tall as they are: no glow round
+    // it and no white past their ends, so it reads as part of the timeline beside the marker.
+    if boxed {
+        c.rect(hx - 0.75, y - 2.0, 1.5, h + 4.0, rgba(0xffffff, 0.95));
+    } else {
+        c.rect(
+            hx - 0.5,
+            y + 1.0,
+            1.0,
+            h - 4.0,
+            rgba(crate::style::ink::PRIMARY, 0.9),
+        );
     }
-    c.rect(hx - 0.75, y - 2.0, 1.5, h + 4.0, rgba(0xffffff, 0.95));
     c.text(
         x,
         y + h + 5.0,

@@ -541,6 +541,7 @@ wheel_resizes_playfield = true
 show_converts = true
 song_headings = true
 select_info = true
+card_fade = left
 song_order = title desc
 song_source = tja
 lens_osu = status stars desc headings

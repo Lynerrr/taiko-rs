@@ -94,6 +94,7 @@ pub enum Item {
     ShowFps,
     /// Song select's library counts and device line in the main menu's look.
     SelectInfo,
+    CardFade,
     Animations,
     Splash,
     /// The flashing-lights warning at startup (`Config::epilepsy_warning`).
@@ -138,13 +139,14 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 144] = [
+pub const ITEMS: [(&str, Item); 145] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::TjaFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
     ("LIBRARY", Item::SelectInfo),
     ("LIBRARY", Item::SongSelectLayout),
+    ("LIBRARY", Item::CardFade),
     ("LIBRARY", Item::DataFolder),
     ("LIBRARY", Item::CustomFolder),
     ("LIBRARY", Item::MoveCustomMaps),
@@ -548,6 +550,11 @@ impl Item {
             Item::Hotkey(i) => crate::keys::Hotkey::ALL[i].label(),
             Item::TouchLayout => tr!("Touch layout", "タッチの配置", "Сенсорная раскладка"),
             Item::Screenshots => tr!("Screenshots", "スクリーンショット", "Скриншоты"),
+            Item::CardFade => tr!(
+                "Card colour fade",
+                "カードの色フェード",
+                "Угасание цвета карточек"
+            ),
             // Also in English, so anyone who picked a language by mistake finds their way back.
             Item::Language => tr!("Language", "言語 (Language)", "Язык (Language)"),
             Item::UiFont => tr!("Interface font", "表示フォント", "Шрифт интерфейса"),
@@ -781,6 +788,7 @@ impl Item {
             Item::PlayfieldPreset
             | Item::TouchLayout
             | Item::Screenshots
+            | Item::CardFade
             | Item::IdleScreen
             | Item::Language
             | Item::UiFont
@@ -991,6 +999,11 @@ impl Item {
                 "The language of menus, settings and messages. Song titles stay as their maps have them.",
                 "メニュー、設定、メッセージの言語。曲名は譜面のままです。",
                 "Язык меню, настроек и сообщений. Названия песен остаются как в картах."
+            ),
+            Item::CardFade => tr!(
+                "Song select's cards: their picture's colour fades to grey towards one side, keeping it on the other.",
+                "選曲画面のカード: 画像の色が片側へ向かってグレーになり、反対側は色のまま。",
+                "Карточки в выборе песен: цвет картинки к одному краю уходит в серый, у другого остаётся."
             ),
             Item::Screenshots => tr!(
                 "Where a screenshot goes: on the clipboard to paste, as a picture in the Screenshots folder, or both.",

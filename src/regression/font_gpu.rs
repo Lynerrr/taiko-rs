@@ -364,7 +364,7 @@ fn card_pictures_gpu_draw_their_own_strip() {
     let mut canvas = Canvas::<()>::default();
     canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), slot)].into());
     // As wide as the target and a third of it tall: its middle, cut to it.
-    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 0.0));
+    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 0.0, [0.0; 2]));
     let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
     let at = |x: u32, y: u32| {
         let i = ((y * width + x) * 4) as usize;
@@ -380,7 +380,7 @@ fn card_pictures_gpu_draw_their_own_strip() {
     // Rounded: its corners are cut, the rest of it is its strip as before.
     let mut canvas = Canvas::<()>::default();
     canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), slot)].into());
-    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 8.0));
+    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 8.0, [0.0; 2]));
     let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
     let at = |x: u32, y: u32| {
         let i = ((y * width + x) * 4) as usize;
@@ -392,4 +392,31 @@ fn card_pictures_gpu_draw_their_own_strip() {
     for (x, y) in [(20, 64), (128, 41), (240, 64)] {
         assert_eq!(at(x, y), [0, 255, 0, 255], "its own strip at {x}, {y}");
     }
+}
+
+#[test]
+fn card_pictures_gpu_go_grey_towards_the_faded_side() {
+    let mut gpu = Gpu::new();
+    let [w, h] = CARD_CELL;
+    let red: Vec<u8> = (0..w * h).flat_map(|_| [255, 0, 0, 255]).collect();
+    write_card(&gpu.queue, &gpu.cards, 0, &red);
+    let path = std::path::Path::new("/songs/a/bg.png");
+    let mut canvas = Canvas::<()>::default();
+    canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), 0)].into());
+    // `config::CardFade::ToRight`: all its colour at the left, grey at the right.
+    let greys = crate::config::CardFade::ToRight.greys();
+    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 0.0, greys));
+    let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
+    let at = |x: u32, y: u32| {
+        let i = ((y * width + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    let spread = |[r, g, b]: [u8; 3]| r.max(g).max(b) - r.min(g).min(b);
+    let (left, middle, right) = (at(9, 64), at(128, 64), at(246, 64));
+    assert!(spread(left) > 240, "red at the left: {left:?}");
+    assert!(
+        spread(right) < spread(middle) && spread(middle) < spread(left),
+        "greyer to the right: {left:?} {middle:?} {right:?}"
+    );
+    assert!(spread(right) < 60, "close to grey at the right: {right:?}");
 }

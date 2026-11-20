@@ -938,9 +938,7 @@ pub const LANE_END_HOVER_GROW: f32 = 0.12;
 /// The main action as the end of a lane: a bar of the accent colour over `[x, y, w, h]` (rounded
 /// as the cards), the main menu's Play note and `label` on it in white. The note swells a little on
 /// the beat; under the pointer it grows and the bar lights up and glows (no frame round it),
-/// easing in and out. `disc_shown`: the note is in its place (not on its way). `burst`: how far
-/// (0 to 1) a press's GREAT burst is, as the menu's notes have when hit.
-#[allow(clippy::too_many_arguments)]
+/// easing in and out. `disc_shown`: the note is in its place (not on its way).
 pub fn lane_end_button(
     c: &mut Canvas,
     key: &'static str,
@@ -948,7 +946,6 @@ pub fn lane_end_button(
     label: &str,
     hit: crate::hit::Hit,
     disc_shown: bool,
-    burst: Option<f32>,
 ) {
     use crate::menu::tint;
     let hover = c.hovered(x, y, w, h);
@@ -988,9 +985,6 @@ pub fn lane_end_button(
         let beat = if render::animations() { pulse() } else { 0.0 };
         let grow = 1.0 + LANE_END_BEAT_GROW * beat + LANE_END_HOVER_GROW * g;
         crate::menu::note(c, crate::menu::Item::Play, at[0], at[1], r * grow);
-    }
-    if let Some(k) = burst.filter(|k| (0.0..1.0).contains(k)) {
-        crate::menu::hit_burst(c, at, r * (1.3 + 1.6 * k), y - 14.0 - k * 10.0, 9.0, k);
     }
     let lx = at[0] + r + 10.0;
     let room = w - (lx - x) - 8.0;
@@ -1235,7 +1229,6 @@ mod tests {
             "Play",
             crate::hit::Hit::Key(winit::keyboard::KeyCode::Enter),
             true,
-            None,
         );
         assert_eq!(c.shapes[0].params[0], radius::CARD, "the lane");
         // The Play bar: the widest shape from its left edge.
@@ -1360,7 +1353,7 @@ mod tests {
         [lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]]
     }
 
-    fn lane_end(mouse: (f32, f32), burst: Option<f32>) -> Canvas {
+    fn lane_end(mouse: (f32, f32)) -> Canvas {
         let mut c = Canvas {
             width: 853.3,
             dt_ms: 1000.0,
@@ -1375,7 +1368,6 @@ mod tests {
             "Play",
             crate::hit::Hit::ModsButton,
             true,
-            burst,
         );
         c
     }
@@ -1383,7 +1375,7 @@ mod tests {
     #[test]
     fn the_lane_end_holds_the_menus_play_note_which_grows_under_the_pointer() {
         let ([mx, my], r) = lane_end_disc([700.0, 408.0, 50.0]);
-        let away = note_box(&lane_end((0.0, 0.0), None));
+        let away = note_box(&lane_end((0.0, 0.0)));
         let mid = [away[0] + away[2] / 2.0, away[1] + away[3] / 2.0];
         assert!(
             (mid[0] - mx).abs() < 2.0 && (mid[1] - my).abs() < 2.0,
@@ -1391,13 +1383,13 @@ mod tests {
         );
         // The white of its rim is 0.9 of the note across.
         assert!((away[2] - 1.8 * r).abs() < 3.0, "{} across, r {r}", away[2]);
-        let over = note_box(&lane_end((760.0, 430.0), None));
+        let over = note_box(&lane_end((760.0, 430.0)));
         let grown = over[2] / away[2];
         assert!(
             (grown - (1.0 + LANE_END_HOVER_GROW)).abs() < 0.06,
             "under the pointer: {grown}"
         );
-        let c = lane_end((0.0, 0.0), None);
+        let c = lane_end((0.0, 0.0));
         let [_, label] = c
             .texts
             .iter()
@@ -1417,23 +1409,15 @@ mod tests {
             kiai: 0.0,
         };
         render::set_frame_theme(Some(theme(0.0)));
-        let rest = note_box(&lane_end((0.0, 0.0), None));
+        let rest = note_box(&lane_end((0.0, 0.0)));
         render::set_frame_theme(Some(theme(1.0)));
-        let beat = note_box(&lane_end((0.0, 0.0), None));
+        let beat = note_box(&lane_end((0.0, 0.0)));
         render::set_frame_theme(None);
         let grown = beat[2] / rest[2];
         assert!(
             grown > 1.0 + LANE_END_BEAT_GROW / 2.0 && grown < 1.0 + LANE_END_BEAT_GROW * 2.0,
             "on the beat: {grown}"
         );
-    }
-
-    #[test]
-    fn a_press_bursts_great_round_the_play_note() {
-        let says = |c: &Canvas| c.texts.iter().any(|(_, t)| t == "GREAT");
-        assert!(!says(&lane_end((0.0, 0.0), None)));
-        assert!(says(&lane_end((0.0, 0.0), Some(0.3))));
-        assert!(!says(&lane_end((0.0, 0.0), Some(1.0))), "over");
     }
 
     #[test]
@@ -1452,7 +1436,6 @@ mod tests {
                 "Play",
                 crate::hit::Hit::ModsButton,
                 true,
-                None,
             );
             c
         };

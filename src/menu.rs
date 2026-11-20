@@ -1579,13 +1579,6 @@ fn burst_at(c: &mut Canvas, spot: [f32; 2], r: f32, ring: [f32; 4], text: (f32, 
     c.text_centered(spot[0], text.0, text.1, rgba(GOLD, a), "GREAT");
 }
 
-/// The menu's hit burst on the Play note elsewhere (song select's Play): its ring `r` across
-/// round `spot`, GREAT at `text_y` in `size`, `k` (0 to 1) of the way.
-pub fn hit_burst(c: &mut Canvas, spot: [f32; 2], r: f32, text_y: f32, size: f32, k: f32) {
-    let ring = rgba(Item::Play.colour(), (1.0 - k) * 0.9);
-    burst_at(c, spot, r, ring, (text_y, size), k);
-}
-
 /// An item's note on its own (the guide's pictures).
 pub fn note(c: &mut Canvas, item: Item, x: f32, y: f32, r: f32) {
     draw_note(c, &item.art(), x, y, r, 1.0);

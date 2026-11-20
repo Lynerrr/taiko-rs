@@ -1062,7 +1062,7 @@ impl Select {
     }
 
     /// The tabs over the list, one per source with maps, from (`x`, `y`) across `w`.
-    pub(super) fn draw_source_tabs(&self, c: &mut Canvas, x: f32, y: f32, w: f32, tabs: &[Source]) {
+    pub(crate) fn draw_source_tabs(&self, c: &mut Canvas, x: f32, y: f32, w: f32, tabs: &[Source]) {
         let tw = w / tabs.len() as f32;
         let shown = self.shown_source();
         let mut target = None;
@@ -1070,15 +1070,19 @@ impl Select {
             let tx = x + k as f32 * tw;
             let on = s == shown;
             let hover = c.hovered(tx, y, tw, SOURCE_TAB_H);
-            if hover && !on {
-                c.rect(
-                    tx + 2.0,
-                    y + 2.0,
-                    tw - 4.0,
-                    SOURCE_TAB_H - 4.0,
-                    rgba(0x262634, 0.8),
-                );
-            }
+            // Each tab a chip of its own, as the search row's field is: the raised surface,
+            // lifted under the pointer and while it's the one shown.
+            let level = if on || hover {
+                crate::style::Surface::Lifted
+            } else {
+                crate::style::Surface::Raised
+            };
+            crate::style::surface(
+                c,
+                [tx + 2.0, y + 1.0, tw - 4.0, SOURCE_TAB_H - 3.0],
+                crate::style::radius::SMALL,
+                level,
+            );
             // What the tab lists, the search and filters as they are.
             let n = self.source_listed[s.index()];
             let label = s.label();
@@ -1113,13 +1117,6 @@ impl Select {
                 target = Some([tx + 2.0, y + 1.0, tw - 4.0, SOURCE_TAB_H - 3.0]);
             }
         }
-        c.rect(
-            x,
-            y + SOURCE_TAB_H,
-            w,
-            1.0,
-            rgba(crate::style::PANEL_EDGE, 1.0),
-        );
         if let Some(rect) = target {
             crate::style::selector(c, "song-source", rect);
         }

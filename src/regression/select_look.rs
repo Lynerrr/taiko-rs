@@ -597,6 +597,38 @@ fn set_key(s: &State, row: usize) -> String {
     render::path_picture_key(&preview::background_path(e).expect("it names a picture"))
 }
 
+#[test]
+fn the_card_colour_fade_greys_each_cards_picture_towards_its_side() {
+    let (mut s, _songs, mut now) = menu_look("select-look-card-fade");
+    let i = s.select.selected().expect("a map is selected");
+    let bg = preview::background_path(&s.library[i]).expect("it names a picture");
+    s.card_pictures
+        .pretend_loaded(&render::path_picture_key(&bg), [0.5, 0.5, 0.5]);
+    let greys = |s: &mut State, now: &mut Instant| {
+        let c = settled(s, now);
+        let open = open_card(&c, s);
+        let picture = c
+            .shapes
+            .iter()
+            .find(|sh| card_picture(sh) && inside(sh.center, open, 0.0))
+            .expect("the card's picture");
+        [picture.border[0], picture.border[1]]
+    };
+    assert_eq!(greys(&mut s, &mut now), [0.0, 0.0], "off: all its colour");
+    s.cfg.card_fade = config::CardFade::ToRight;
+    let [left, right] = greys(&mut s, &mut now);
+    assert!(
+        left == 0.0 && right > 0.5,
+        "grey to the right: {left} {right}"
+    );
+    s.cfg.card_fade = config::CardFade::ToLeft;
+    let [left, right] = greys(&mut s, &mut now);
+    assert!(
+        right == 0.0 && left > 0.5,
+        "grey to the left: {left} {right}"
+    );
+}
+
 /// A card's picture drawn (`render::Canvas::card_picture`): its slot in `params[3]` below
 /// -100000.
 fn card_picture(s: &Shape) -> bool {
@@ -938,6 +970,13 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
     assert_eq!(strip.params[1], 0.0, "no edge round it");
     let [left, y, w, h] = rect(strip);
     let right = left + w;
+    // As far out past the lane's end as before its drum, so it's round at both ends (the lane
+    // itself is cut square to its box).
+    let (before, after) = (lane_hit[0] - left, right - (lane_hit[0] + lane_hit[2]));
+    assert!(
+        before > 4.0 && (before - after).abs() < 0.5,
+        "{before} before the lane, {after} after it"
+    );
     // No lines along it or across its ends.
     let edge = render::rgba(style::PANEL_EDGE, 1.0);
     let lines: Vec<[f32; 4]> = c
@@ -980,6 +1019,15 @@ fn the_timeline_is_quiet_and_its_kiai_in_gold() {
         .filter(|sh| !same_rgb(sh.fill, green))
         .collect();
     assert!(bars.len() > 20, "a timeline of bars: {}", bars.len());
+    // The playhead a plain line among the bars: nothing glows round it.
+    let glows: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| sh.center[0] > 28.0 + lw && sh.center[1] > top && sh.center[1] < bottom)
+        .filter(|sh| sh.params[1] == 0.0 && sh.params[2] > 0.0 && sh.half[0] == sh.params[0])
+        .map(rect)
+        .collect();
+    assert!(glows.is_empty(), "a glow on the timeline: {glows:?}");
     let (gold, ahead, played) = (
         render::rgba(0xFFD34D, 1.0),
         render::rgba(style::ink::SECONDARY, 1.0),
@@ -1044,7 +1092,7 @@ fn animated(tag: &str) -> (State, Songs, Instant) {
 }
 
 #[test]
-fn play_is_the_menus_play_note_and_its_map_starts_after_a_great_burst() {
+fn play_is_the_menus_play_note_and_its_map_starts_at_once() {
     let (mut s, _songs, mut now) = animated("select-look-play-note");
     let c = settled(&mut s, &mut now);
     let play = hit_rect(&c, |h| matches!(h, Hit::Key(KeyCode::Enter))).expect("Play");
@@ -1058,15 +1106,29 @@ fn play_is_the_menus_play_note_and_its_map_starts_after_a_great_burst() {
         .filter(|sh| (sh.center[0] - at[0]).hypot(sh.center[1] - at[1]) <= r * 1.2)
         .count();
     assert!(rim > 20, "the Play note's pixels: {rim}");
+    // With animations on nothing plays first: the map starts as the frame after the press is
+    // drawn, and that frame is kept to fade out over it (instead of a cut to "Loading").
     press(&mut s, KeyCode::Enter, now);
     now += Duration::from_millis(16);
-    let c = frame(&mut s, now);
-    assert_eq!(scene_name(&s), "Select", "not yet: the burst first");
-    assert!(shows(&c, "GREAT"), "the menu's hit burst");
-    press(&mut s, KeyCode::Enter, now);
-    now += Duration::from_millis(200);
     frame(&mut s, now);
-    assert_eq!(scene_name(&s), "Loading", "then the map");
+    assert_eq!(scene_name(&s), "Loading", "the map at the next frame");
+    assert!(s.ghost_keep, "song select's last frame kept");
+    assert_eq!(
+        s.select_ghost_alpha(now),
+        1.0,
+        "over the map while it loads"
+    );
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let start = now;
+    assert_eq!(s.select_ghost_alpha(start), 1.0, "the play starts under it");
+    let half = s.select_ghost_alpha(start + Duration::from_millis(125));
+    assert!(half > 0.2 && half < 0.8, "fading out: {half}");
+    assert_eq!(
+        s.select_ghost_alpha(start + Duration::from_millis(260)),
+        0.0,
+        "gone a quarter of a second in"
+    );
+    assert!(s.select_ghost.is_none());
 }
 
 #[test]
@@ -1078,26 +1140,59 @@ fn without_animations_play_starts_the_map_at_once() {
 }
 
 #[test]
-fn the_mods_on_show_as_coloured_badges_after_the_word() {
+fn mods_and_random_keep_their_place_and_the_mods_on_show_as_badges_under_them() {
     let (mut s, _songs, mut now) = menu_look("select-look-mod-badges");
+    let c = settled(&mut s, &mut now);
+    let mods = |c: &Canvas| hit_rect(c, |h| *h == Hit::ModsButton).expect("Mods");
+    let random = |c: &Canvas| hit_rect(c, |h| matches!(h, Hit::Key(KeyCode::F2))).expect("Random");
+    let play = hit_rect(&c, |h| matches!(h, Hit::Key(KeyCode::Enter))).expect("Play");
+    let fill = style::surface_fill(style::Surface::Raised);
+    let lane = c
+        .shapes
+        .iter()
+        .filter(|sh| same_rgb(sh.fill, fill) && sh.params[0] == style::radius::CARD)
+        .map(rect)
+        .find(|r| inside([play[0] + 1.0, play[1] + play[3] / 2.0], *r, 0.0))
+        .expect("the lane of actions");
+    // The two as one group in the middle of the lane left of Play: what's drawn of them (a
+    // button's hit has 6 units of slack each side) as far from the lane's start as from Play.
+    let (m, r) = (mods(&c), random(&c));
+    let before = m[0] + 6.0 - lane[0];
+    let after = play[0] - (r[0] + r[2] - 6.0);
+    assert!(
+        before > 16.0 && (before - after).abs() < 1.0,
+        "{before} before Mods, {after} from Random to Play"
+    );
+    let [_, wy] = text_at(&c, "Mods").expect("the word");
+    // Mods on: the two stay where they were across, a little higher, the badges under them.
     s.cfg.mods = crate::mods::Mods::parse("HD,HR");
     s.select.mods_label = s.cfg.mods.label();
     let c = settled(&mut s, &mut now);
-    let [wx, wy] = text_at(&c, "Mods").expect("the word alone");
-    let [rx, _] = text_at(&c, "Random").expect("Random");
-    for m in ["HD", "HR"] {
-        let [x, y] = text_at(&c, m).unwrap_or_else(|| panic!("{m}"));
-        assert!(x > wx && x < rx && (y - wy).abs() < 4.0, "{m} between: {x}");
+    let (m2, r2) = (mods(&c), random(&c));
+    assert!(
+        (m2[0] - m[0]).abs() < 0.01 && (r2[0] - r[0]).abs() < 0.01,
+        "moved across: {m:?} -> {m2:?}, {r:?} -> {r2:?}"
+    );
+    assert!(m2[1] < m[1] && (m2[1] - r2[1]).abs() < 0.01, "up, together");
+    let [_, wy2] = text_at(&c, "Mods").expect("the word");
+    assert!(wy2 < wy, "the word moves up with them");
+    for name in ["HD", "HR"] {
+        let [x, y] = text_at(&c, name).unwrap_or_else(|| panic!("{name}"));
+        assert!(
+            y > wy2 + 8.0 && x >= m2[0] && x < play[0],
+            "{name} under the group: {x}, {y}"
+        );
+        assert!(y < lane[1] + lane[3] - 4.0, "{name} inside the lane: {y}");
         let badge = c.shapes.iter().any(|sh| {
             let [bx, by, bw, bh] = rect(sh);
             sh.params[1] > 0.0 && bx < x && bx + bw > x && by < y + 3.0 && by + bh > y + 3.0
         });
-        assert!(badge, "{m} on a badge");
+        assert!(badge, "{name} on a badge");
         let opens = c
             .hits
             .iter()
             .any(|b| b.hit == Hit::ModsButton && inside([x + 2.0, y + 3.0], b.rect, 0.0));
-        assert!(opens, "a click on {m} opens the mod select");
+        assert!(opens, "a click on {name} opens the mod select");
     }
 }
 

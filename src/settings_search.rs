@@ -96,6 +96,9 @@ fn words(item: Item) -> &'static str {
             "custom maps tko editor website folder кастомные карты редактор сайт папка"
         }
         Item::Screenshots => "picture clipboard screen картинка буфер экран",
+        Item::CardFade => {
+            "saturation gradient grey gray colour color card насыщенность градиент серый цвет карточка"
+        }
         Item::ChatFilter => "swear profanity мат цензура",
         Item::NotifyMessages
         | Item::NotifyMentions

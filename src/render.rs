@@ -463,6 +463,14 @@ pub struct Renderer {
     blur_gauss: wgpu::RenderPipeline,
     /// Indexed [capture].
     blur_composite: [wgpu::RenderPipeline; 2],
+    /// Keeps the frame being drawn now, to show over the next ones (song select's last frame
+    /// fading out over the map it started); reset once kept.
+    pub ghost_keep: bool,
+    /// How opaque the kept frame is over this one (0: not drawn, and let go).
+    pub ghost_alpha: f32,
+    ghost: Option<Ghost>,
+    /// Into the screen's format, and into a screenshot's.
+    ghost_pipelines: [wgpu::RenderPipeline; 2],
 }
 
 /// GPU time of the frame's passes from timestamp queries, read back a few frames later so
@@ -727,7 +735,7 @@ struct Target<'a> {
 
 /// How soft song select's note routes are behind it (`Canvas::blur_since`): the blur's spread
 /// (sigma) in virtual units, as soft as the map's picture reads behind them.
-pub const ROUTES_BLUR: f32 = 8.0;
+pub const ROUTES_BLUR: f32 = 6.0;
 /// How many times the routes' image is halved before it is blurred (to 1/8 of the screen).
 const BLUR_HALVINGS: usize = 3;
 
@@ -776,7 +784,22 @@ fn composite(in: V) -> @location(0) vec4<f32> {
     let soft = textureSampleLevel(b, s, in.uv, 0.0);
     return mix(sharp, soft, u.x);
 }
+
+@fragment
+fn ghost(in: V) -> @location(0) vec4<f32> {
+    return textureSampleLevel(a, s, in.uv, 0.0) * u.x;
+}
 "#;
+
+/// A frame kept to show over the next ones (`Renderer::ghost_keep`), as big as the image drawn
+/// to, with what puts it over them.
+struct Ghost {
+    size: (u32, u32),
+    view: wgpu::TextureView,
+    group: wgpu::BindGroup,
+    /// How opaque it's put over the frame (x).
+    uniform: wgpu::Buffer,
+}
 
 /// The images the blur goes through, sized for the image drawn to.
 struct BlurFx {
@@ -841,8 +864,8 @@ struct BgLayer {
     disc_uniform: wgpu::Buffer,
 }
 
-/// The blurred copy's height (pixels): each is about 1/48 of the picture, then box-blurred.
-const BLUR_ROWS: u32 = 48;
+/// The blurred copy's height (pixels): each is about 1/64 of the picture, then box-blurred.
+const BLUR_ROWS: u32 = 64;
 
 /// The size of a background's blurred copy: `BLUR_ROWS` high, its aspect kept.
 fn blurred_size(w: u32, h: u32) -> (u32, u32) {
@@ -1195,7 +1218,12 @@ fn shade(in: VOut) -> vec4<f32> {
         let part = select(vec2<f32>(1.0, -k), vec2<f32>(k, 1.0), k > 0.0);
         let uv = clamp(in.local / (2.0 * in.half) * part + 0.5, edge, vec2<f32>(1.0) - edge);
         let side = vec2<f32>(f32(CARD_SIDE_X), f32(CARD_SIDE_Y));
-        let t = textureSampleLevel(cards, samp, (cell + uv) * size / side, 0.0);
+        var t = textureSampleLevel(cards, samp, (cell + uv) * size / side, 0.0);
+        // Its colour going to grey across it (`border`: how grey at the left and right edges).
+        let across = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
+        let grey = mix(in.border.x, in.border.y, across);
+        let luma = dot(t.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        t = vec4<f32>(mix(t.rgb, vec3<f32>(luma), grey), t.a);
         let r = min(in.params.x, min(in.half.x, in.half.y));
         let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
         return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover;
@@ -1889,6 +1917,13 @@ impl Renderer {
                 Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
             )
         });
+        let ghost_pipelines = [format, wgpu::TextureFormat::Rgba8Unorm].map(|f| {
+            make_blur(
+                "ghost",
+                f,
+                Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            )
+        });
 
         let gpu_timer = time_gpu.then(|| GpuTimer::new(&device, &queue));
         let mut r = Renderer {
@@ -1944,6 +1979,10 @@ impl Renderer {
             blur_down,
             blur_gauss,
             blur_composite,
+            ghost_keep: false,
+            ghost_alpha: 0.0,
+            ghost: None,
+            ghost_pipelines,
         };
         r.set_present(present);
         Ok(r)
@@ -2632,6 +2671,14 @@ impl Renderer {
         if let Some((range, strength)) = &blur {
             self.encode_blur(&mut encoder, range.clone(), *strength, ah / VIRTUAL_HEIGHT);
         }
+        // This frame kept to show over the next ones (drawn once more into an image of its own,
+        // below), or the one kept let go once it's no longer shown.
+        let keep = std::mem::take(&mut self.ghost_keep);
+        if keep {
+            self.ensure_ghost(w, h);
+        } else if self.ghost_alpha <= 0.0 {
+            self.ghost = None;
+        }
         let timer = self.gpu_timer.as_ref();
         let into = Target {
             size: (w, h),
@@ -2639,6 +2686,17 @@ impl Renderer {
             hole,
             blur: blur.map(|(r, _)| r),
         };
+        if keep && let Some(g) = &self.ghost {
+            self.encode_pass(
+                &mut encoder,
+                &g.view,
+                false,
+                shapes.len(),
+                clear,
+                &into,
+                None,
+            );
+        }
         match self.low.as_ref().filter(|_| through_image) {
             Some(low) => {
                 self.encode_pass(
@@ -2650,6 +2708,7 @@ impl Renderer {
                     &into,
                     timer.and_then(|t| t.writes(true, false)),
                 );
+                self.encode_ghost(&mut encoder, &low.view, (w, h), false);
                 let origin = place.map_or([0, 0], |[x, y, ..]| [x, y]);
                 let round = if place.is_some() { [0.0; 3] } else { clear };
                 let [strength, look] = glitch.unwrap_or_default();
@@ -2676,15 +2735,18 @@ impl Renderer {
                     timer.and_then(|t| t.writes(false, true)),
                 );
             }
-            None => self.encode_pass(
-                &mut encoder,
-                &view,
-                false,
-                shapes.len(),
-                clear,
-                &into,
-                timer.and_then(|t| t.writes(true, true)),
-            ),
+            None => {
+                self.encode_pass(
+                    &mut encoder,
+                    &view,
+                    false,
+                    shapes.len(),
+                    clear,
+                    &into,
+                    timer.and_then(|t| t.writes(true, true)),
+                );
+                self.encode_ghost(&mut encoder, &view, (w, h), false);
+            }
         }
         if let Some(t) = timer {
             t.resolve(&mut encoder);
@@ -2719,15 +2781,18 @@ impl Renderer {
                     true,
                     None,
                 ),
-                None => self.encode_pass(
-                    &mut encoder,
-                    &target_view,
-                    true,
-                    shapes.len(),
-                    clear,
-                    &into,
-                    None,
-                ),
+                None => {
+                    self.encode_pass(
+                        &mut encoder,
+                        &target_view,
+                        true,
+                        shapes.len(),
+                        clear,
+                        &into,
+                        None,
+                    );
+                    self.encode_ghost(&mut encoder, &target_view, (w, h), true);
+                }
             }
             let bpr = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -3053,6 +3118,106 @@ impl Renderer {
             pass.set_bind_group(0, group, &[]);
             pass.draw(0..3, 0..1);
         }
+    }
+
+    /// The image a kept frame goes into (`ghost_keep`), `width` x `height`.
+    fn ensure_ghost(&mut self, width: u32, height: u32) {
+        if self
+            .ghost
+            .as_ref()
+            .is_some_and(|g| g.size == (width, height))
+        {
+            return;
+        }
+        let view = self
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("ghost"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                // The screen's format, so the shape pipeline draws into it.
+                format: self.config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ghost"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ghost"),
+            layout: &self.blur_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.bg_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: uniform.as_entire_binding(),
+                },
+            ],
+        });
+        self.ghost = Some(Ghost {
+            size: (width, height),
+            view,
+            group,
+            uniform,
+        });
+    }
+
+    /// The kept frame over what was drawn into `view` (`size` big, a screenshot's with
+    /// `capture`), `ghost_alpha` opaque.
+    fn encode_ghost(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        size: (u32, u32),
+        capture: bool,
+    ) {
+        let Some(g) = self.ghost.as_ref().filter(|g| g.size == size) else {
+            return;
+        };
+        let alpha = self.ghost_alpha.clamp(0.0, 1.0);
+        if alpha <= 0.0 {
+            return;
+        }
+        self.queue
+            .write_buffer(&g.uniform, 0, bytemuck::cast_slice(&[alpha, 0.0, 0.0, 0.0]));
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("ghost"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.ghost_pipelines[capture as usize]);
+        pass.set_bind_group(0, &g.group, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     fn ensure_low(&mut self, width: u32, height: u32) {
@@ -4347,14 +4512,16 @@ impl<H> Canvas<H> {
     }
 
     /// Song select's card picture of the map picture at `path` over all of `[x, y, w, h]`: the
-    /// picture's middle strip, cut to it, tinted by `tint`. Asks for it; false while it isn't in
-    /// (nothing drawn).
+    /// picture's middle strip, cut to it, tinted by `tint`, its colour going to grey across it from
+    /// `greys`' first at its left edge to the second at its right (0: all its colour). Asks for
+    /// it; false while it isn't in (nothing drawn).
     pub fn card_picture(
         &mut self,
         path: &std::path::Path,
         [x, y, w, h]: [f32; 4],
         tint: [f32; 4],
         radius: f32,
+        greys: [f32; 2],
     ) -> bool {
         let key = path_picture_key(path);
         let slot = self.card_slots.get(&key).copied();
@@ -4380,7 +4547,7 @@ impl<H> Canvas<H> {
             center: [x + w / 2.0, y + h / 2.0],
             half: [w / 2.0, h / 2.0],
             fill: tint,
-            border: CLEAR,
+            border: [greys[0], greys[1], 0.0, 0.0],
             params: [radius, 1.0, k, -CARD_BASE - slot as f32],
             angle: 0.0,
         });
@@ -5126,7 +5293,7 @@ mod tests {
 
     #[test]
     fn a_background_s_blurred_copy_is_small_and_keeps_its_colours() {
-        assert_eq!(super::blurred_size(1920, 1080), (85, 48));
+        assert_eq!(super::blurred_size(1920, 1080), (113, 64));
         assert_eq!(
             super::blurred_size(10, 4),
             (10, 4),
