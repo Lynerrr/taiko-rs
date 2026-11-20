@@ -1246,7 +1246,6 @@ impl State {
             song_routes: Default::default(),
             song_routes_drain: None,
             play_icon_at: None,
-            play_burst: None,
             dice_roll: None,
             screen_fade: None,
             shown_scene: None,

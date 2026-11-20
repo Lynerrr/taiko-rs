@@ -1060,7 +1060,7 @@ fn animated(tag: &str) -> (State, Songs, Instant) {
 }
 
 #[test]
-fn play_is_the_menus_play_note_and_its_map_starts_after_a_great_burst() {
+fn play_is_the_menus_play_note_and_its_map_starts_at_once() {
     let (mut s, _songs, mut now) = animated("select-look-play-note");
     let c = settled(&mut s, &mut now);
     let play = hit_rect(&c, |h| matches!(h, Hit::Key(KeyCode::Enter))).expect("Play");
@@ -1074,15 +1074,9 @@ fn play_is_the_menus_play_note_and_its_map_starts_after_a_great_burst() {
         .filter(|sh| (sh.center[0] - at[0]).hypot(sh.center[1] - at[1]) <= r * 1.2)
         .count();
     assert!(rim > 20, "the Play note's pixels: {rim}");
+    // With animations on too, nothing plays first: the map is loading on the press.
     press(&mut s, KeyCode::Enter, now);
-    now += Duration::from_millis(16);
-    let c = frame(&mut s, now);
-    assert_eq!(scene_name(&s), "Select", "not yet: the burst first");
-    assert!(shows(&c, "GREAT"), "the menu's hit burst");
-    press(&mut s, KeyCode::Enter, now);
-    now += Duration::from_millis(200);
-    frame(&mut s, now);
-    assert_eq!(scene_name(&s), "Loading", "then the map");
+    assert_eq!(scene_name(&s), "Loading", "the map at once");
 }
 
 #[test]

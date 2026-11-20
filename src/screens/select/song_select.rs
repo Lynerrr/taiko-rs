@@ -232,7 +232,7 @@ impl Screen for SongSelect {
                     state.pick_to_edit = false;
                     state.open_editor(i);
                 }
-                SelectAction::Play(i) => press_play(state, i, at),
+                SelectAction::Play(i) => press_play(state, i),
                 SelectAction::Settings => state.open_settings(),
                 SelectAction::Mods => state.open_mod_select(),
                 SelectAction::Quit if state.cfg.main_menu => state.back_to_menu(),
@@ -277,7 +277,6 @@ impl Screen for SongSelect {
                 state.song_routes_drain = None;
             }
         }
-        let on_songs = shift.is_none() && !frame.on_menu;
         match shift {
             Some((t, into, flying)) => {
                 // The camera carries the routes; the lean starts again from none once it's there.
@@ -316,16 +315,6 @@ impl Screen for SongSelect {
                 let [dx, dy] = state.select.parallax;
                 canvas.transform_since(routes, [0.0, 0.0], 1.0, dx, dy);
                 draw_songs(state, canvas, frame, None, false);
-            }
-        }
-        // Play's burst is over: its map starts. Song select gone meanwhile (to the menu), it's
-        // dropped.
-        if let Some((at, i)) = state.play_burst {
-            if !on_songs || i >= state.library.len() {
-                state.play_burst = None;
-            } else if burst_progress(at, render::frame_now()) >= 1.0 {
-                state.play_burst = None;
-                state.start_loading(i);
             }
         }
         None
@@ -435,9 +424,7 @@ fn draw_menu(state: &mut State, canvas: &mut Canvas, frame: &Frame, layer: Layer
 /// its height, and how much of the screen's width its Play end takes.
 const ACTIONS_H: f32 = 50.0;
 const PLAY_SHARE: f32 = 0.16;
-/// How long Play's GREAT burst plays before the map starts (ms), and how long the die rolls
-/// when Random is pressed, a face to each `style::DICE_ROLL` step.
-pub(crate) const PLAY_BURST_MS: f32 = 180.0;
+/// How long the die rolls when Random is pressed, a face to each `style::DICE_ROLL` step.
 pub(crate) const DICE_ROLL_MS: f32 = 300.0;
 /// The mods' badges on the lane of actions: their height (`multiplayer::mod_badges`), and the
 /// least room they are drawn in.
@@ -447,11 +434,6 @@ const MOD_BADGES_MIN: f32 = 24.0;
 /// icon is from the end of Mods (the small mark between them in that room).
 const MOD_ROW_LIFT: f32 = 7.0;
 const RANDOM_STEP: f32 = 18.0;
-
-/// How far (0 to 1) Play's burst pressed `at` is by `now`.
-fn burst_progress(at: Instant, now: Instant) -> f32 {
-    now.saturating_duration_since(at).as_secs_f32() * 1000.0 / PLAY_BURST_MS
-}
 
 /// The face Random's die shows `now`, pressed `at`: it rolls through a few, then rests on five.
 fn dice_face(at: Option<Instant>, now: Instant) -> &'static style::Icon {
@@ -465,18 +447,9 @@ fn dice_face(at: Option<Instant>, now: Instant) -> &'static style::Icon {
         [((rolled * style::DICE_ROLL.len() as f32) as usize).min(style::DICE_ROLL.len() - 1)]
 }
 
-/// Play pressed `at` (Enter, or a click on it): in the main menu's look the menu's GREAT burst plays on
-/// its note first and the map starts once it's over (`SongSelect::draw`); without animations,
-/// and in the Legacy and phone layouts, the map starts at once. Pressed again meanwhile, nothing.
-fn press_play(state: &mut State, i: usize, at: Instant) {
-    if state.play_burst.is_some() {
-        return;
-    }
-    if state.select.legacy || crate::mobile::active() || !render::animations() {
-        state.start_loading(i);
-        return;
-    }
-    state.play_burst = Some((at, i));
+/// Play pressed (Enter, or a click on it): the map starts at once, in every layout.
+fn press_play(state: &mut State, i: usize) {
+    state.start_loading(i);
 }
 
 fn draw_songs(
@@ -887,10 +860,7 @@ fn draw_songs(
             let hit = hit::Hit::Key(KeyCode::Enter);
             let bar = [play_x, by, right - play_x, bh];
             state.play_icon_at = Some(style::lane_end_disc([play_x, by, bh]));
-            let burst = state
-                .play_burst
-                .map(|(at, _)| burst_progress(at, render::frame_now()));
-            style::lane_end_button(canvas, "select-play", bar, play, hit, !play_away, burst);
+            style::lane_end_button(canvas, "select-play", bar, play, hit, !play_away);
         }
         // The song list's right edge: the gap between the list's box (`ui`, ending
         // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.

@@ -433,9 +433,6 @@ struct State {
     /// Where song select's Play note is, its middle and radius (as drawn, before the camera
     /// moves it): the menu's hit note lands there.
     play_icon_at: Option<([f32; 2], f32)>,
-    /// Play pressed on song select in the main menu's look: when (frame time), and the map that
-    /// starts once its GREAT burst is over (`song_select::PLAY_BURST_MS`).
-    play_burst: Option<(Instant, usize)>,
     /// When song select's Random was last pressed: its die rolls for a moment.
     dice_roll: Option<Instant>,
     /// Its easter eggs, which outlast it (`eggs`).
