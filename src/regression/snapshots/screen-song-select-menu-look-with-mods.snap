@@ -45,7 +45,7 @@ text   55,250  low-od
 text   53,264  Regression  |  mapped by tests
 text   57,284  high-od
 text   57,298  Regression  |  mapped by tests
-text  480,337  0:00 / 0:10
+text  490,337  0:00 / 0:10
 text  671,337  peak 7.0 notes/s at 0:01
 text  537,422  Mods
 text  611,422  Random
@@ -67,7 +67,7 @@ hit     4,52     20x402  SongScrollbar
 hit   712,102    16x13   SelectLike
 hit   494,209   223x16   PpSim
 hit   490,235   316x61   Preview
-hit   478,302   340x32   Preview
+hit   488,302   330x32   Preview
 hit   720,205    95x24   BoardPage
 hit   514,414    56x24   ModsButton
 hit   588,414    70x24   Key(F2)

@@ -591,6 +591,9 @@ impl Preview {
         }
         self.owned_background = self.own_background;
         if selected != self.seen {
+            // The start point picked ("Play from") is that map's: another one starts afresh, even
+            // on the same song (another difficulty of the set), and so does going back to it.
+            self.marker = None;
             // The first song shown (song select opening) comes with the screen, not on its own.
             let was = self.seen;
             self.seen = selected;
@@ -2151,9 +2154,10 @@ impl Preview {
         }
         self.box_rect = Some([bx, by, bw, bh]);
         c.hit(bx, by, lane_end.min(c.width) - bx, bh, Hit::Preview);
-        // Bare, the timeline is as wide as the lane's tile over it, edge to edge.
+        // Bare, the timeline starts under the lane's start, in from the tile's edge, and runs on
+        // to the tile's right edge (short of it, it looked narrower than the playfield).
         let (gx, gw) = if self.bare {
-            (strip[0], strip[2])
+            (bx, strip[0] + strip[2] - bx)
         } else {
             (bx, bw)
         };
@@ -2992,7 +2996,7 @@ mod beat_tests {
     }
 
     #[test]
-    fn bare_the_timeline_is_as_wide_as_the_lanes_tile() {
+    fn bare_the_timeline_starts_under_the_lane_and_runs_to_the_tiles_edge() {
         let map = beatmap::calibration_map(500.0, 4, 16);
         let library = [Entry::new(
             PathBuf::from("/nonexistent/a.osu"),
@@ -3011,7 +3015,7 @@ mod beat_tests {
         p.draw_panel(
             &mut c, &library, 500.0, 40.0, 340.0, 400.0, 1.0, None, None, None, None,
         );
-        let [_, by, _, bh] = p.box_rect.expect("the lane");
+        let [bx, by, _, bh] = p.box_rect.expect("the lane");
         let fill = crate::style::surface_fill(crate::style::Surface::Raised);
         let tile = c
             .shapes
@@ -3025,11 +3029,51 @@ mod beat_tests {
             .expect("the lane's tile");
         let (left, right) = (tile.center[0] - tile.half[0], tile.center[0] + tile.half[0]);
         let [gx, _, gw, _] = p.graph_rect.expect("the timeline");
+        // In from the tile's left edge, under the lane's start, as it was; on to its right edge.
         assert!(
-            (gx - left).abs() < 0.01 && (gx + gw - right).abs() < 0.01,
-            "the timeline {gx}..{} under the tile {left}..{right}",
+            (gx - bx).abs() < 0.01 && gx > left + 5.0,
+            "it starts at {gx}, the lane at {bx}, the tile at {left}"
+        );
+        assert!(
+            (gx + gw - right).abs() < 0.01,
+            "it ends at {}, the tile at {right}",
             gx + gw
         );
+    }
+
+    #[test]
+    fn another_map_picked_drops_the_start_point_even_on_the_same_song() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        // Two difficulties of a set: one song.
+        let library = [
+            Entry::new(PathBuf::from("/nonexistent/a.osu"), map.meta.clone()),
+            Entry::new(PathBuf::from("/nonexistent/b.osu"), map.meta.clone()),
+        ];
+        assert_eq!(audio_path(&library[0]), audio_path(&library[1]));
+        let mut p = Preview {
+            seen: Some(0),
+            marker: Some((audio_path(&library[0]), 1000.0)),
+            ..Default::default()
+        };
+        let now = Instant::now();
+        let update = |p: &mut Preview, selected| {
+            p.update(
+                now,
+                &library,
+                selected,
+                None,
+                false,
+                true,
+                0.0,
+                (1.0, false),
+            );
+        };
+        update(&mut p, Some(0));
+        assert_eq!(p.marker(&library[0]), Some(1000.0), "kept on its own map");
+        update(&mut p, Some(1));
+        assert_eq!(p.marker(&library[1]), None, "not on the other difficulty");
+        update(&mut p, Some(0));
+        assert_eq!(p.marker(&library[0]), None, "nor back on the first");
     }
 
     #[test]
