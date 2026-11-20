@@ -510,6 +510,8 @@ const DIFF_DROP: f32 = 8.0;
 const DIFF_CASCADE_MS: f32 = 30.0;
 const DIFF_CASCADE_SPAN_MS: f32 = 120.0;
 const COVER_FADE_MS: f32 = 200.0;
+/// How round a difficulty row's card is, and its light under the pointer or the selection's.
+const DIFF_ROUND: f32 = 4.0;
 const COVER_SHADE: (f32, f32) = (0.85, 0.4);
 const BOTTOM_FADE: f32 = 16.0;
 const DIFF_BAR_DIM: f32 = 0.35;
@@ -3260,20 +3262,17 @@ impl Select {
                         c.round_rect(
                             [card[0], card[1]],
                             [card[2], card[3]],
-                            4.0,
+                            DIFF_ROUND,
                             [r, g, b, fa * a],
                             clear,
                             0.0,
                         );
-                        let bar = crate::style::role::rating(e.meta.level, stars(self.visible[*i]));
-                        let lit = if selected { 1.0 } else { DIFF_BAR_DIM };
-                        c.rect(44.0, y + 3.0, 3.0, rh - 9.0, rgba(bar, lit * a));
                     }
                     if selected {
                         c.round_rect(
                             [44.0, y],
                             [lw - 20.0, rh - 3.0],
-                            5.0,
+                            DIFF_ROUND,
                             rgba(
                                 crate::style::selector_colour(),
                                 (0.12 + 0.05 * crate::style::pulse()) * a,
@@ -3285,11 +3284,18 @@ impl Select {
                         c.round_rect(
                             [44.0, y],
                             [lw - 20.0, rh - 3.0],
-                            5.0,
+                            DIFF_ROUND,
                             hover_fill(a),
                             rgba(0, 0.0),
                             0.0,
                         );
+                    }
+                    // The rating's bar over the light (under it, its ends stuck out past the
+                    // light's round corners: a few unlit pixels at the row's left).
+                    if !legacy {
+                        let bar = crate::style::role::rating(e.meta.level, stars(self.visible[*i]));
+                        let lit = if selected { 1.0 } else { DIFF_BAR_DIM };
+                        c.rect(44.0, y + 3.0, 3.0, rh - 9.0, rgba(bar, lit * a));
                     }
                     if legacy {
                         c.rect(52.0, y + rh - 2.0, lw - 36.0, 1.0, rgba(0x1d1d27, a));

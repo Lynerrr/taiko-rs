@@ -2179,3 +2179,41 @@ fn the_preview_never_draws_the_black_playfield_and_plays_keep_it() {
     );
     game::set_frame_look(None);
 }
+
+#[test]
+fn a_difficulty_rows_rating_bar_is_drawn_over_its_light_and_the_light_is_as_round_as_it() {
+    // The selected row's light (the pointer's is drawn the same way, as round).
+    let (mut s, _songs, mut now) = menu_look("select-look-diff-light");
+    let c = settled(&mut s, &mut now);
+    let cursor = s.select.cursor();
+    let row = hit_rect(&c, |h| *h == Hit::SongRow(cursor)).expect("the selected row");
+    // The row's own shapes, the full-width ones (its card and its light) and its bar.
+    let at_row = |sh: &&Shape| inside(sh.center, row, 0.5);
+    let wide: Vec<(usize, &Shape)> = c
+        .shapes
+        .iter()
+        .enumerate()
+        .filter(|(_, sh)| at_row(sh) && sh.half[0] * 2.0 > row[2] * 0.8)
+        .collect();
+    assert!(wide.len() >= 2, "its card and its light: {}", wide.len());
+    // Its card, then its light over exactly the same box.
+    let card = wide[0];
+    let light = *wide[1..]
+        .iter()
+        .find(|(_, sh)| sh.center == card.1.center && sh.half == card.1.half)
+        .expect("its light over the card");
+    assert_eq!(
+        light.1.params[0], card.1.params[0],
+        "the light as round as the card"
+    );
+    let bar = c
+        .shapes
+        .iter()
+        .enumerate()
+        .find(|(_, sh)| at_row(sh) && sh.half[0] * 2.0 == 3.0)
+        .expect("its rating bar");
+    assert!(
+        bar.0 > light.0,
+        "the bar over the light, not under its corners"
+    );
+}
