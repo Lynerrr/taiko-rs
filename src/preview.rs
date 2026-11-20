@@ -2189,22 +2189,25 @@ impl Preview {
             }
             return None;
         };
+        // Bare, the notes run on under the tile's rounded end and come in out of its edge, not
+        // out of the middle of it where the lane would be cut square.
+        let notes_end = if self.bare {
+            bare_notes_end(lane_end)
+        } else {
+            lane_end
+        };
         let full_w = c.width;
         let start = c.shapes.len();
-        c.width = (lane_end - bx) / k;
+        c.width = (notes_end - bx) / k;
         game.view.kiai_effects = self.kiai_effects;
         game.draw_playfield(c, scroll_speed);
         let oy = by - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
-        // Bare, the notes come in out of the lane's fading end.
+        // Bare, the notes come in out of the lane's fading end, and the lane's own bands (as tall
+        // as the tile, running to its end) are as round as the tile there.
         if self.bare {
-            for sh in &mut c.shapes[start..] {
-                let t = ((lane_end - sh.center[0]) / LANE_FADE[1]).clamp(0.0, 1.0);
-                let f = t * t * (3.0 - 2.0 * t);
-                sh.fill[3] *= f;
-                sh.border[3] *= f;
-            }
+            bare_lane_end(&mut c.shapes[start..], notes_end, bh);
         }
         if button.is_some() {
             // Song select only (download previews have no fullscreen view).
@@ -2242,7 +2245,7 @@ impl Preview {
         let clip = crate::layout::Area {
             x: bx / full_w,
             y: by / VIRTUAL_HEIGHT,
-            w: (lane_end - bx) / full_w,
+            w: (notes_end - bx) / full_w,
             h: bh / VIRTUAL_HEIGHT,
         };
         // Only the lane is clipped to the box.
@@ -2262,6 +2265,33 @@ const STAT_GAP: f32 = 10.0;
 /// Bare: how far the autoplay's lane fades in at its left end (out from the drum's side) and its
 /// right (where the notes come in), and how tall the timeline's bars are.
 const LANE_FADE: [f32; 2] = [10.0, 28.0];
+
+/// Bare, where the lane's notes end, its tile's right edge (the lane ending at `lane_end`, the
+/// tile as far past it as it starts before the drum): they come in out of it, not out of the
+/// middle of the tile.
+pub(crate) fn bare_notes_end(lane_end: f32) -> f32 {
+    lane_end + LANE_FADE[0]
+}
+
+/// Bare, the lane's shapes as drawn (to `notes_end`, `band_h` tall): the notes fade in over
+/// `LANE_FADE[1]` out of its end, and its own bands (as tall as the tile, running to its end)
+/// are as round as the tile.
+pub(crate) fn bare_lane_end(shapes: &mut [crate::render::Shape], notes_end: f32, band_h: f32) {
+    let round = crate::style::radius::SMALL;
+    for sh in shapes {
+        let t = ((notes_end - sh.center[0]) / LANE_FADE[1]).clamp(0.0, 1.0);
+        let f = t * t * (3.0 - 2.0 * t);
+        sh.fill[3] *= f;
+        sh.border[3] *= f;
+        let band = sh.params == [0.0; 4]
+            && sh.angle == 0.0
+            && sh.center[0] + sh.half[0] >= notes_end - 0.5
+            && sh.half[1] * 2.0 >= band_h * 0.5;
+        if band {
+            sh.params[0] = round;
+        }
+    }
+}
 
 /// The biggest size, from a tile's value size down to the body's, that `value` fits `room` at.
 fn fitting_size(value: &str, room: f32) -> f32 {

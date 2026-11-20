@@ -977,6 +977,12 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
         before > 4.0 && (before - after).abs() < 0.5,
         "{before} before the lane, {after} after it"
     );
+    // Its notes run on to the tile's end and come in out of it, not out of its middle.
+    let notes_end = preview::bare_notes_end(lane_hit[0] + lane_hit[2]);
+    assert!(
+        (notes_end - right).abs() < 0.5,
+        "notes to {notes_end}, the tile to {right}"
+    );
     // No lines along it or across its ends.
     let edge = render::rgba(style::PANEL_EDGE, 1.0);
     let lines: Vec<[f32; 4]> = c
@@ -2062,4 +2068,44 @@ fn the_wheel_over_a_pp_simulator_field_steps_it() {
     let at = s.preview.sim.unwrap();
     s.click(Hit::PpSimField(1), None);
     assert_eq!(s.preview.sim.unwrap().misses, at.misses);
+}
+
+#[test]
+fn the_preview_lanes_notes_fade_in_out_of_its_end_and_its_band_is_round_there() {
+    let plain = |center: [f32; 2], half: [f32; 2], params: [f32; 4]| Shape {
+        center,
+        half,
+        fill: [1.0; 4],
+        border: [1.0; 4],
+        params,
+        angle: 0.0,
+    };
+    let (end, h) = (400.0, 40.0);
+    let mut shapes = vec![
+        // The lane's band, from its drum to the end, and a line along its top.
+        plain([250.0, 20.0], [150.0, 20.0], [0.0; 4]),
+        plain([250.0, 0.5], [150.0, 0.5], [0.0; 4]),
+        // A note at the very end, one coming in, and one well inside.
+        plain([end - 2.0, 20.0], [12.0, 12.0], [12.0, 0.0, 0.0, 0.0]),
+        plain([end - 14.0, 20.0], [12.0, 12.0], [12.0, 0.0, 0.0, 0.0]),
+        plain([end - 120.0, 20.0], [12.0, 12.0], [12.0, 0.0, 0.0, 0.0]),
+    ];
+    preview::bare_lane_end(&mut shapes, end, h);
+    assert_eq!(
+        shapes[0].params[0],
+        style::radius::SMALL,
+        "the band round at the end"
+    );
+    assert_eq!(
+        shapes[1].params[0], 0.0,
+        "a thin line along it stays as it is"
+    );
+    let a = |i: usize| shapes[i].fill[3];
+    assert!(a(2) < 0.05, "at the very end, out of sight: {}", a(2));
+    assert!(a(3) > a(2) && a(3) < 1.0, "coming in: {}", a(3));
+    assert_eq!(a(4), 1.0, "well inside, as it is");
+    assert_eq!(
+        shapes[0].fill[3], 1.0,
+        "the band itself isn't faded (it ends in its middle)"
+    );
 }
