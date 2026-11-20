@@ -2200,12 +2200,15 @@ impl Preview {
         let start = c.shapes.len();
         c.width = (notes_end - bx) / k;
         game.view.kiai_effects = self.kiai_effects;
-        game.draw_playfield(c, scroll_speed);
+        // Never the black playfield here (a black box on the map's picture); plays keep it.
+        crate::game::with_look(preview_look(crate::game::playfield_look()), || {
+            game.draw_playfield(c, scroll_speed)
+        });
         let oy = by - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
-        // Bare, the notes come in out of the lane's fading end, and the lane's own bands (as tall
-        // as the tile, running to its end) are as round as the tile there.
+        // Bare, the lane fits its round tile; its notes slide in from under the tile's edge (the
+        // lane is clipped to it: faded in short of it, they seemed to appear in plain view).
         if self.bare {
             bare_lane_end(&mut c.shapes, start, bx, notes_end, bh);
         }
@@ -2268,6 +2271,14 @@ const STAT_GAP: f32 = 10.0;
 /// right (where the notes come in), and how tall the timeline's bars are.
 const LANE_FADE: [f32; 2] = [10.0, 28.0];
 
+/// The look the preview's playfield is drawn with: the play's, but never the black playfield.
+pub(crate) fn preview_look(play: crate::game::Look) -> crate::game::Look {
+    crate::game::Look {
+        black_lane: false,
+        ..play
+    }
+}
+
 /// Bare, where the lane's notes end, its tile's right edge (the lane ending at `lane_end`, the
 /// tile as far past it as it starts before the drum): they come in out of it, not out of the
 /// middle of the tile.
@@ -2276,7 +2287,7 @@ pub(crate) fn bare_notes_end(lane_end: f32) -> f32 {
 }
 
 /// Bare, the lane's shapes as drawn from `start` (from `lane_x` to `notes_end`, `band_h` tall)
-/// fitted to its tile: the notes fade in over `LANE_FADE[1]` out of its end, its own bands (as
+/// fitted to its tile: its own bands (as
 /// tall as the tile, running its length) run out to its edges and are as round, the drum's dark panel
 /// runs out to the tile's left edge and is as round there (square, it made the lane read as a
 /// square box on a dark picture), and the lines along it stop where the corners start rounding.
@@ -2290,19 +2301,7 @@ pub(crate) fn bare_lane_end(
     let round = crate::style::radius::SMALL;
     let tile_left = lane_x - LANE_FADE[0];
     let mut panels = Vec::new();
-    for sh in shapes.iter().skip(start) {
-        if sh.center[0] - sh.half[0] < lane_x + 60.0 && sh.half[1] * 2.0 >= band_h * 0.3 {
-            eprintln!(
-                "DBG lane_x={lane_x} c={:?} h={:?} p={:?} a={} fill={:?} bh={band_h}",
-                sh.center, sh.half, sh.params, sh.angle, sh.fill
-            );
-        }
-    }
     for (i, sh) in shapes.iter_mut().enumerate().skip(start) {
-        let t = ((notes_end - sh.center[0]) / LANE_FADE[1]).clamp(0.0, 1.0);
-        let f = t * t * (3.0 - 2.0 * t);
-        sh.fill[3] *= f;
-        sh.border[3] *= f;
         if sh.params != [0.0; 4] || sh.angle != 0.0 {
             continue;
         }

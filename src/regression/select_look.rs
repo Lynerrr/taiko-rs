@@ -2097,7 +2097,7 @@ fn the_wheel_over_a_pp_simulator_field_steps_it() {
 }
 
 #[test]
-fn the_preview_lane_fits_its_round_tile_and_its_notes_fade_in_out_of_its_end() {
+fn the_preview_lane_fits_its_round_tile_and_its_notes_slide_in_from_under_its_edge() {
     let plain = |center: [f32; 2], half: [f32; 2], params: [f32; 4]| Shape {
         center,
         half,
@@ -2154,12 +2154,28 @@ fn the_preview_lane_fits_its_round_tile_and_its_notes_fade_in_out_of_its_end() {
     assert!((span(&shapes[4])[1] - (x + 50.0)).abs() < 0.01);
     assert!(span(&shapes[4])[0] > tile_left + round);
     let a = |i: usize| shapes[i].fill[3];
-    assert!(a(5) < 0.05, "at the very end, out of sight: {}", a(5));
-    assert!(a(6) > a(5) && a(6) < 1.0, "coming in: {}", a(6));
-    assert_eq!(a(7), 1.0, "well inside, as it is");
-    assert_eq!(
-        a(1),
-        1.0,
-        "the band itself isn't faded (it ends in its middle)"
+    // The notes aren't faded near the end: they slide in from under the tile's edge, cut by it
+    // (faded in short of it, they seemed to appear in plain view).
+    for i in [5, 6, 7] {
+        assert_eq!(a(i), 1.0, "note {i} drawn as it is");
+    }
+    assert_eq!(a(1), 1.0, "the band drawn as it is");
+}
+
+#[test]
+fn the_preview_never_draws_the_black_playfield_and_plays_keep_it() {
+    use crate::game::{self, Look};
+    game::set_frame_look(Some(Look {
+        black_lane: true,
+        ..Look::default()
+    }));
+    let drawn = game::with_look(preview::preview_look(game::playfield_look()), || {
+        game::playfield_look()
+    });
+    assert!(!drawn.black_lane, "the preview's lane isn't black");
+    assert!(
+        game::playfield_look().black_lane,
+        "the play's look is as it was after the preview"
     );
+    game::set_frame_look(None);
 }
