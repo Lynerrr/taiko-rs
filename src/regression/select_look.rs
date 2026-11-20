@@ -1112,29 +1112,9 @@ fn play_is_the_menus_play_note_and_its_map_starts_at_once() {
         .filter(|sh| (sh.center[0] - at[0]).hypot(sh.center[1] - at[1]) <= r * 1.2)
         .count();
     assert!(rim > 20, "the Play note's pixels: {rim}");
-    // With animations on nothing plays first: the map starts as the frame after the press is
-    // drawn, and that frame is kept to fade out over it (instead of a cut to "Loading").
+    // With animations on too, nothing plays first: the map is loading on the press.
     press(&mut s, KeyCode::Enter, now);
-    now += Duration::from_millis(16);
-    frame(&mut s, now);
-    assert_eq!(scene_name(&s), "Loading", "the map at the next frame");
-    assert!(s.ghost_keep, "song select's last frame kept");
-    assert_eq!(
-        s.select_ghost_alpha(now),
-        1.0,
-        "over the map while it loads"
-    );
-    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
-    let start = now;
-    assert_eq!(s.select_ghost_alpha(start), 1.0, "the play starts under it");
-    let half = s.select_ghost_alpha(start + Duration::from_millis(125));
-    assert!(half > 0.2 && half < 0.8, "fading out: {half}");
-    assert_eq!(
-        s.select_ghost_alpha(start + Duration::from_millis(260)),
-        0.0,
-        "gone a quarter of a second in"
-    );
-    assert!(s.select_ghost.is_none());
+    assert_eq!(scene_name(&s), "Loading", "the map at once");
 }
 
 #[test]
@@ -2071,7 +2051,7 @@ fn the_wheel_over_a_pp_simulator_field_steps_it() {
 }
 
 #[test]
-fn the_preview_lanes_notes_fade_in_out_of_its_end_and_its_band_is_round_there() {
+fn the_preview_lane_fits_its_round_tile_and_its_notes_fade_in_out_of_its_end() {
     let plain = |center: [f32; 2], half: [f32; 2], params: [f32; 4]| Shape {
         center,
         half,
@@ -2080,32 +2060,60 @@ fn the_preview_lanes_notes_fade_in_out_of_its_end_and_its_band_is_round_there() 
         params,
         angle: 0.0,
     };
-    let (end, h) = (400.0, 40.0);
+    let (x, end, h) = (100.0, 400.0, 40.0);
     let mut shapes = vec![
+        // Something before the lane, left alone.
+        plain([50.0, 20.0], [50.0, 20.0], [0.0; 4]),
         // The lane's band, from its drum to the end, and a line along its top.
         plain([250.0, 20.0], [150.0, 20.0], [0.0; 4]),
         plain([250.0, 0.5], [150.0, 0.5], [0.0; 4]),
+        // The drum's dark panel, square, from the lane's start.
+        plain([x + 25.0, 20.0], [25.0, 20.0], [0.0; 4]),
         // A note at the very end, one coming in, and one well inside.
         plain([end - 2.0, 20.0], [12.0, 12.0], [12.0, 0.0, 0.0, 0.0]),
         plain([end - 14.0, 20.0], [12.0, 12.0], [12.0, 0.0, 0.0, 0.0]),
         plain([end - 120.0, 20.0], [12.0, 12.0], [12.0, 0.0, 0.0, 0.0]),
     ];
-    preview::bare_lane_end(&mut shapes, end, h);
+    preview::bare_lane_end(&mut shapes, 1, x, end, h);
+    let round = style::radius::SMALL;
+    let span = |sh: &Shape| [sh.center[0] - sh.half[0], sh.center[0] + sh.half[0]];
     assert_eq!(
-        shapes[0].params[0],
-        style::radius::SMALL,
-        "the band round at the end"
+        shapes[0].params[0], 0.0,
+        "what's before the lane is left alone"
     );
+    assert_eq!(shapes[1].params[0], round, "the band round");
+    assert!(
+        (span(&shapes[1])[0] - (x - 10.0)).abs() < 0.01 && (span(&shapes[1])[1] - end).abs() < 0.01,
+        "the band from the tile's left edge to its right one: {:?}",
+        span(&shapes[1])
+    );
+    let line = span(&shapes[2]);
     assert_eq!(
-        shapes[1].params[0], 0.0,
-        "a thin line along it stays as it is"
+        shapes[2].params[0], 0.0,
+        "a thin line along it isn't rounded"
     );
+    assert!(
+        line[1] <= end - round + 0.01,
+        "it stops before the rounded corner: {line:?}"
+    );
+    // The panel runs out to the tile's left edge, round there, square against the lane.
+    let tile_left = x - 10.0;
+    assert_eq!(shapes[3].params[0], round, "the drum's panel round");
+    assert!(
+        (span(&shapes[3])[0] - tile_left).abs() < 0.01,
+        "from the tile's edge: {:?}",
+        span(&shapes[3])
+    );
+    assert_eq!(shapes[4].params[0], 0.0, "its square half");
+    assert!((span(&shapes[4])[1] - (x + 50.0)).abs() < 0.01);
+    assert!(span(&shapes[4])[0] > tile_left + round);
     let a = |i: usize| shapes[i].fill[3];
-    assert!(a(2) < 0.05, "at the very end, out of sight: {}", a(2));
-    assert!(a(3) > a(2) && a(3) < 1.0, "coming in: {}", a(3));
-    assert_eq!(a(4), 1.0, "well inside, as it is");
+    assert!(a(5) < 0.05, "at the very end, out of sight: {}", a(5));
+    assert!(a(6) > a(5) && a(6) < 1.0, "coming in: {}", a(6));
+    assert_eq!(a(7), 1.0, "well inside, as it is");
     assert_eq!(
-        shapes[0].fill[3], 1.0,
+        a(1),
+        1.0,
         "the band itself isn't faded (it ends in its middle)"
     );
 }

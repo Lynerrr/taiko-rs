@@ -2207,7 +2207,7 @@ impl Preview {
         // Bare, the notes come in out of the lane's fading end, and the lane's own bands (as tall
         // as the tile, running to its end) are as round as the tile there.
         if self.bare {
-            bare_lane_end(&mut c.shapes[start..], notes_end, bh);
+            bare_lane_end(&mut c.shapes, start, bx, notes_end, bh);
         }
         if button.is_some() {
             // Song select only (download previews have no fullscreen view).
@@ -2242,10 +2242,12 @@ impl Preview {
                 );
             }
         }
+        // Bare, from the tile's left edge: the drum's panel runs out to it.
+        let clip_x = if self.bare { bx - LANE_FADE[0] } else { bx };
         let clip = crate::layout::Area {
-            x: bx / full_w,
+            x: clip_x / full_w,
             y: by / VIRTUAL_HEIGHT,
-            w: (notes_end - bx) / full_w,
+            w: (notes_end - clip_x) / full_w,
             h: bh / VIRTUAL_HEIGHT,
         };
         // Only the lane is clipped to the box.
@@ -2273,23 +2275,66 @@ pub(crate) fn bare_notes_end(lane_end: f32) -> f32 {
     lane_end + LANE_FADE[0]
 }
 
-/// Bare, the lane's shapes as drawn (to `notes_end`, `band_h` tall): the notes fade in over
-/// `LANE_FADE[1]` out of its end, and its own bands (as tall as the tile, running to its end)
-/// are as round as the tile.
-pub(crate) fn bare_lane_end(shapes: &mut [crate::render::Shape], notes_end: f32, band_h: f32) {
+/// Bare, the lane's shapes as drawn from `start` (from `lane_x` to `notes_end`, `band_h` tall)
+/// fitted to its tile: the notes fade in over `LANE_FADE[1]` out of its end, its own bands (as
+/// tall as the tile, running its length) run out to its edges and are as round, the drum's dark panel
+/// runs out to the tile's left edge and is as round there (square, it made the lane read as a
+/// square box on a dark picture), and the lines along it stop where the corners start rounding.
+pub(crate) fn bare_lane_end(
+    shapes: &mut Vec<crate::render::Shape>,
+    start: usize,
+    lane_x: f32,
+    notes_end: f32,
+    band_h: f32,
+) {
     let round = crate::style::radius::SMALL;
-    for sh in shapes {
+    let tile_left = lane_x - LANE_FADE[0];
+    let mut panels = Vec::new();
+    for sh in shapes.iter().skip(start) {
+        if sh.center[0] - sh.half[0] < lane_x + 60.0 && sh.half[1] * 2.0 >= band_h * 0.3 {
+            eprintln!(
+                "DBG lane_x={lane_x} c={:?} h={:?} p={:?} a={} fill={:?} bh={band_h}",
+                sh.center, sh.half, sh.params, sh.angle, sh.fill
+            );
+        }
+    }
+    for (i, sh) in shapes.iter_mut().enumerate().skip(start) {
         let t = ((notes_end - sh.center[0]) / LANE_FADE[1]).clamp(0.0, 1.0);
         let f = t * t * (3.0 - 2.0 * t);
         sh.fill[3] *= f;
         sh.border[3] *= f;
-        let band = sh.params == [0.0; 4]
-            && sh.angle == 0.0
-            && sh.center[0] + sh.half[0] >= notes_end - 0.5
-            && sh.half[1] * 2.0 >= band_h * 0.5;
-        if band {
-            sh.params[0] = round;
+        if sh.params != [0.0; 4] || sh.angle != 0.0 {
+            continue;
         }
+        let (left, right) = (sh.center[0] - sh.half[0], sh.center[0] + sh.half[0]);
+        let tall = sh.half[1] * 2.0 >= band_h * 0.5;
+        if tall && right >= notes_end - 0.5 {
+            // Out to the tile's left edge too, so it's round at both ends.
+            if (left - lane_x).abs() < 0.5 {
+                sh.center[0] = (tile_left + right) / 2.0;
+                sh.half[0] = (right - tile_left) / 2.0;
+            }
+            sh.params[0] = round;
+        } else if tall && (left - lane_x).abs() < 0.5 && right - left < (notes_end - lane_x) / 2.0 {
+            panels.push(i);
+        } else if !tall && left <= lane_x + 0.5 && right >= notes_end - 0.5 {
+            let (l, r) = (left.max(tile_left + round), right.min(notes_end - round));
+            sh.center[0] = (l + r) / 2.0;
+            sh.half[0] = (r - l) / 2.0;
+        }
+    }
+    // The panel out to the tile's edge, round; a square copy over its right half keeps it square
+    // against the lane.
+    for i in panels.into_iter().rev() {
+        let right = shapes[i].center[0] + shapes[i].half[0];
+        let mut square = shapes[i];
+        let sh = &mut shapes[i];
+        sh.center[0] = (tile_left + right) / 2.0;
+        sh.half[0] = (right - tile_left) / 2.0;
+        sh.params[0] = round;
+        square.center[0] = (sh.center[0] + right) / 2.0;
+        square.half[0] = (right - sh.center[0]) / 2.0;
+        shapes.insert(i + 1, square);
     }
 }
 
