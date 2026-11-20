@@ -1182,7 +1182,10 @@ fn the_own_pp_total_follows_the_server_after_a_play_settles() {
         "the settled total comes in after the play: {:?}",
         s.me
     );
-    assert!(seen.lock().unwrap().profiles >= 2, "asked on login and after the play");
+    assert!(
+        seen.lock().unwrap().profiles >= 2,
+        "asked on login and after the play"
+    );
 }
 
 /// The total changes on the server with no play from this game (a recalculation, an admin, a
