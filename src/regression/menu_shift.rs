@@ -261,6 +261,22 @@ fn without_animations_song_select_is_simply_there() {
     assert!(s.menu_shift.is_none() && s.on_menu());
 }
 
+/// Settings > System > Legacy menu (1.0's song select): song select comes and goes as in 1.0,
+/// animations on or not, with nothing behind it but the map's picture.
+#[test]
+fn with_the_legacy_menu_song_select_is_simply_there() {
+    let (mut s, _songs, mut now) = on_menu("menu-shift-legacy", true);
+    s.cfg.legacy_menu = true;
+    s.menu_click(0);
+    let c = run(&mut s, &mut now, 16);
+    assert!(s.menu_shift.is_none() && !s.on_menu());
+    assert!(left_of(&c, Hit::MenuItem(0)).is_none());
+    assert!(c.blur.is_none(), "no blurred routes behind it");
+    assert!(left_of(&c, Hit::ModsButton).is_some(), "1.0's Mods button");
+    press(&mut s, KeyCode::Escape, now);
+    assert!(s.menu_shift.is_none() && s.on_menu());
+}
+
 #[test]
 fn another_screen_leaves_no_camera_on_its_way() {
     let (mut s, _songs, mut now) = on_menu("menu-shift-away", true);

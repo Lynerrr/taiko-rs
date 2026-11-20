@@ -60,6 +60,8 @@ animations = false
 splash = false
 epilepsy_warning = false
 main_menu = false
+# song select as 1.0 drew it (Settings > System > Legacy menu)
+legacy_menu = true
 menu_notes = false
 # dims the song's notes on the main menu's lane, 0 (none) to 1 (hidden)
 menu_notes_dim = 0.40

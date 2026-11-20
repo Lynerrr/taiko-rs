@@ -1062,6 +1062,77 @@ impl Select {
     }
 
     /// The tabs over the list, one per source with maps, from (`x`, `y`) across `w`.
+    /// `draw_source_tabs` as it was in 1.0 (`Select::draw_classic`).
+    pub(crate) fn draw_source_tabs_classic(
+        &self,
+        c: &mut Canvas,
+        x: f32,
+        y: f32,
+        w: f32,
+        tabs: &[Source],
+    ) {
+        let tw = w / tabs.len() as f32;
+        let shown = self.shown_source();
+        let mut target = None;
+        for (k, &s) in tabs.iter().enumerate() {
+            let tx = x + k as f32 * tw;
+            let on = s == shown;
+            let hover = c.hovered(tx, y, tw, SOURCE_TAB_H);
+            if hover && !on {
+                c.rect(
+                    tx + 2.0,
+                    y + 2.0,
+                    tw - 4.0,
+                    SOURCE_TAB_H - 4.0,
+                    rgba(0x262634, 0.8),
+                );
+            }
+            // What the tab lists, the search and filters as they are.
+            let n = self.source_listed[s.index()];
+            let label = s.label();
+            let count = n.to_string();
+            let lw = Canvas::text_width(7.0, label) + 6.0 + Canvas::text_width(6.0, &count);
+            let lx = tx + (tw - lw - 9.0) / 2.0;
+            c.rect(
+                lx,
+                y + 6.5,
+                5.0,
+                5.0,
+                rgba(s.colour(), if on { 1.0 } else { 0.5 }),
+            );
+            let lx = lx + 9.0;
+            let col = if on {
+                0xffffff
+            } else if hover {
+                0xc8c8d8
+            } else {
+                0x8a8aa0
+            };
+            c.text(lx, y + 5.0, 7.0, rgba(col, 1.0), label);
+            c.text(
+                lx + Canvas::text_width(7.0, label) + 6.0,
+                y + 6.0,
+                6.0,
+                rgba(0x6f6f86, 1.0),
+                &count,
+            );
+            c.hit(tx, y, tw, SOURCE_TAB_H, Hit::SongSource(s.index()));
+            if on {
+                target = Some([tx + 2.0, y + 1.0, tw - 4.0, SOURCE_TAB_H - 3.0]);
+            }
+        }
+        c.rect(
+            x,
+            y + SOURCE_TAB_H,
+            w,
+            1.0,
+            rgba(crate::style::PANEL_EDGE, 1.0),
+        );
+        if let Some(rect) = target {
+            crate::style::selector(c, "song-source", rect);
+        }
+    }
+
     pub(crate) fn draw_source_tabs(&self, c: &mut Canvas, x: f32, y: f32, w: f32, tabs: &[Source]) {
         let tw = w / tabs.len() as f32;
         let shown = self.shown_source();

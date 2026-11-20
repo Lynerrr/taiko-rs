@@ -431,6 +431,9 @@ pub struct Config {
     pub epilepsy_warning: bool,
     /// Start on the main menu (off: straight to song select).
     pub main_menu: bool,
+    /// Settings > System > Legacy menu: song select as 1.0 drew it (a list of rows, the details
+    /// beside it, Mods, Random and Play under them), with no camera between it and the main menu.
+    pub legacy_menu: bool,
     /// The song's notes drift behind the main menu.
     pub menu_notes: bool,
     /// How much the song's notes on the main menu's lane are dimmed, 0 (as they are) to 1 (gone).
@@ -621,6 +624,7 @@ impl Default for Config {
             splash: true,
             epilepsy_warning: true,
             main_menu: true,
+            legacy_menu: false,
             menu_notes: true,
             menu_notes_dim: 0.0,
             guide_seen: false,
@@ -1269,6 +1273,7 @@ impl Config {
         // any order, and `offset_ms` may have been changed by an older build.
         let (mut old_offset, mut new_offset) = (None, None);
         let mut osu_scroll_speed = false;
+        let mut legacy_menu = None;
         for line in text.lines() {
             let line = line.trim();
             if line.starts_with('#') {
@@ -1348,6 +1353,7 @@ impl Config {
                 "splash" => cfg.splash = v != "false",
                 "epilepsy_warning" => cfg.epilepsy_warning = v != "false",
                 "main_menu" => cfg.main_menu = v != "false",
+                "legacy_menu" => legacy_menu = Some(v == "true"),
                 "menu_notes" => cfg.menu_notes = v != "false",
                 "menu_notes_dim" => {
                     cfg.menu_notes_dim = v.parse::<f32>().unwrap_or(0.0).clamp(0.0, 1.0)
@@ -1525,6 +1531,13 @@ impl Config {
         }
         // Scroll speed 1.0 used to be ~0.76x of osu!'s (at 16:9). Left at 1.0 it now simply
         // becomes osu!'s; a speed someone picked on purpose keeps looking (about) the same.
+        // Before 1.2 "Legacy menu" took the main menu away (`main_menu = false`): it now means 1.0's
+        // song select, which has the main menu.
+        match legacy_menu {
+            Some(on) => cfg.legacy_menu = on,
+            None if !cfg.main_menu => (cfg.legacy_menu, cfg.main_menu) = (true, true),
+            None => {}
+        }
         if !osu_scroll_speed && (cfg.scroll_speed - 1.0).abs() > 1e-3 {
             cfg.scroll_speed = ((cfg.scroll_speed * OLD_SCROLL_SPEED / SCROLL_STEP).round()
                 * SCROLL_STEP)
@@ -1777,6 +1790,8 @@ impl Config {
              splash = {}\n\
              epilepsy_warning = {}\n\
              main_menu = {}\n\
+             # song select as 1.0 drew it (Settings > System > Legacy menu)\n\
+             legacy_menu = {}\n\
              menu_notes = {}\n\
              # dims the song's notes on the main menu's lane, 0 (none) to 1 (hidden)\n\
              menu_notes_dim = {:.2}\n\
@@ -1859,6 +1874,7 @@ impl Config {
             self.splash,
             self.epilepsy_warning,
             self.main_menu,
+            self.legacy_menu,
             self.menu_notes,
             self.menu_notes_dim,
             self.guide_seen,

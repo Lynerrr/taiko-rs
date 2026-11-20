@@ -130,6 +130,7 @@ struct Section {
 #[cfg(test)]
 mod list_layout_tests;
 
+mod classic;
 pub mod lens;
 pub use lens::{Facets, Filters, LensItem, LensUi, Order, Source, Tabs, Token, course_colour};
 
@@ -383,6 +384,8 @@ pub struct Select {
     pub banner: bool,
     /// The Legacy menu setting: tabs on top, keys spelled out at the bottom.
     pub legacy: bool,
+    /// Drawn as in 1.0 (`Config::legacy_menu`): rows, not cards (`draw_classic`).
+    pub classic: bool,
     /// The way back leads to the main menu, not to a lobby.
     pub to_menu: bool,
     /// A mod's customization is open over the top of the screen: no way back to show.
@@ -473,6 +476,7 @@ struct FreeScroll {
 /// seen gliding, not jumping three rows on (which, the cards all alike, reads as standing still).
 const WHEEL_STEP: f32 = SONG_ROW_H * 3.0;
 const WHEEL_TAU: f32 = 110.0;
+const WHEEL_TAU_CLASSIC: f32 = 45.0;
 /// How far a notch past an end of the list pushes it before it springs back.
 const WHEEL_END_BUMP: f32 = 10.0;
 /// From a list moved by hand to a song picked in it: a longer glide the farther it goes.
@@ -590,6 +594,7 @@ impl Select {
             list_share: LIST_SHARE.2,
             banner: false,
             legacy: false,
+            classic: false,
             to_menu: true,
             covered: false,
             show_info: false,
@@ -1462,7 +1467,13 @@ impl Select {
     /// The wheel: moves the list `notches` on, the selection staying where it is.
     pub fn scroll_by(&mut self, notches: i32, library: &[Entry]) {
         let max = self.scroll_max;
-        let glide = self.free(library, WHEEL_TAU);
+        // 1.0's list jumped to where the wheel sent it.
+        let tau = if self.classic {
+            WHEEL_TAU_CLASSIC
+        } else {
+            WHEEL_TAU
+        };
+        let glide = self.free(library, tau);
         let goal = glide.goal + notches as f32 * WHEEL_STEP;
         // Past an end: a little push the list springs back from, so the wheel is never dead.
         let past = goal - goal.clamp(0.0, max);

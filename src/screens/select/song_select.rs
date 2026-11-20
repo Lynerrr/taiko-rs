@@ -5,6 +5,8 @@ use super::super::lobby::Lobby;
 use super::super::screen::{Frame, Key, Screen};
 use crate::*;
 
+mod classic;
+
 /// Song select (and the main menu over it).
 pub(crate) struct SongSelect;
 
@@ -295,6 +297,8 @@ impl Screen for SongSelect {
                 );
                 draw_menu(state, canvas, frame, Layer::Whole);
             }
+            // 1.0's song select: nothing behind it but the map's picture.
+            None if state.select.classic => classic::draw_songs_classic(state, canvas, frame),
             None => {
                 // The routes behind lean a little away from the pointer.
                 let routes = canvas.shapes.len();
@@ -1002,7 +1006,11 @@ pub(crate) const BG_FADE_MS: f32 = 400.0;
 /// Song select in the main menu's look on a computer, animations on: its picture behind
 /// leans and arrives (`background_lean`, `background_arrive`).
 fn moving_backdrop(state: &State) -> bool {
-    !state.select.legacy && !mobile::active() && state.scene.is_select() && render::animations()
+    !state.select.legacy
+        && !state.select.classic
+        && !mobile::active()
+        && state.scene.is_select()
+        && render::animations()
 }
 
 /// How the map's picture behind song select leans with the pointer (virtual units, the routes'
@@ -1041,7 +1049,7 @@ pub(crate) fn parallax_target((x, y): (f32, f32), width: f32) -> [f32; 2] {
 /// the menu: as far as the map's picture behind them (`State::background_blur`). Legacy and the
 /// phone layout keep them sharp.
 fn routes_blur(state: &State, cam: f32) -> f32 {
-    if state.select.legacy || crate::mobile::active() {
+    if state.select.legacy || state.select.classic || crate::mobile::active() {
         0.0
     } else {
         cam

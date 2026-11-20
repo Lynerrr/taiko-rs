@@ -94,6 +94,8 @@ pub fn skeleton(c: &mut Canvas, [x, y, w, h]: [f32; 4], radius: f32) {
 
 /// Corners, one scale for every surface of the main menu's look: the small things (key caps,
 /// chips' insides, tiles) and everything a card or strip big.
+pub(crate) mod classic;
+
 pub mod radius {
     pub const SMALL: f32 = 4.0;
     pub const CARD: f32 = 8.0;
