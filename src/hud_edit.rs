@@ -836,7 +836,7 @@ impl Editor {
             );
             c.text(ix + 4.0, y + 3.0, 7.5, rgba(0xffffff, 1.0), name);
             let cx = ix + 4.0 + settings::caret_x(7.5, name, *caret);
-            c.rect(cx, y + 2.0, 1.0, 9.0, rgba(0xffffff, 0.9));
+            c.caret(cx, y + 3.0, 7.5, rgba(0xffffff, 0.9));
         } else {
             let save = tr!("Save", "保存", "Сохр.");
             let new = tr!("New", "新規", "Новый");

@@ -170,6 +170,7 @@ pub(super) fn render_loop(
             pixel_scale,
             avatar_uploads,
             picture_uploads,
+            card_uploads,
         ) = {
             let mut s = lock(&state);
             if s.quit {
@@ -206,6 +207,7 @@ pub(super) fn render_loop(
                 if s.cfg.half_resolution { 2 } else { 1 },
                 s.avatars.take_uploads(),
                 s.pictures.take_uploads(),
+                s.card_pictures.take_uploads(),
             )
         };
         // GPU waits and uploads never hold the input/state mutex.
@@ -229,6 +231,9 @@ pub(super) fn render_loop(
         }
         for (slot, rgba) in picture_uploads {
             renderer.set_picture(slot, &rgba);
+        }
+        for (slot, rgba) in card_uploads {
+            renderer.set_card(slot, &rgba);
         }
         if let Some(atlas) = atlas {
             renderer.set_sprites(&atlas);
@@ -373,10 +378,14 @@ pub(super) fn render_loop(
                 s.bg_changed = Some(Instant::now());
             }
             renderer.bg_brightness = s.bg_brightness;
-            renderer.bg_blur = s.idle.amount();
+            renderer.bg_blur = s.background_blur();
+            renderer.bg_pan = crate::screens::select::song_select::background_lean(&s);
+            renderer.bg_arrive = crate::screens::select::song_select::background_arrive(&s);
             // A new background cross-fades from the previous one.
             let fade = if s.on_menu() {
                 MENU_BACKGROUND_FADE_MS
+            } else if renderer.bg_arrive > 0.0 {
+                crate::screens::select::song_select::BG_FADE_MS
             } else {
                 300.0
             };
@@ -428,6 +437,7 @@ pub(super) fn render_loop(
                 .map(|(range, r)| (range, to_fraction(r))),
         );
         renderer.disc = canvas.disc.map(|d| (d, vw));
+        renderer.blur = canvas.blur.clone();
         renderer.glitch = canvas.glitch;
         // Before the present, which may wait while the window is still hidden.
         if !first_frame_sent {
@@ -1188,6 +1198,7 @@ impl State {
             again: Default::default(),
             avatars,
             pictures: pictures::Pictures::default(),
+            card_pictures: crate::card_pictures::CardPictures::default(),
             admin: false,
             crash,
             crash_sent,
@@ -1231,6 +1242,11 @@ impl State {
             volume_save_at: None,
             splash,
             main_menu: None,
+            menu_shift: None,
+            song_routes: Default::default(),
+            song_routes_drain: None,
+            play_icon_at: None,
+            dice_roll: None,
             screen_fade: None,
             shown_scene: None,
             menu_notes: Default::default(),
@@ -1296,10 +1312,12 @@ impl State {
             me_relax: None,
             me_for: String::new(),
             me_fetch: Job::idle(),
+            me_due: None,
             board_online: false,
             profile: None,
             online_boards: std::collections::HashMap::new(),
             board_fetch: None,
+            sim_pp: None,
             pending_replay: None,
             changelog: None,
             pending_changelog,

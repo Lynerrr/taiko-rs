@@ -72,6 +72,8 @@ sort = title
 # the collection song select shows (own:name or osu:name; empty: all songs)
 collection = own:Warm Up
 kiai_effects = false
+# song select's preview shows the drum at the start of its lane
+preview_drum = false
 # GREAT hits without their flash and label (only OKs and misses show)
 hide_great = false
 # a play failed by Sudden Death or Perfect starts over at once
@@ -170,6 +172,10 @@ custom_move_asked = true
 show_converts = true
 # song select groups songs under headings (false: one list, by difficulty each difficulty on its own)
 song_headings = true
+# song select (main menu look) shows the library's counts and the device line
+select_info = true
+# song select's cards: their picture's colour fades to grey: off, right (towards the right) or left
+card_fade = left
 # song select's order under each heading (sort, title, artist, stars, length, bpm, added, played; desc after it: the other way round)
 song_order = title desc
 # the source song select lists: all, osu, tja or own (taiko.rs's maps)

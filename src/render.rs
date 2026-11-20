@@ -192,6 +192,10 @@ pub(crate) const SPRITE_BASE: f32 = 10.0;
 
 /// What a shape needs, besides its position, to come out mirrored left to right: half circles
 /// swap sides, and a drumroll's end cap turns around (the other sprites are round).
+/// A plain shape's kind (`params[3]`) for `Canvas::shade_across`: its fill sweeps from `fill`
+/// to `border` across it.
+pub const SHADE_ACROSS: f32 = 3.0;
+
 fn flip_x(sh: &mut Shape) {
     let sprite = |s: Sprite| SPRITE_BASE + s as usize as f32;
     // The drum's halves have their mirror images in the atlas.
@@ -202,7 +206,9 @@ fn flip_x(sh: &mut Shape) {
     // Turned the other way in the mirror (the pieces of a bent lane: left as they were, its
     // bends came out turned against the lane and cut into it).
     sh.angle = -sh.angle;
-    if (0.5..2.5).contains(&sh.params[3]) {
+    if sh.params[3] == SHADE_ACROSS {
+        std::mem::swap(&mut sh.fill, &mut sh.border);
+    } else if (0.5..2.5).contains(&sh.params[3]) {
         sh.params[3] = 3.0 - sh.params[3];
     } else if sh.params[3] == sprite(Sprite::RollEnd) {
         sh.angle += std::f32::consts::PI;
@@ -344,6 +350,33 @@ struct Globals {
     _pad2: [f32; 2],
 }
 
+impl Globals {
+    /// Pixel globals for an image `screen` big, `ppu` pixels to a unit, virtual (0, 0) at
+    /// `origin`.
+    fn new(screen: [f32; 2], ppu: f32, origin: [f32; 2]) -> Globals {
+        Globals {
+            screen_px: screen,
+            px_per_unit: ppu,
+            _pad: 0.0,
+            origin,
+            _pad2: [0.0; 2],
+        }
+    }
+}
+
+/// The part of a background image (uv rect) on the screen: its cover fit (`u` by `v` of it),
+/// `zoom` times closer, moved `pan` (fractions of the screen) the way the picture moves.
+fn bg_window(u: f32, v: f32, zoom: f32, pan: [f32; 2]) -> [f32; 4] {
+    let (u, v) = (u / zoom.max(1.0), v / zoom.max(1.0));
+    let (ox, oy) = (-pan[0] * u, -pan[1] * v);
+    [
+        0.5 - u / 2.0 + ox,
+        0.5 - v / 2.0 + oy,
+        0.5 + u / 2.0 + ox,
+        0.5 + v / 2.0 + oy,
+    ]
+}
+
 pub struct Renderer {
     /// None while there is no window to draw to (Android destroys it in the background).
     surface: Option<wgpu::Surface<'static>>,
@@ -364,6 +397,9 @@ pub struct Renderer {
     /// Profile pictures, a grid of `avatars::CELL` squares (`Renderer::set_avatar`).
     avatar_texture: wgpu::Texture,
     avatar_view: wgpu::TextureView,
+    /// Song select's card pictures, a grid of `CARD_CELL` strips (`Renderer::set_card`).
+    card_texture: wgpu::Texture,
+    card_view: wgpu::TextureView,
     instances: wgpu::Buffer,
     capacity: usize,
     supported_modes: Vec<wgpu::PresentMode>,
@@ -390,6 +426,12 @@ pub struct Renderer {
     pub bg_brightness: f32,
     /// How far the background has faded into its blurred copy, 0 (sharp) to 1 (the idle screen's).
     pub bg_blur: f32,
+    /// How much closer a new background starts as it fades in (0.04: 4% closer, easing to its
+    /// place).
+    pub bg_arrive: f32,
+    /// The background's lean with the pointer (virtual units) and how far it can lean at most
+    /// (the picture is drawn that much closer, so its edges never show).
+    pub bg_pan: [f32; 3],
     pub present: PresentChoice,
     pub adapter_name: String,
     /// The graphics API it draws with.
@@ -413,6 +455,14 @@ pub struct Renderer {
     upscale_capture: wgpu::RenderPipeline,
     /// TAIKO_PROFILE: how long the GPU spends on each frame (None if it can't tell).
     gpu_timer: Option<GpuTimer>,
+    /// The shapes this frame to draw through the blur, and how far (`Canvas::blur_since`).
+    pub blur: Option<(std::ops::Range<usize>, f32)>,
+    blur_fx: Option<BlurFx>,
+    blur_layout: wgpu::BindGroupLayout,
+    blur_down: wgpu::RenderPipeline,
+    blur_gauss: wgpu::RenderPipeline,
+    /// Indexed [capture].
+    blur_composite: [wgpu::RenderPipeline; 2],
 }
 
 /// GPU time of the frame's passes from timestamp queries, read back a few frames later so
@@ -670,6 +720,113 @@ struct Target<'a> {
     size: (u32, u32),
     clips: &'a [(std::ops::Range<usize>, [u32; 4])],
     hole: Option<[u32; 4]>,
+    /// Shapes drawn through the blur (`Canvas::blur_since`, already in `BlurFx`): the blurred
+    /// image goes in their place among the others.
+    blur: Option<std::ops::Range<u32>>,
+}
+
+/// How soft song select's note routes are behind it (`Canvas::blur_since`): the blur's spread
+/// (sigma) in virtual units, as soft as the map's picture reads behind them.
+pub const ROUTES_BLUR: f32 = 6.0;
+/// How many times the routes' image is halved before it is blurred (to 1/8 of the screen).
+const BLUR_HALVINGS: usize = 3;
+
+/// The blur's passes, each a full-screen triangle: `down` halves an image (one bilinear read
+/// between four texels averages them), `gauss` blurs along one axis (15 reads, `u.xy` apart,
+/// weights `exp(-k² u.z)`), `composite` puts the sharp image (`a`) or the blurred one (`b`),
+/// `u.x` of the way to it, over what is drawn (premultiplied, as the shapes are).
+const BLUR_SHADER: &str = r#"
+@group(0) @binding(0) var a: texture_2d<f32>;
+@group(0) @binding(1) var b: texture_2d<f32>;
+@group(0) @binding(2) var s: sampler;
+@group(0) @binding(3) var<uniform> u: vec4<f32>;
+
+struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> V {
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    var o: V;
+    o.pos = vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+    o.uv = vec2<f32>(p.x, 1.0 - p.y);
+    return o;
+}
+
+@fragment
+fn down(in: V) -> @location(0) vec4<f32> {
+    return textureSampleLevel(a, s, in.uv, 0.0);
+}
+
+@fragment
+fn gauss(in: V) -> @location(0) vec4<f32> {
+    var sum = vec4<f32>(0.0);
+    var total = 0.0;
+    for (var i = -7; i <= 7; i += 1) {
+        let k = f32(i);
+        let w = exp(-k * k * u.z);
+        sum += w * textureSampleLevel(a, s, in.uv + u.xy * k, 0.0);
+        total += w;
+    }
+    return sum / total;
+}
+
+@fragment
+fn composite(in: V) -> @location(0) vec4<f32> {
+    let sharp = textureSampleLevel(a, s, in.uv, 0.0);
+    let soft = textureSampleLevel(b, s, in.uv, 0.0);
+    return mix(sharp, soft, u.x);
+}
+"#;
+
+/// The images the blur goes through, sized for the image drawn to.
+struct BlurFx {
+    size: (u32, u32),
+    /// The blurred shapes drawn sharp, as big as the image.
+    sharp: wgpu::TextureView,
+    /// Halved copies of it; the last is blurred in place (through `across`).
+    halves: Vec<(wgpu::TextureView, (u32, u32))>,
+    across: wgpu::TextureView,
+    /// sharp -> halves[0] -> ... -> the last.
+    down: Vec<wgpu::BindGroup>,
+    /// The last half -> across (sideways), across -> the last half (up and down).
+    gauss: [wgpu::BindGroup; 2],
+    composite: wgpu::BindGroup,
+    /// The sideways and the up-and-down pass's steps and the composite's strength.
+    uniforms: [wgpu::Buffer; 3],
+}
+
+/// A pass of the blur's into `view`, cleared first.
+fn blur_pass<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+) -> wgpu::RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("blur"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    })
+}
+
+/// The blur's sideways and up-and-down passes over an image `small` big, a `div`th of the
+/// screen: per pass, its step (uv) and the weight's `1 / (2 sigma²)` in steps, for a spread of
+/// `sigma_px` screen pixels.
+fn gauss_steps(small: (u32, u32), div: f32, sigma_px: f32) -> [[f32; 4]; 2] {
+    let sigma = (sigma_px / div).max(0.5);
+    // 15 reads cover about three sigmas each way.
+    let spacing = (sigma * 3.0 / 7.0).max(1.0);
+    let k = 1.0 / (2.0 * (sigma / spacing).powi(2));
+    [
+        [spacing / small.0.max(1) as f32, 0.0, k, 0.0],
+        [0.0, spacing / small.1.max(1) as f32, k, 0.0],
+    ]
 }
 
 /// A background image on the GPU.
@@ -684,8 +841,8 @@ struct BgLayer {
     disc_uniform: wgpu::Buffer,
 }
 
-/// The blurred copy's height (pixels): each is about 1/48 of the picture, then box-blurred.
-const BLUR_ROWS: u32 = 48;
+/// The blurred copy's height (pixels): each is about 1/64 of the picture, then box-blurred.
+const BLUR_ROWS: u32 = 64;
 
 /// The size of a background's blurred copy: `BLUR_ROWS` high, its aspect kept.
 fn blurred_size(w: u32, h: u32) -> (u32, u32) {
@@ -827,6 +984,67 @@ fn fs(i: V) -> @location(0) vec4<f32> {
 
 /// The shapes shader, its `sprites` array as long as there are sprites and the font atlas laid
 /// out like `font::atlas`.
+/// Puts a card's picture (a `CARD_CELL` strip, premultiplied RGBA) in `slot` of the cards'
+/// texture.
+fn write_card(queue: &wgpu::Queue, texture: &wgpu::Texture, slot: u32, rgba: &[u8]) {
+    let [w, h] = CARD_CELL;
+    if slot >= CARD_SLOTS || rgba.len() != (w * h * 4) as usize {
+        return;
+    }
+    let per = CARD_SIDE[0] / w;
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: slot % per * w,
+                y: slot / per * h,
+                z: 0,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * w),
+            rows_per_image: Some(h),
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+/// The cards' texture (`CARD_SIDE`), empty.
+fn card_texture(device: &wgpu::Device) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("card pictures"),
+        size: wgpu::Extent3d {
+            width: CARD_SIDE[0],
+            height: CARD_SIDE[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+/// The stages of the shape shader that read each of its bindings: the globals (0) the vertex
+/// stage, the rest the fragment stage.
+fn shape_binding_stages(binding: u32) -> wgpu::ShaderStages {
+    if binding == 0 {
+        wgpu::ShaderStages::VERTEX
+    } else {
+        wgpu::ShaderStages::FRAGMENT
+    }
+}
+
 fn shape_shader() -> String {
     SHADER
         .replace("SPRITE_COUNT", &SPRITES.to_string())
@@ -844,18 +1062,51 @@ fn shape_shader() -> String {
         .replace("AVATAR_CELL", &crate::avatars::CELL.to_string())
         .replace("MEDIA_SIDE", &MEDIA_SIDE.to_string())
         .replace("PICTURE_CELL", &PICTURE_CELL.to_string())
+        .replace("CARD_CELL_X", &CARD_CELL[0].to_string())
+        .replace("CARD_CELL_Y", &CARD_CELL[1].to_string())
+        .replace("CARD_SIDE_X", &CARD_SIDE[0].to_string())
+        .replace("CARD_SIDE_Y", &CARD_SIDE[1].to_string())
 }
 
 /// The side of the texture that holds the profile pictures (its top left `PICTURE_CELL` square)
-/// and a map's own pictures (the other squares, `Renderer::set_picture`).
+/// and a map's own pictures (the other squares, `Renderer::set_picture`). On a desktop it's 5 by
+/// 5 squares of 819 pixels: a map's picture across song select's cards and banner stays sharp,
+/// and there's room for the cards on screen and the ones the list is on its way to (a 64 MB
+/// texture). A phone keeps 4 by 4 of 512 (16 MB).
+#[cfg(not(target_os = "android"))]
+const MEDIA_SIDE: u32 = 4096;
+#[cfg(not(target_os = "android"))]
+const PICTURE_GRID: u32 = 5;
+#[cfg(target_os = "android")]
 const MEDIA_SIDE: u32 = 2048;
+#[cfg(target_os = "android")]
+const PICTURE_GRID: u32 = 4;
 /// The side of one map picture's square in that texture.
-pub const PICTURE_CELL: u32 = 512;
+pub const PICTURE_CELL: u32 = MEDIA_SIDE / PICTURE_GRID;
 /// How many map pictures fit at once.
 pub const PICTURE_SLOTS: u32 = (MEDIA_SIDE / PICTURE_CELL) * (MEDIA_SIDE / PICTURE_CELL) - 1;
 const _: () = assert!(crate::avatars::GRID * crate::avatars::CELL <= PICTURE_CELL);
 /// `Shape::params` w for map picture `slot` is -`PICTURE_BASE` - slot.
 const PICTURE_BASE: f32 = 1000.0;
+
+/// One of song select's card pictures: the middle strip of a map's picture, as wide for its
+/// height as a card (`Renderer::set_card`). They have a texture of their own, of hundreds of
+/// strips, so the cards on screen and the ones the list is heading to are all there at once.
+#[cfg(not(target_os = "android"))]
+pub const CARD_CELL: [u32; 2] = [1024, 64];
+#[cfg(not(target_os = "android"))]
+const CARD_SIDE: [u32; 2] = [4096, 4096];
+#[cfg(target_os = "android")]
+pub const CARD_CELL: [u32; 2] = [512, 32];
+#[cfg(target_os = "android")]
+const CARD_SIDE: [u32; 2] = [2048, 1024];
+/// How many card pictures fit at once.
+pub const CARD_SLOTS: u32 = (CARD_SIDE[0] / CARD_CELL[0]) * (CARD_SIDE[1] / CARD_CELL[1]);
+/// A card picture's width over its height.
+pub const CARD_ASPECT: f32 = CARD_CELL[0] as f32 / CARD_CELL[1] as f32;
+/// `Shape::params` w for card picture `slot` is -`CARD_BASE` - slot.
+const CARD_BASE: f32 = 100_000.0;
+const _: () = assert!(CARD_BASE > PICTURE_BASE + PICTURE_SLOTS as f32);
 
 const SHADER: &str = r#"
 struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32, origin: vec2<f32>, _pad2: vec2<f32> };
@@ -865,6 +1116,7 @@ struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32, origin: vec2
 @group(0) @binding(3) var samp: sampler;
 @group(0) @binding(4) var font: texture_2d<f32>;
 @group(0) @binding(5) var avatars: texture_2d<f32>;
+@group(0) @binding(6) var cards: texture_2d<f32>;
 
 struct Inst {
     @location(0) center: vec2<f32>,
@@ -930,6 +1182,29 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 
 fn shade(in: VOut) -> vec4<f32> {
+    if (in.params.w < -99999.5) {
+        // A card's picture (premultiplied): its strip stretched over the quad, tinted by fill.
+        let slot = u32(-in.params.w - 99999.5);
+        let per = CARD_SIDE_Xu / CARD_CELL_Xu;
+        let cell = vec2<f32>(f32(slot % per), f32(slot / per));
+        let size = vec2<f32>(f32(CARD_CELL_X), f32(CARD_CELL_Y));
+        let edge = vec2<f32>(0.5) / size;
+        // The part of the strip the rect shows (`Canvas::card_picture`): `k` of its width, or
+        // `-k` of its height.
+        let k = in.params.z / max(in.params.y, 1e-6);
+        let part = select(vec2<f32>(1.0, -k), vec2<f32>(k, 1.0), k > 0.0);
+        let uv = clamp(in.local / (2.0 * in.half) * part + 0.5, edge, vec2<f32>(1.0) - edge);
+        let side = vec2<f32>(f32(CARD_SIDE_X), f32(CARD_SIDE_Y));
+        var t = textureSampleLevel(cards, samp, (cell + uv) * size / side, 0.0);
+        // Its colour going to grey across it (`border`: how grey at the left and right edges).
+        let across = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
+        let grey = mix(in.border.x, in.border.y, across);
+        let luma = dot(t.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        t = vec4<f32>(mix(t.rgb, vec3<f32>(luma), grey), t.a);
+        let r = min(in.params.x, min(in.half.x, in.half.y));
+        let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
+        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover;
+    }
     if (in.params.w < -999.5) {
         // A map's picture (premultiplied), its square stretched over the quad, tinted by fill.
         let slot = u32(-in.params.w - 999.5) + 1u;
@@ -938,7 +1213,15 @@ fn shade(in: VOut) -> vec4<f32> {
         let edge = 0.5 / f32(PICTURE_CELL);
         let uv = clamp(in.local / (2.0 * in.half) + 0.5, vec2<f32>(edge), vec2<f32>(1.0 - edge));
         let t = textureSampleLevel(avatars, samp, (cell + uv) * f32(PICTURE_CELL) / f32(MEDIA_SIDE), 0.0);
-        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a;
+        var cover = 1.0;
+        if (in.params.y > 0.0) {
+            // `Canvas::picture_cover_round_top`: the rect it covers is .yz half, its top
+            // corners .x round.
+            let b = vec2<f32>(in.params.y, in.params.z);
+            let r = select(0.0, min(in.params.x, min(b.x, b.y)), in.local.y < 0.0);
+            cover = clamp(0.5 - sd_round_box(in.local, b, r), 0.0, 1.0);
+        }
+        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover;
     }
     if (in.params.w < -0.5) {
         // A profile picture (premultiplied) from its cell of the avatar texture, rounded.
@@ -1011,13 +1294,20 @@ fn shade(in: VOut) -> vec4<f32> {
         color = vec4<f32>(in.fill.rgb, in.fill.a * a * a);
     } else {
         let coverage = clamp(0.5 - d, 0.0, 1.0);
-        let bw = in.params.y;
-        let inner = clamp(0.5 - (d + bw), 0.0, 1.0);
-        let c = mix(in.border, in.fill, select(1.0, inner, bw > 0.0));
-        color = vec4<f32>(c.rgb, c.a * coverage);
+        if (in.params.w > 2.5 && in.params.w < 3.5) {
+            // `Canvas::shade_across`: fill at the left edge, border at the right.
+            let u = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
+            let c = mix(in.fill, in.border, u);
+            color = vec4<f32>(c.rgb, c.a * coverage);
+        } else {
+            let bw = in.params.y;
+            let inner = clamp(0.5 - (d + bw), 0.0, 1.0);
+            let c = mix(in.border, in.fill, select(1.0, inner, bw > 0.0));
+            color = vec4<f32>(c.rgb, c.a * coverage);
+        }
     }
     let side = in.params.w;
-    if (side > 0.5) {
+    if (side > 0.5 && side < 2.5) {
         let dir = select(-1.0, 1.0, side > 1.5);
         color.a *= clamp(0.5 + in.local.x * dir, 0.0, 1.0);
     }
@@ -1176,11 +1466,11 @@ impl Renderer {
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
-                uniform(0, wgpu::ShaderStages::VERTEX),
-                uniform(1, wgpu::ShaderStages::FRAGMENT),
+                uniform(0, shape_binding_stages(0)),
+                uniform(1, shape_binding_stages(1)),
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: shape_binding_stages(2),
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -1190,13 +1480,13 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: shape_binding_stages(3),
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: shape_binding_stages(4),
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -1206,7 +1496,17 @@ impl Renderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: shape_binding_stages(5),
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: shape_binding_stages(6),
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -1244,6 +1544,8 @@ impl Renderer {
             view_formats: &[],
         });
         let avatar_view = avatar_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let card_texture = card_texture(&device);
+        let card_view = card_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = Self::shape_bind_group(
             &device,
             &queue,
@@ -1253,6 +1555,7 @@ impl Renderer {
             &sampler,
             &font_view,
             &avatar_view,
+            &card_view,
             &Atlas::default(),
         );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1513,6 +1816,84 @@ impl Renderer {
         };
         let upscale_pipeline = make_upscale(format);
         let upscale_capture = make_upscale(wgpu::TextureFormat::Rgba8Unorm);
+        let texture_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let blur_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blur"),
+            entries: &[
+                texture_entry(0),
+                texture_entry(1),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blur"),
+            source: wgpu::ShaderSource::Wgsl(BLUR_SHADER.into()),
+        });
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&blur_layout)],
+            immediate_size: 0,
+        });
+        let make_blur = |entry: &str, format: wgpu::TextureFormat, blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("blur"),
+                layout: Some(&blur_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &blur_shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &blur_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let blur_down = make_blur("down", format, None);
+        let blur_gauss = make_blur("gauss", format, None);
+        let blur_composite = [format, wgpu::TextureFormat::Rgba8Unorm].map(|f| {
+            make_blur(
+                "composite",
+                f,
+                Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            )
+        });
 
         let gpu_timer = time_gpu.then(|| GpuTimer::new(&device, &queue));
         let mut r = Renderer {
@@ -1531,6 +1912,8 @@ impl Renderer {
             font_revision: 0,
             avatar_texture,
             avatar_view,
+            card_texture,
+            card_view,
             instances,
             capacity,
             supported_modes: caps.present_modes,
@@ -1546,6 +1929,8 @@ impl Renderer {
             bg_mix: 1.0,
             bg_brightness: 0.0,
             bg_blur: 0.0,
+            bg_arrive: 0.0,
+            bg_pan: [0.0; 3],
             present,
             adapter_name,
             backend: adapter.get_info().backend,
@@ -1558,6 +1943,12 @@ impl Renderer {
             upscale_pipeline,
             upscale_capture,
             gpu_timer,
+            blur: None,
+            blur_fx: None,
+            blur_layout,
+            blur_down,
+            blur_gauss,
+            blur_composite,
         };
         r.set_present(present);
         Ok(r)
@@ -1597,6 +1988,7 @@ impl Renderer {
             &self.sampler,
             &self.font_view,
             &self.avatar_view,
+            &self.card_view,
             atlas,
         );
     }
@@ -1633,6 +2025,11 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
+    }
+
+    /// Puts a card's picture (a `CARD_CELL` strip, premultiplied RGBA) in `slot`.
+    pub fn set_card(&mut self, slot: u32, rgba: &[u8]) {
+        write_card(&self.queue, &self.card_texture, slot, rgba);
     }
 
     /// Puts a map's picture (`PICTURE_CELL` square, premultiplied RGBA) in `slot`.
@@ -1678,6 +2075,7 @@ impl Renderer {
         sampler: &wgpu::Sampler,
         font: &wgpu::TextureView,
         avatars: &wgpu::TextureView,
+        cards: &wgpu::TextureView,
         atlas: &Atlas,
     ) -> wgpu::BindGroup {
         // The texture can't be empty: no images is one transparent pixel.
@@ -1746,6 +2144,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(avatars),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(cards),
                 },
             ],
         })
@@ -2138,29 +2540,18 @@ impl Renderer {
         let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = flatten_clips(clips)
             .into_iter()
             .map(|(range, r)| {
-                let (sw, sh) = (w as f32, h as f32);
-                let x = (ax + r[0] * aw).floor().clamp(0.0, sw - 1.0);
-                let y = (ay + r[1] * ah).floor().clamp(0.0, sh - 1.0);
-                let w = (r[2] * aw).ceil().clamp(1.0, sw - x);
-                let h = (r[3] * ah).ceil().clamp(1.0, sh - y);
                 // Nothing of it shows (an inner clip outside its outer one): no size, not drawn.
                 if r[2] <= 0.0 || r[3] <= 0.0 {
                     return (range, [0; 4]);
                 }
-                (range, [x as u32, y as u32, w as u32, h as u32])
+                (range, scissor([ax, ay, aw, ah], r, [w, h]))
             })
             .collect();
         if shapes.len() > self.capacity {
             self.capacity = shapes.len().next_power_of_two().min(self.shape_limit());
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
-        let globals = Globals {
-            screen_px: [w as f32, h as f32],
-            px_per_unit: ah / VIRTUAL_HEIGHT,
-            _pad: 0.0,
-            origin: [ax, ay],
-            _pad2: [0.0; 2],
-        };
+        let globals = Globals::new([w as f32, h as f32], ah / VIRTUAL_HEIGHT, [ax, ay]);
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !shapes.is_empty() {
@@ -2174,7 +2565,16 @@ impl Renderer {
         let mix = self.bg_mix.clamp(0.0, 1.0);
         let prev_alpha = if self.bg.is_some() { 1.0 } else { 1.0 - mix };
         let screen = w as f32 / h.max(1) as f32;
-        for (layer, alpha) in [(&mut self.bg_prev, prev_alpha), (&mut self.bg, mix)] {
+        // Leaning with the pointer: drawn as much closer as it can lean, moved by the lean.
+        let [px, py, room] = self.bg_pan;
+        let lean_zoom = 1.0 / (1.0 - 2.0 * room.max(0.0) / VIRTUAL_HEIGHT).max(0.5);
+        let pan = [px / (screen * VIRTUAL_HEIGHT), py / VIRTUAL_HEIGHT];
+        // A new picture comes in a little closer, easing to its place as it fades in.
+        let arrive = 1.0 + self.bg_arrive * (1.0 - mix).powi(3);
+        for (layer, alpha, zoom) in [
+            (&mut self.bg_prev, prev_alpha, lean_zoom),
+            (&mut self.bg, mix, lean_zoom * arrive),
+        ] {
             if let Some(l) = layer {
                 // "Cover" fit: crop the image's long side so it fills the screen without stretching.
                 let (u, v) = if l.aspect > screen {
@@ -2182,11 +2582,12 @@ impl Renderer {
                 } else {
                     (1.0, l.aspect / screen)
                 };
+                let [u0, v0, u1, v1] = bg_window(u, v, zoom, pan);
                 let uniform = [
-                    (1.0 - u) / 2.0,
-                    (1.0 - v) / 2.0,
-                    (1.0 + u) / 2.0,
-                    (1.0 + v) / 2.0,
+                    u0,
+                    v0,
+                    u1,
+                    v1,
                     self.bg_brightness,
                     alpha,
                     self.bg_blur.clamp(0.0, 1.0),
@@ -2198,6 +2599,15 @@ impl Renderer {
             }
         }
         self.write_disc();
+        // Shapes to draw through the blur: drawn and blurred first, put in their place after.
+        let blur = self
+            .blur
+            .take()
+            .filter(|(r, s)| r.start < r.end && r.end <= shapes.len() && *s > 0.0)
+            .map(|(r, s)| (r.start as u32..r.end as u32, s));
+        if blur.is_some() {
+            self.ensure_blur(w, h);
+        }
         // The pixels wholly inside the opaque rect (its anti-aliased edge still shows what is
         // under it).
         let hole = opaque.and_then(|[x, y, rw, rh]| {
@@ -2219,11 +2629,15 @@ impl Renderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        if let Some((range, strength)) = &blur {
+            self.encode_blur(&mut encoder, range.clone(), *strength, ah / VIRTUAL_HEIGHT);
+        }
         let timer = self.gpu_timer.as_ref();
         let into = Target {
             size: (w, h),
             clips: &clip,
             hole,
+            blur: blur.map(|(r, _)| r),
         };
         match self.low.as_ref().filter(|_| through_image) {
             Some(low) => {
@@ -2384,28 +2798,18 @@ impl Renderer {
         let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = flatten_clips(clips)
             .into_iter()
             .map(|(range, r)| {
-                let (sw, sh) = (w as f32, h as f32);
-                let x = (r[0] * sw).floor().clamp(0.0, sw - 1.0);
-                let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
-                let cw = (r[2] * sw).ceil().clamp(1.0, sw - x);
-                let ch = (r[3] * sh).ceil().clamp(1.0, sh - y);
                 if r[2] <= 0.0 || r[3] <= 0.0 {
                     return (range.clone(), [0; 4]);
                 }
-                (range.clone(), [x as u32, y as u32, cw as u32, ch as u32])
+                let area = [0.0, 0.0, w as f32, h as f32];
+                (range.clone(), scissor(area, r, [w, h]))
             })
             .collect();
         if shapes.len() > self.capacity {
             self.capacity = shapes.len().next_power_of_two().min(self.shape_limit());
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
-        let globals = Globals {
-            screen_px: [w as f32, h as f32],
-            px_per_unit: h as f32 / VIRTUAL_HEIGHT,
-            _pad: 0.0,
-            origin: [0.0; 2],
-            _pad2: [0.0; 2],
-        };
+        let globals = Globals::new([w as f32, h as f32], h as f32 / VIRTUAL_HEIGHT, [0.0; 2]);
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !shapes.is_empty() {
@@ -2464,6 +2868,7 @@ impl Renderer {
                 size: (w, h),
                 clips: &clip,
                 hole: None,
+                blur: None,
             },
             None,
         );
@@ -2508,6 +2913,144 @@ impl Renderer {
     }
 
     /// (Re)creates the half-resolution image when the screen size changed.
+    /// The blur's images for an image `width` x `height` (`BlurFx`).
+    fn ensure_blur(&mut self, width: u32, height: u32) {
+        if self
+            .blur_fx
+            .as_ref()
+            .is_some_and(|b| b.size == (width, height))
+        {
+            return;
+        }
+        let image = |label: &str, (w, h): (u32, u32)| {
+            self.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    // The screen's format, so the shape pipeline draws into it.
+                    format: self.config.format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let sharp = image("blur sharp", (width, height));
+        let mut halves = Vec::new();
+        let mut size = (width, height);
+        for _ in 0..BLUR_HALVINGS {
+            size = (size.0.div_ceil(2).max(1), size.1.div_ceil(2).max(1));
+            halves.push((image("blur half", size), size));
+        }
+        let across = image("blur across", size);
+        let uniforms = [0, 1, 2].map(|_| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("blur"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        let group = |a: &wgpu::TextureView, b: &wgpu::TextureView, u: &wgpu::Buffer| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blur"),
+                layout: &self.blur_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(a),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(b),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.bg_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: u.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+        let mut down = Vec::new();
+        let mut from = &sharp;
+        for (half, _) in &halves {
+            down.push(group(from, from, &uniforms[2]));
+            from = half;
+        }
+        let last = &halves[halves.len() - 1].0;
+        let gauss = [
+            group(last, last, &uniforms[0]),
+            group(&across, &across, &uniforms[1]),
+        ];
+        let composite = group(&sharp, last, &uniforms[2]);
+        self.blur_fx = Some(BlurFx {
+            size: (width, height),
+            sharp,
+            halves,
+            across,
+            down,
+            gauss,
+            composite,
+            uniforms,
+        });
+    }
+
+    /// Draws shapes `range` (in the instance buffer) into the blur's sharp image, then halves
+    /// and blurs it, `ROUTES_BLUR` units (`ppu` pixels each) soft, for `encode_pass` to put in
+    /// their place `strength` of the way from sharp to blurred.
+    fn encode_blur(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        range: std::ops::Range<u32>,
+        strength: f32,
+        ppu: f32,
+    ) {
+        let Some(fx) = &self.blur_fx else { return };
+        let (last, small) = &fx.halves[fx.halves.len() - 1];
+        let div = fx.size.1 as f32 / small.1.max(1) as f32;
+        let [across, up] = gauss_steps(*small, div, ROUTES_BLUR * ppu);
+        self.queue
+            .write_buffer(&fx.uniforms[0], 0, bytemuck::cast_slice(&across));
+        self.queue
+            .write_buffer(&fx.uniforms[1], 0, bytemuck::cast_slice(&up));
+        self.queue.write_buffer(
+            &fx.uniforms[2],
+            0,
+            bytemuck::cast_slice(&[strength.clamp(0.0, 1.0), 0.0, 0.0, 0.0]),
+        );
+        let begin = blur_pass;
+        {
+            let mut pass = begin(encoder, &fx.sharp);
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_vertex_buffer(0, self.instances.slice(..));
+            pass.draw(0..4, range);
+        }
+        for ((half, _), group) in fx.halves.iter().zip(&fx.down) {
+            let mut pass = begin(encoder, half);
+            pass.set_pipeline(&self.blur_down);
+            pass.set_bind_group(0, group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        for (view, group) in [(&fx.across, &fx.gauss[0]), (last, &fx.gauss[1])] {
+            let mut pass = begin(encoder, view);
+            pass.set_pipeline(&self.blur_gauss);
+            pass.set_bind_group(0, group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
     fn ensure_low(&mut self, width: u32, height: u32) {
         if self
             .low
@@ -2687,30 +3230,67 @@ impl Renderer {
             pass.set_bind_group(0, &l.disc_bind_group, &[]);
             pass.draw(0..4, 0..1);
         }
-        pass.set_pipeline(if capture {
-            &self.capture_pipeline
-        } else {
-            &self.pipeline
-        });
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.set_vertex_buffer(0, self.instances.slice(..));
+        let shapes = |pass: &mut wgpu::RenderPass<'_>| {
+            pass.set_pipeline(if capture {
+                &self.capture_pipeline
+            } else {
+                &self.pipeline
+            });
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_vertex_buffer(0, self.instances.slice(..));
+        };
+        shapes(&mut pass);
         // Unclipped runs between the clipped ranges.
+        let mut runs: Vec<(std::ops::Range<u32>, Option<[u32; 4]>)> = Vec::new();
         let mut at = 0u32;
         for (range, [x, y, w, h]) in target.clips {
             if (range.start as u32) > at {
-                pass.draw(0..4, at..range.start as u32);
+                runs.push((at..range.start as u32, None));
             }
             at = range.end as u32;
             if *w == 0 || *h == 0 {
                 continue;
             }
-            pass.set_scissor_rect(*x, *y, *w, *h);
-            pass.draw(0..4, range.start as u32..range.end as u32);
-            pass.set_scissor_rect(0, 0, size.0, size.1);
+            runs.push((range.start as u32..range.end as u32, Some([*x, *y, *w, *h])));
         }
         if (count as u32) > at {
-            pass.draw(0..4, at..count as u32);
+            runs.push((at..count as u32, None));
         }
+        let draw =
+            |pass: &mut wgpu::RenderPass<'_>, span: std::ops::Range<u32>, cut: Option<[u32; 4]>| {
+                if span.start >= span.end {
+                    return;
+                }
+                if let Some([x, y, w, h]) = cut {
+                    pass.set_scissor_rect(x, y, w, h);
+                }
+                pass.draw(0..4, span);
+                if cut.is_some() {
+                    pass.set_scissor_rect(0, 0, size.0, size.1);
+                }
+            };
+        // The blurred shapes aren't drawn themselves: their blurred image goes where they start.
+        let blur = target.blur.clone().zip(self.blur_fx.as_ref());
+        let (from, to) = blur
+            .as_ref()
+            .map_or((u32::MAX, u32::MAX), |(r, _)| (r.start, r.end));
+        let mut composite = blur.as_ref().map(|(_, fx)| &fx.composite);
+        let mut put_blur = |pass: &mut wgpu::RenderPass<'_>| {
+            if let Some(group) = composite.take() {
+                pass.set_pipeline(&self.blur_composite[capture as usize]);
+                pass.set_bind_group(0, group, &[]);
+                pass.draw(0..3, 0..1);
+                shapes(pass);
+            }
+        };
+        for (span, cut) in runs {
+            draw(&mut pass, span.start..span.end.min(from), cut);
+            if span.end > from {
+                put_blur(&mut pass);
+            }
+            draw(&mut pass, span.start.max(to)..span.end, cut);
+        }
+        put_blur(&mut pass);
     }
 }
 
@@ -2720,6 +3300,53 @@ impl Renderer {
 /// outer rect alone. Overlapping ranges after the first used to be dropped, so in a framed
 /// playfield (a play area smaller than the screen) each slice drew its whole copy of the lane
 /// unclipped, and the last one covered the notes.
+/// A clip rect (`r`, fractions of `area`: `[x, y, w, h]` in pixels of a `size` image) as a
+/// scissor in whole pixels, rounded in: never past its edges (rounded out, what it clips, a lane's
+/// notes against its tile's edge, stuck out by up to a pixel either side). At least 1 pixel.
+fn scissor(area: [f32; 4], r: [f32; 4], [w, h]: [u32; 2]) -> [u32; 4] {
+    // Float noise on an exact pixel edge isn't a pixel in.
+    const EPS: f32 = 1e-3;
+    let span = |o: f32, len: f32, from: f32, size: f32, limit: f32| {
+        let a = (o + from * len - EPS).ceil().clamp(0.0, limit - 1.0);
+        let b = (o + (from + size) * len + EPS)
+            .floor()
+            .clamp(a + 1.0, limit);
+        (a as u32, (b - a) as u32)
+    };
+    let (x, cw) = span(area[0], area[2], r[0], r[2], w as f32);
+    let (y, ch) = span(area[1], area[3], r[1], r[3], h as f32);
+    [x, y, cw, ch]
+}
+
+#[cfg(test)]
+mod scissor_tests {
+    use super::scissor;
+
+    #[test]
+    fn a_clip_is_rounded_in_to_whole_pixels_never_past_its_edges() {
+        let screen = [0.0, 0.0, 1000.0, 500.0];
+        // 100.4 .. 200.6 across, 50.5 .. 150.5 down: 101..200 and 51..150.
+        let r = [0.1004, 0.101, 0.1002, 0.2];
+        assert_eq!(scissor(screen, r, [1000, 500]), [101, 51, 99, 99]);
+        // On whole pixels: exactly them, float noise or not.
+        let r = [0.1, 0.1, 0.2, 0.2];
+        assert_eq!(scissor(screen, r, [1000, 500]), [100, 50, 200, 100]);
+        // In an interface area inset in the image (a letterbox), from its corner.
+        let inset = [20.0, 10.0, 960.0, 480.0];
+        assert_eq!(
+            scissor(inset, [0.5, 0.5, 0.25, 0.25], [1000, 500]),
+            [500, 250, 240, 120]
+        );
+        // Thinner than a pixel, or off the image: still a pixel, on it.
+        assert_eq!(
+            scissor(screen, [0.5004, 0.0, 0.0001, 1.0], [1000, 500])[2],
+            1
+        );
+        let off = scissor(screen, [1.2, 0.0, 0.1, 1.0], [1000, 500]);
+        assert!(off[0] + off[2] <= 1000, "{off:?}");
+    }
+}
+
 fn flatten_clips(
     clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
 ) -> Vec<(std::ops::Range<usize>, [f32; 4])> {
@@ -2950,8 +3577,103 @@ thread_local! {
 
 /// Animations in the frame being built use this time instead of each reading the clock (which
 /// can cost microseconds a read). Per thread: the render thread sets it before each frame.
+/// The text caret's width, how long it's on (and then off) as it blinks, how long after a move it
+/// stops blinking, how long its trail's leading and trailing edges take to get to it, how
+/// strong the trail is at the caret, and how long a caret not drawn is forgotten after (the
+/// next one shows where it is, no trail).
+const CARET_W: f32 = 1.0;
+const CARET_BLINK_MS: f32 = 500.0;
+const CARET_BLINK_STOP_MS: f32 = 15_000.0;
+const CARET_TRAIL_MS: (f32, f32) = (100.0, 400.0);
+const CARET_TRAIL_ALPHA: f32 = 0.6;
+const CARET_GONE_MS: f32 = 200.0;
+
+/// The text caret as last drawn: its trail's left and right edges chasing it, its line, and
+/// when it last moved.
+struct CaretTrail {
+    x: f32,
+    top: f32,
+    edges: [f32; 2],
+    moved: std::time::Instant,
+    drawn: std::time::Instant,
+}
+
+impl CaretTrail {
+    fn new(x: f32, top: f32, now: std::time::Instant) -> CaretTrail {
+        CaretTrail {
+            x,
+            top,
+            edges: [x, x + CARET_W],
+            moved: now,
+            drawn: now,
+        }
+    }
+}
+
+/// The caret's state between frames; one caret is shown at a time.
+#[derive(Default)]
+struct Caret(Option<CaretTrail>);
+
+impl Caret {
+    /// The caret drawn at `x` on the line from `top` at `now`: its trail's edges, and when it
+    /// last moved. A caret on another line, or one not drawn for a while, starts afresh.
+    fn step(
+        &mut self,
+        x: f32,
+        top: f32,
+        now: std::time::Instant,
+    ) -> ([f32; 2], std::time::Instant) {
+        let ms = |a: std::time::Instant, b: std::time::Instant| {
+            a.saturating_duration_since(b).as_secs_f32() * 1000.0
+        };
+        let fresh = self
+            .0
+            .as_ref()
+            .is_none_or(|t| (t.top - top).abs() > 0.5 || ms(now, t.drawn) > CARET_GONE_MS);
+        if fresh {
+            self.0 = Some(CaretTrail::new(x, top, now));
+        }
+        let t = self.0.as_mut().expect("just set");
+        if (t.x - x).abs() > 0.01 {
+            t.x = x;
+            t.moved = now;
+        }
+        let dt = ms(now, t.drawn).min(100.0);
+        t.drawn = now;
+        // The edge on the side it went is the leading one, fast; the other trails, slow.
+        let right = x > (t.edges[0] + t.edges[1]) / 2.0 - CARET_W / 2.0;
+        let targets = [x, x + CARET_W];
+        for (k, edge) in t.edges.iter_mut().enumerate() {
+            let leading = (k == 1) == right;
+            let ms = if leading {
+                CARET_TRAIL_MS.0
+            } else {
+                CARET_TRAIL_MS.1
+            };
+            // 1% of the way left when its time is up.
+            let step = 1.0 - (-dt * std::f32::consts::LN_10 * 2.0 / ms).exp();
+            *edge += (targets[k] - *edge) * step;
+            if (targets[k] - *edge).abs() < 0.05 {
+                *edge = targets[k];
+            }
+        }
+        (t.edges, t.moved)
+    }
+}
+
+thread_local! {
+    static CARET: std::cell::RefCell<Caret> = std::cell::RefCell::new(Caret::default());
+}
+
 pub fn set_frame_time(now: Option<std::time::Instant>) {
     FRAME_TIME.with(|t| t.set(now));
+}
+
+/// The frame's time (what the run loop set), or the clock's outside a frame.
+pub fn frame_now() -> std::time::Instant {
+    FRAME_TIME
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(std::time::Instant::now)
 }
 
 /// Eased-out progress (0 to 1) of an animation started at `since` lasting `ms`; 1 with
@@ -2960,9 +3682,7 @@ pub fn progress(since: std::time::Instant, ms: f32) -> f32 {
     if !animations() {
         return 1.0;
     }
-    let now = FRAME_TIME
-        .with(std::cell::Cell::get)
-        .unwrap_or_else(std::time::Instant::now);
+    let now = frame_now();
     let t = (now.saturating_duration_since(since).as_secs_f32() * 1000.0 / ms).clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)
 }
@@ -3015,6 +3735,8 @@ pub struct Canvas<H> {
     /// A plain opaque rect (shape index) that hides the background under it, so the renderer
     /// needn't draw the background there (`opaque_rect`).
     pub opaque: Option<usize>,
+    /// Shapes drawn through a blur, and how far from sharp (0) to blurred (1) (`blur_since`).
+    pub blur: Option<(std::ops::Range<usize>, f32)>,
     /// Which profile pictures the renderer has, by lowercased name: their slots.
     pub avatar_slots: std::sync::Arc<std::collections::HashMap<String, u32>>,
     /// Pictures asked for this frame (lowercased names), so they get fetched.
@@ -3023,9 +3745,18 @@ pub struct Canvas<H> {
     pub picture_slots: std::sync::Arc<std::collections::HashMap<String, (u32, f32)>>,
     /// Map pictures drawn this frame (file names, lowercase), for the app to load.
     pub pictures_wanted: Vec<String>,
+    /// The files behind the pictures drawn by path this frame (`picture_cover`): key and path.
+    pub picture_paths: Vec<(String, std::path::PathBuf)>,
     /// Where the animated ones are in their frames (ms since their layer began), by name; the
     /// first layer to show a picture in a frame sets it.
     pub picture_times: Vec<(String, f64)>,
+    /// Song select's card pictures in their texture, by picture key (`path_picture_key`): slots.
+    pub card_slots: std::sync::Arc<std::collections::HashMap<String, u32>>,
+    /// The card pictures' average colours known, by picture key (`card_colour`).
+    pub card_colours: std::sync::Arc<std::collections::HashMap<String, [f32; 3]>>,
+    /// Card pictures asked for this frame: picture key, file, and whether a card draws it now
+    /// (`card_picture`) or it is only read ahead (`want_card`).
+    pub cards_wanted: Vec<(String, std::path::PathBuf, bool)>,
 }
 
 // By hand: a derive would ask `H: Default` of the hit type.
@@ -3048,11 +3779,16 @@ impl<H> Default for Canvas<H> {
             texts: Default::default(),
             boxes: Default::default(),
             opaque: Default::default(),
+            blur: None,
             avatar_slots: Default::default(),
             avatars_wanted: Default::default(),
             picture_slots: Default::default(),
             pictures_wanted: Default::default(),
+            picture_paths: Default::default(),
             picture_times: Default::default(),
+            card_slots: Default::default(),
+            card_colours: Default::default(),
+            cards_wanted: Default::default(),
         }
     }
 }
@@ -3205,6 +3941,18 @@ pub fn parse_accent(s: &str) -> Option<u32> {
 
 const CLEAR: [f32; 4] = [0.0; 4];
 
+/// Names of pictures read from a path of their own (`Canvas::picture_cover`) start with this.
+pub const PATH_PICTURE_PREFIX: &str = "@path/";
+
+/// The name a picture read from `path` goes by: the prefix and a hash of the path (the canvas
+/// lowercases names, which a path can't take on a case-sensitive disk).
+pub fn path_picture_key(path: &std::path::Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut h);
+    format!("{PATH_PICTURE_PREFIX}{:016x}", h.finish())
+}
+
 /// What `Canvas::rotate_since` does, on shapes that aren't on the canvas yet (copies of the
 /// playfield).
 pub fn rotate_shapes(
@@ -3238,7 +3986,9 @@ impl<H> Canvas<H> {
         self.input_regions.clear();
         self.avatars_wanted.clear();
         self.pictures_wanted.clear();
+        self.picture_paths.clear();
         self.picture_times.clear();
+        self.cards_wanted.clear();
         self.disc = None;
         self.glitch = None;
         self.hits.clear();
@@ -3246,7 +3996,22 @@ impl<H> Canvas<H> {
         self.texts.clear();
         self.boxes.clear();
         self.opaque = None;
+        self.blur = None;
         self.width = width;
+    }
+
+    /// Draws the shapes since `start` through a blur (`ROUTES_BLUR` soft), `strength` of the way
+    /// from sharp (0, as drawn) to blurred (1), in their place among the others. One run of
+    /// shapes a frame: a later call starting at or before the earlier run's end takes it in.
+    pub fn blur_since(&mut self, start: usize, strength: f32) {
+        let end = self.shapes.len();
+        let start = match &self.blur {
+            Some((r, _)) if start <= r.end && start >= r.start => r.start,
+            _ => start,
+        };
+        // Kept even with nothing drawn yet (the routes before the music starts): how far is
+        // known; the renderer leaves an empty run out.
+        self.blur = (strength > 0.0).then(|| (start..end.max(start), strength.min(1.0)));
     }
 
     /// Marks the shape just drawn (a `rect` with alpha 1) as hiding the background under it.
@@ -3647,6 +4412,152 @@ impl<H> Canvas<H> {
         true
     }
 
+    /// The picture in the file at `path` (anywhere, not only in the followed map's folder) over
+    /// all of `[x, y, w, h]`, cut to it, tinted by `tint`. False while it's loading (nothing
+    /// drawn).
+    pub fn picture_cover(
+        &mut self,
+        path: &std::path::Path,
+        rect: [f32; 4],
+        tint: [f32; 4],
+    ) -> bool {
+        self.picture_cover_clipped(path, rect, rect, tint)
+    }
+
+    /// Asks for the picture at `path` without drawing it, so it's read before it's shown.
+    pub fn want_picture_path(&mut self, path: &std::path::Path) {
+        let key = path_picture_key(path);
+        if !self.picture_paths.iter().any(|(k, _)| *k == key) {
+            self.picture_paths.push((key.clone(), path.to_path_buf()));
+        }
+        if !self.pictures_wanted.contains(&key) {
+            self.pictures_wanted.push(key);
+        }
+    }
+
+    /// `picture_cover` over `[x, y, w, h]`, but cut to `clip` (a strip of it, say).
+    pub fn picture_cover_clipped(
+        &mut self,
+        path: &std::path::Path,
+        [x, y, w, h]: [f32; 4],
+        clip: [f32; 4],
+        tint: [f32; 4],
+    ) -> bool {
+        let key = path_picture_key(path);
+        if !self.picture_paths.iter().any(|(k, _)| *k == key) {
+            self.picture_paths.push((key.clone(), path.to_path_buf()));
+        }
+        let aspect = self
+            .picture_slots
+            .get(&key)
+            .map_or(1.0, |&(_, a)| a.max(0.01));
+        let start = self.shapes.len();
+        let drawn = self.picture(&key, x + w / 2.0, y + h / 2.0, h.max(w / aspect), 0.0, tint);
+        self.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
+        drawn
+    }
+
+    /// `picture_cover_clipped` with the top corners of `rect` `radius` round (a banner at the
+    /// top of a rounded panel); its bottom is wherever `clip` cuts it.
+    pub fn picture_cover_round_top(
+        &mut self,
+        path: &std::path::Path,
+        rect: [f32; 4],
+        clip: [f32; 4],
+        tint: [f32; 4],
+        radius: f32,
+    ) -> bool {
+        let start = self.shapes.len();
+        let drawn = self.picture_cover_clipped(path, rect, clip, tint);
+        if let Some(sh) = self.shapes.get_mut(start).filter(|_| drawn) {
+            sh.params[0] = radius;
+            sh.params[1] = rect[2] / 2.0;
+            sh.params[2] = rect[3] / 2.0;
+        }
+        drawn
+    }
+
+    /// Song select's card picture of the map picture at `path` over all of `[x, y, w, h]`: the
+    /// picture's middle strip, cut to it, tinted by `tint`, its colour going to grey across it from
+    /// `greys`' first at its left edge to the second at its right (0: all its colour). Asks for
+    /// it; false while it isn't in (nothing drawn).
+    pub fn card_picture(
+        &mut self,
+        path: &std::path::Path,
+        [x, y, w, h]: [f32; 4],
+        tint: [f32; 4],
+        radius: f32,
+        greys: [f32; 2],
+    ) -> bool {
+        let key = path_picture_key(path);
+        let slot = self.card_slots.get(&key).copied();
+        self.ask_card(key, path, true);
+        let Some(slot) = slot else {
+            return false;
+        };
+        // Covering the rect: as tall as it, or as wide when it's wider for its height than a strip.
+        let (sw, sh) = if w > h * CARD_ASPECT {
+            (w, w / CARD_ASPECT)
+        } else {
+            (h * CARD_ASPECT, h)
+        };
+        // Only the rect is drawn, its corners `radius` round: the shader shows the part of the
+        // strip under it, from how much of the strip's width (`k`) or height (`-k`) that is. Both
+        // that and the 1 beside it are scaled to pixels on the way, so their ratio is `k` again.
+        let k = if w > h * CARD_ASPECT {
+            -(h / sh)
+        } else {
+            w / sw
+        };
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [w / 2.0, h / 2.0],
+            fill: tint,
+            border: [greys[0], greys[1], 0.0, 0.0],
+            params: [radius, 1.0, k, -CARD_BASE - slot as f32],
+            angle: 0.0,
+        });
+        true
+    }
+
+    /// A box with corners `radius` round, its fill going from `left` at its left edge to
+    /// `right` at its right in one smooth sweep (one shape: no seams between bands).
+    pub fn shade_across(
+        &mut self,
+        [x, y]: [f32; 2],
+        [w, h]: [f32; 2],
+        radius: f32,
+        left: [f32; 4],
+        right: [f32; 4],
+    ) {
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [w / 2.0, h / 2.0],
+            fill: left,
+            border: right,
+            params: [radius, 0.0, 0.0, SHADE_ACROSS],
+            angle: 0.0,
+        });
+    }
+
+    /// Asks for the card picture of the map picture at `path` without drawing it, so it's in
+    /// before its card comes into view.
+    pub fn want_card(&mut self, path: &std::path::Path) {
+        self.ask_card(path_picture_key(path), path, false);
+    }
+
+    fn ask_card(&mut self, key: String, path: &std::path::Path, drawn: bool) {
+        match self.cards_wanted.iter_mut().find(|w| w.0 == key) {
+            Some(w) => w.2 |= drawn,
+            None => self.cards_wanted.push((key, path.to_path_buf(), drawn)),
+        }
+    }
+
+    /// The average colour of the card picture of the map picture at `path`, once known.
+    pub fn card_colour(&self, path: &std::path::Path) -> Option<[f32; 3]> {
+        self.card_colours.get(&path_picture_key(path)).copied()
+    }
+
     /// Where an animated picture `file` is to be in its frames this frame: `since` ms into them
     /// (they loop). A still picture leaves it be.
     pub fn picture_time(&mut self, file: &str, since: f64) {
@@ -3824,7 +4735,14 @@ impl<H> Canvas<H> {
     /// Fades every shape drawn since `start` to `alpha` of its opacity and darkens it to `dim`
     /// of its brightness (the Multiverse playfields out of focus).
     pub fn fade_since(&mut self, start: usize, alpha: f32, dim: f32) {
-        for sh in &mut self.shapes[start..] {
+        let end = self.shapes.len();
+        self.fade_between(start, end, alpha, dim);
+    }
+
+    /// As `fade_since`, for the shapes from `start` up to (not including) `end` only.
+    pub fn fade_between(&mut self, start: usize, end: usize, alpha: f32, dim: f32) {
+        let end = end.min(self.shapes.len());
+        for sh in &mut self.shapes[start.min(end)..end] {
             for col in [&mut sh.fill, &mut sh.border] {
                 col[0] *= dim;
                 col[1] *= dim;
@@ -3845,9 +4763,36 @@ impl<H> Canvas<H> {
         });
     }
 
-    /// A visible insertion point, including an empty focused field.
+    /// A visible insertion point, including an empty focused field: a thin beam. With animations
+    /// on it blinks (`CARET_BLINK_MS` on, as long off) once it rests, steady again on every move
+    /// and after `CARET_BLINK_STOP_MS`, and a move leaves a trail behind it (`CaretTrail`): its
+    /// leading edge gets there in `CARET_TRAIL_MS.0`, its trailing one in `CARET_TRAIL_MS.1`.
     pub fn caret(&mut self, x: f32, y: f32, size: f32, color: [f32; 4]) {
-        self.rect(x, y - 1.0, 1.0, Self::text_height(size) + 2.0, color);
+        let (top, h) = (y - 1.0, Self::text_height(size) + 2.0);
+        if !animations() {
+            self.rect(x, top, CARET_W, h, color);
+            return;
+        }
+        let now = frame_now();
+        let (edges, moved) = CARET.with(|c| c.borrow_mut().step(x, top, now));
+        let [left, right] = edges;
+        if right - left > CARET_W + 0.5 {
+            // The trail: from clear at its far end to the caret's colour at the caret.
+            let [r, g, b, a] = color;
+            let fade = [r, g, b, 0.0];
+            let near = [r, g, b, a * CARET_TRAIL_ALPHA];
+            let (from, to) = if x > (left + right) / 2.0 - CARET_W / 2.0 {
+                (fade, near)
+            } else {
+                (near, fade)
+            };
+            self.shade_across([left, top], [right - left, h], 0.0, from, to);
+        }
+        let rest = now.saturating_duration_since(moved).as_secs_f32() * 1000.0;
+        let on = rest >= CARET_BLINK_STOP_MS || rest % (2.0 * CARET_BLINK_MS) < CARET_BLINK_MS;
+        if on {
+            self.rect(x, top, CARET_W, h, color);
+        }
     }
 
     /// Draws text with the built-in fonts; `size` is the glyph height. Returns the advance width.
@@ -4327,8 +5272,21 @@ mod tests {
     }
 
     #[test]
+    fn a_background_s_window_zooms_in_on_its_middle_and_moves_with_its_lean() {
+        use super::bg_window;
+        assert_eq!(bg_window(1.0, 0.5, 1.0, [0.0; 2]), [0.0, 0.25, 1.0, 0.75]);
+        assert_eq!(bg_window(1.0, 1.0, 2.0, [0.0; 2]), [0.25, 0.25, 0.75, 0.75]);
+        // The picture moves right: the window onto it goes left.
+        let [u0, _, u1, _] = bg_window(1.0, 1.0, 2.0, [0.1, 0.0]);
+        assert!(
+            (u0 - 0.2).abs() < 1e-6 && (u1 - 0.7).abs() < 1e-6,
+            "{u0} {u1}"
+        );
+    }
+
+    #[test]
     fn a_background_s_blurred_copy_is_small_and_keeps_its_colours() {
-        assert_eq!(super::blurred_size(1920, 1080), (85, 48));
+        assert_eq!(super::blurred_size(1920, 1080), (113, 64));
         assert_eq!(
             super::blurred_size(10, 4),
             (10, 4),
@@ -4383,6 +5341,88 @@ mod tests {
     }
 
     #[test]
+    fn every_binding_the_shape_shader_reads_is_visible_to_the_stage_reading_it() {
+        let src = super::shape_shader();
+        let module = naga::front::wgsl::parse_str(&src).expect("parses");
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::default(),
+        )
+        .validate(&module)
+        .expect("valid");
+        let mut checked = 0;
+        for (i, ep) in module.entry_points.iter().enumerate() {
+            let stage = match ep.stage {
+                naga::ShaderStage::Vertex => wgpu::ShaderStages::VERTEX,
+                naga::ShaderStage::Fragment => wgpu::ShaderStages::FRAGMENT,
+                _ => continue,
+            };
+            let used = info.get_entry_point(i);
+            for (h, var) in module.global_variables.iter() {
+                let Some(b) = &var.binding else { continue };
+                if used[h].is_empty() {
+                    continue;
+                }
+                checked += 1;
+                assert!(
+                    super::shape_binding_stages(b.binding).contains(stage),
+                    "{} reads binding {}, which its layout hides from it",
+                    ep.name,
+                    b.binding
+                );
+            }
+        }
+        assert!(checked > 2, "{checked}");
+    }
+
+    #[test]
+    fn blurring_takes_one_run_of_shapes_a_frame() {
+        use super::Canvas;
+        let mut c = Canvas::<()>::default();
+        c.clear(854.0);
+        let square = |c: &mut Canvas<()>| {
+            c.round_rect([0.0, 0.0], [4.0, 4.0], 0.0, [1.0; 4], [1.0; 4], 0.0);
+        };
+        square(&mut c);
+        c.blur_since(0, 0.0);
+        assert_eq!(c.blur, None, "no strength, nothing");
+        c.blur_since(1, 1.0);
+        assert_eq!(
+            c.blur,
+            Some((1..1, 1.0)),
+            "no shapes yet: how far, nothing to draw"
+        );
+        square(&mut c);
+        c.blur_since(0, 0.5);
+        assert_eq!(c.blur, Some((0..2, 0.5)));
+        // A later call from inside it takes the shapes since in.
+        square(&mut c);
+        c.blur_since(2, 2.0);
+        assert_eq!(c.blur, Some((0..3, 1.0)), "strength at most 1");
+        c.clear(854.0);
+        assert_eq!(c.blur, None, "a new frame starts sharp");
+    }
+
+    #[test]
+    fn the_blur_s_reads_cover_its_spread_at_any_size() {
+        use super::gauss_steps;
+        for (small, div, sigma_px) in [
+            ((240, 135), 8.0, 18.0),
+            ((60, 34), 8.0, 4.5),
+            ((480, 270), 8.0, 64.0),
+        ] {
+            let [across, up] = gauss_steps(small, div, sigma_px);
+            assert_eq!((across[1], up[0]), (0.0, 0.0), "one axis each");
+            assert_eq!(across[2], up[2]);
+            // 7 steps each way reach about 3 sigmas, and steps are at least a texel.
+            let sigma_steps = (1.0 / (2.0 * across[2])).sqrt();
+            assert!(7.0 / sigma_steps >= 2.0, "{small:?}: {sigma_steps}");
+            assert!(across[0] * small.0 as f32 >= 1.0 - 1e-5);
+            assert!(up[1] * small.1 as f32 >= 1.0 - 1e-5);
+        }
+    }
+
+    #[test]
     fn shaders_compile() {
         let shapes = super::shape_shader();
         for (name, src) in [
@@ -4390,6 +5430,7 @@ mod tests {
             ("background", super::BG_SHADER),
             ("disc", super::DISC_SHADER),
             ("upscale", super::UPSCALE_SHADER),
+            ("blur", super::BLUR_SHADER),
         ] {
             let module = naga::front::wgsl::parse_str(src)
                 .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));

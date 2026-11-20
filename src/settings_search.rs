@@ -41,6 +41,7 @@ fn words(item: Item) -> &'static str {
             "background dark brightness фон темнее яркость"
         }
         Item::KiaiEffects | Item::HitFlash | Item::HideGreat => "effects flash эффекты вспышки",
+        Item::PreviewDrum => "drum preview song select барабан превью выбор песни",
         Item::FailRestart => {
             "auto restart retry sudden death perfect fail sd pf авто рестарт перезапуск провал"
         }
@@ -58,6 +59,9 @@ fn words(item: Item) -> &'static str {
         }
         Item::FpsCap => "fps framerate limit lag фпс кадры лимит",
         Item::ShowFps => "fps framerate counter фпс кадры счетчик",
+        Item::SelectInfo => {
+            "songs maps count device gpu status info песни карты число видеокарта инфо"
+        }
         Item::HalfResolution => "performance weak gpu lag производительность слабый лаги",
         Item::Renderer => {
             "renderer graphics api vulkan directx dx12 opengl metal crash gpu рендер графика вулкан директ вылет краш видеокарта"
@@ -93,6 +97,9 @@ fn words(item: Item) -> &'static str {
             "custom maps tko editor website folder кастомные карты редактор сайт папка"
         }
         Item::Screenshots => "picture clipboard screen картинка буфер экран",
+        Item::CardFade => {
+            "saturation gradient grey gray colour color card насыщенность градиент серый цвет карточка"
+        }
         Item::ChatFilter => "swear profanity мат цензура",
         Item::NotifyMessages
         | Item::NotifyMentions

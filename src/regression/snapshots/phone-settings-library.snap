@@ -16,13 +16,10 @@ text  236,204  Show osu!standard converts
 text   16,245  INPUT
 text  236,266  Song list headings
 text   14,301  OFFSET
-text  236,328  Song select layout
-text  981,328  default
+text  236,328  Library info
 text   14,357  AUDIO
-text  964,387  <
-text 1023,387  >
-text  236,390  Game data folder
-text  772,390  the usual places
+text  236,390  Song select layout
+text  981,390  default
 text   14,413  VIDEO
 text  236,436  The folder your maps are in. Tap: browse, type a path, or go back to finding
 text  236,455  osu!'s.
@@ -47,5 +44,3 @@ hit   222,182   845x56   SettingRow(2)
 hit   222,244   845x56   SettingRow(3)
 hit   222,306   845x56   SettingRow(4)
 hit   222,368   845x54   SettingRow(5)
-hit   947,374    50x44   SettingStep(5, -1)
-hit  1003,374    50x44   SettingStep(5, 1)

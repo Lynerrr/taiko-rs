@@ -19,6 +19,7 @@ struct Gpu {
     globals: wgpu::Buffer,
     group: wgpu::BindGroup,
     font: wgpu::Texture,
+    cards: wgpu::Texture,
     revision: u64,
 }
 
@@ -86,6 +87,7 @@ impl Gpu {
             ..Default::default()
         });
         let (view, font) = make_font_texture(&device, &queue);
+        let cards = card_texture(&device);
         let group = Renderer::shape_bind_group(
             &device,
             &queue,
@@ -95,6 +97,7 @@ impl Gpu {
             &sampler,
             &view,
             &view,
+            &cards.create_view(&Default::default()),
             &Atlas::default(),
         );
         Self {
@@ -104,6 +107,7 @@ impl Gpu {
             globals,
             group,
             font,
+            cards,
             revision: 0,
         }
     }
@@ -129,13 +133,7 @@ impl Gpu {
         self.queue.write_buffer(
             &self.globals,
             0,
-            bytemuck::bytes_of(&Globals {
-                screen_px: [w as f32, h as f32],
-                px_per_unit: scale,
-                _pad: 0.0,
-                origin: [0.0; 2],
-                _pad2: [0.0; 2],
-            }),
+            bytemuck::bytes_of(&Globals::new([w as f32, h as f32], scale, [0.0; 2])),
         );
         let instances = self
             .device
@@ -339,4 +337,86 @@ fn font_gpu_large_titles_use_native_density_rasters() {
             image::save_buffer(path, &pixels, w, h, image::ColorType::Rgba8).unwrap();
         }
     }
+}
+
+#[test]
+fn card_pictures_gpu_draw_their_own_strip() {
+    let mut gpu = Gpu::new();
+    let [w, h] = CARD_CELL;
+    let strip = |rgb: [u8; 3]| -> Vec<u8> {
+        (0..w * h)
+            .flat_map(|_| [rgb[0], rgb[1], rgb[2], 255])
+            .collect()
+    };
+    // Its neighbours in the texture, beside and below it, in other colours.
+    let per = CARD_SIDE[0] / w;
+    let slot = per + 1;
+    for (s, rgb) in [
+        (slot - 1, [255, 0, 0]),
+        (slot, [0, 255, 0]),
+        (slot + 1, [0, 0, 255]),
+        (slot - per, [255, 255, 0]),
+        (slot + per, [255, 0, 255]),
+    ] {
+        write_card(&gpu.queue, &gpu.cards, s, &strip(rgb));
+    }
+    let path = std::path::Path::new("/songs/a/bg.png");
+    let mut canvas = Canvas::<()>::default();
+    canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), slot)].into());
+    // As wide as the target and a third of it tall: its middle, cut to it.
+    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 0.0, [0.0; 2]));
+    let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
+    let at = |x: u32, y: u32| {
+        let i = ((y * width + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    for (x, y) in [(10, 42), (128, 64), (245, 85), (128, 41), (128, 86)] {
+        assert_eq!(at(x, y), [0, 255, 0, 255], "its own strip at {x}, {y}");
+    }
+    // As tall as the rect (its width is cut by the canvas's clip, which this doesn't apply).
+    assert_eq!(at(128, 36)[3], 0, "nothing above it");
+    assert_eq!(at(128, 92)[3], 0, "nothing below it");
+
+    // Rounded: its corners are cut, the rest of it is its strip as before.
+    let mut canvas = Canvas::<()>::default();
+    canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), slot)].into());
+    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 8.0, [0.0; 2]));
+    let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
+    let at = |x: u32, y: u32| {
+        let i = ((y * width + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    };
+    for (x, y) in [(8, 40), (247, 40), (8, 87), (247, 87)] {
+        assert_eq!(at(x, y)[3], 0, "its corner at {x}, {y} is cut");
+    }
+    for (x, y) in [(20, 64), (128, 41), (240, 64)] {
+        assert_eq!(at(x, y), [0, 255, 0, 255], "its own strip at {x}, {y}");
+    }
+}
+
+#[test]
+fn card_pictures_gpu_go_grey_towards_the_faded_side() {
+    let mut gpu = Gpu::new();
+    let [w, h] = CARD_CELL;
+    let red: Vec<u8> = (0..w * h).flat_map(|_| [255, 0, 0, 255]).collect();
+    write_card(&gpu.queue, &gpu.cards, 0, &red);
+    let path = std::path::Path::new("/songs/a/bg.png");
+    let mut canvas = Canvas::<()>::default();
+    canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), 0)].into());
+    // `config::CardFade::ToRight`: all its colour at the left, grey at the right.
+    let greys = crate::config::CardFade::ToRight.greys();
+    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 0.0, greys));
+    let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
+    let at = |x: u32, y: u32| {
+        let i = ((y * width + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    let spread = |[r, g, b]: [u8; 3]| r.max(g).max(b) - r.min(g).min(b);
+    let (left, middle, right) = (at(9, 64), at(128, 64), at(246, 64));
+    assert!(spread(left) > 240, "red at the left: {left:?}");
+    assert!(
+        spread(right) < spread(middle) && spread(middle) < spread(left),
+        "greyer to the right: {left:?} {middle:?} {right:?}"
+    );
+    assert!(spread(right) < 60, "close to grey at the right: {right:?}");
 }

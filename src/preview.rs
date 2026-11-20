@@ -20,6 +20,65 @@ use crate::services::jobs::Job;
 /// stays cheap. A single change after a quiet moment loads at once.
 const DEBOUNCE: Duration = Duration::from_millis(60);
 const QUIET: Duration = Duration::from_millis(300);
+/// A part of the bare details coming in (`Preview::enter`): how long it takes and how far right
+/// of its place it starts.
+const ENTER_MS: f32 = 180.0;
+const ENTER_SHIFT: f32 = 8.0;
+/// When the pp row (and the Leaderboard chip ending it) comes in after a song is picked.
+const PP_ENTER_MS: f32 = 260.0;
+/// The details of the song before a change go out as the new ones come in: `LEAVE_SHIFT`
+/// to the left and faded out over `LEAVE_MS`.
+const LEAVE_MS: f32 = 80.0;
+const LEAVE_SHIFT: f32 = 6.0;
+
+/// What the bare details drew in a frame (their shapes, and the clips among them from shape
+/// 0), to go out as drawn when the song changes.
+#[derive(Default)]
+struct Drawn {
+    shapes: Vec<crate::render::Shape>,
+    clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
+}
+/// How quickly a shown rating or pp counts to a new song's (`follow`, a time constant in ms).
+const COUNT_TAU: f32 = 60.0;
+
+/// `shown` following `target`: counting to it (`COUNT_TAU`), there at once from nothing or
+/// without animations. With no target it keeps its value, for the next one to count from, and
+/// gives nothing.
+fn follow(shown: &mut Option<f32>, target: Option<f32>, dt_ms: f32) -> Option<f32> {
+    let t = target?;
+    match shown {
+        Some(v) if crate::render::animations() => {
+            crate::render::approach(v, t, dt_ms, COUNT_TAU);
+            if (*v - t).abs() < 0.005 {
+                *v = t;
+            }
+        }
+        _ => *shown = Some(t),
+    }
+    *shown
+}
+
+/// `follow` for the three full-combo pp values.
+fn follow_pp(
+    shown: &mut Option<[f64; 3]>,
+    target: Option<[f64; 3]>,
+    dt_ms: f32,
+) -> Option<[f64; 3]> {
+    let t = target?;
+    match shown {
+        Some(v) if crate::render::animations() => {
+            let k = 1.0 - (-f64::from(dt_ms) / f64::from(COUNT_TAU)).exp();
+            for (v, t) in v.iter_mut().zip(t) {
+                *v += (t - *v) * k;
+                if (*v - t).abs() < 0.5 {
+                    *v = t;
+                }
+            }
+        }
+        _ => *shown = Some(t),
+    }
+    *shown
+}
 /// The preview music starts from a quick decode of this much audio at the preview point; the
 /// full song replaces it a moment later without a gap.
 /// The width (virtual units, 480 tall) the preview lays the playfield out at: a 4:3 screen's,
@@ -68,6 +127,7 @@ impl Song {
 /// A decode result: (track, base frame, whether it is the whole song), or None if it failed.
 type Decoded = (PathBuf, Option<(Arc<Track>, i64, bool)>);
 
+#[derive(Clone, Copy)]
 pub struct Details {
     pub bpm: (f64, f64),
     pub length_ms: f64,
@@ -129,6 +189,39 @@ pub(crate) fn left_out_text(left_out: &[taiko_logic::tja::Unsupported]) -> Strin
 }
 type StatCell = (&'static str, String, f32);
 type StatRow<'a> = Vec<&'a StatCell>;
+
+/// The pp simulator's pick: the accuracy (0 to 1) and the misses of a play.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PpSim {
+    pub accuracy: f64,
+    pub misses: u32,
+}
+
+/// How far a step of the simulator moves its accuracy.
+const SIM_ACC_STEP: f64 = 0.005;
+
+impl PpSim {
+    /// A step of field `field` (0: accuracy, 1: misses) `dir` (-1 or 1) on.
+    pub fn step(&mut self, field: u8, dir: i32) {
+        if field == 0 {
+            self.accuracy = (self.accuracy + SIM_ACC_STEP * f64::from(dir)).clamp(0.5, 1.0);
+        } else {
+            self.misses = self.misses.saturating_add_signed(dir).min(9999);
+        }
+    }
+
+    /// The play it stands for on a map of `notes` notes: its greats, oks and misses, the
+    /// accuracy as close as those can come.
+    pub fn counts(&self, notes: u32) -> (u32, u32, u32) {
+        let miss = self.misses.min(notes);
+        let hits = notes - miss;
+        // accuracy = (great + ok / 2) / notes, great + ok = hits.
+        let ok = (2.0 * (f64::from(hits) - self.accuracy * f64::from(notes)))
+            .round()
+            .clamp(0.0, f64::from(hits)) as u32;
+        (hits - ok, ok, miss)
+    }
+}
 
 #[derive(Default)]
 pub struct Preview {
@@ -196,6 +289,8 @@ pub struct Preview {
     song_since: Option<Instant>,
     /// Passed on to the autoplay preview (the kiai effects setting, how autoplay hits).
     pub kiai_effects: bool,
+    /// Bare, the lane without its drum (`Config::preview_drum` off).
+    pub hide_drum: bool,
     pub autoplay: crate::autoplay::Settings,
     /// The selected map's own offset, shown with its details.
     pub map_offset: f64,
@@ -206,14 +301,46 @@ pub struct Preview {
     pub mods: crate::mods::Mods,
     /// Bottom of the song select panel as last drawn (virtual units).
     pub panel_bottom: f32,
+    /// How tall song select draws the details' page, following `panel_bottom` (0: not yet).
+    pub page_h: f32,
     /// Room kept free at the right of the title line, for a button over the panel's corner
     /// (song select's way to the leaderboard); 0 elsewhere.
     pub title_room: f32,
+    /// Drawn bare, in the main menu's look (song select outside the Legacy layout): no panel or
+    /// boxes, the details straight over the background, the autoplay a lane of its own running
+    /// off the screen's right edge and the timeline's bars on their own. Set by the caller
+    /// before `draw_panel`.
+    pub bare: bool,
+    /// How far left of its place the panel is drawn (song select sliding to its leaderboard):
+    /// the bare lane's end, at the screen's right edge, goes along with it, so nothing in the
+    /// panel stretches on the way. Set by the caller before `draw_panel`.
+    pub slid: f32,
     /// The map shown is marked EPIC on taiko.rs (set by the caller before `draw_panel`): its pill
     /// stands in the status's place, EPIC being a status of its own.
     pub epic: bool,
     /// Where `draw_panel` put the EPIC pill (left, top), for the effects round it.
     pub epic_at: Option<[f32; 2]>,
+    /// The picture the bare details' banner shows and when it was first drawn (it fades in).
+    banner_seen: Option<(PathBuf, Instant)>,
+    /// The song the bare details are coming in for, and when it was picked: they come in one
+    /// after another (`enter`). None for a song picked in a quick run of them: those swap at once.
+    entered: Option<(usize, Instant)>,
+    /// The bare details as last drawn, and what of them is going out since a change (with
+    /// when the change was).
+    drawn: Drawn,
+    leaving: Option<(Drawn, Instant)>,
+    /// The star rating and full-combo pp the bare details show: they follow the map's, counting
+    /// from the last song's to the new one's.
+    stars_shown: Option<f32>,
+    pp_shown: Option<[f64; 3]>,
+    /// The pp simulator in place of the full-combo chips (bare): what's picked, and the pp it
+    /// would give, which song select works out.
+    pub sim: Option<PpSim>,
+    pub sim_pp: Option<f64>,
+    /// Bare: room at the right of the pp row for the way to the leaderboard (song select's), and
+    /// where it goes as last drawn.
+    pub board_w: f32,
+    pub board_at: Option<[f32; 4]>,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
     /// changes per unit of that (for dragging the panel's bottom edge).
     pub size: f32,
@@ -269,7 +396,7 @@ pub fn audio_path(e: &Entry) -> PathBuf {
         .join(&e.meta.audio_file)
 }
 
-fn background_path(e: &Entry) -> Option<PathBuf> {
+pub(crate) fn background_path(e: &Entry) -> Option<PathBuf> {
     e.meta
         .background
         .as_ref()
@@ -466,9 +593,19 @@ impl Preview {
         }
         self.owned_background = self.own_background;
         if selected != self.seen {
+            // The start point picked ("Play from") is that map's: another one starts afresh, even
+            // on the same song (another difficulty of the set), and so does going back to it.
+            self.marker = None;
+            // The first song shown (song select opening) comes with the screen, not on its own.
+            let was = self.seen;
             self.seen = selected;
             self.resume_at = None;
             let quiet = self.last_change.is_none_or(|t| now - t >= QUIET);
+            // A song picked on its own comes in; one in a quick run of them (a key held, Random
+            // spammed) swaps in at once, so nothing queues up or flickers.
+            self.entered = selected
+                .filter(|_| quiet && was.is_some())
+                .map(|i| (i, now));
             self.last_change = Some(now);
             self.changed_at = Some(if quiet {
                 now.checked_sub(DEBOUNCE).unwrap_or(now)
@@ -863,7 +1000,6 @@ impl Preview {
             .filter(|&(into, len)| into.is_finite() && len.is_finite() && len > 0.0)
     }
 
-    /// Where the music is in map time, while `entry`'s song plays.
     /// Whether the music playing is `e`'s (a new song's starts a moment after it's picked).
     #[cfg(target_os = "android")]
     pub fn plays(&self, e: &Entry) -> bool {
@@ -871,14 +1007,35 @@ impl Preview {
     }
 
     /// The panel isn't on screen: nothing of it is there to press.
+    /// The shown map's notes, once it's read.
+    pub fn notes(&self) -> Option<u32> {
+        self.map
+            .as_ref()
+            .filter(|(mi, ..)| Some(*mi) == self.seen)
+            .map(|(_, _, d, _)| (d.dons + d.kats) as u32)
+    }
+
+    /// Opens the pp simulator (at 98%, no misses) or closes it.
+    pub fn toggle_sim(&mut self) {
+        self.sim = match self.sim {
+            Some(_) => None,
+            None => Some(PpSim {
+                accuracy: 0.98,
+                misses: 0,
+            }),
+        };
+    }
+
     pub fn hide_panel(&mut self) {
         self.graph_rect = None;
         self.play_rect = None;
+        self.board_at = None;
     }
 
-    pub fn map_time(&self, entry: Option<usize>) -> Option<f64> {
+    /// The map whose music plays, and where it is (map ms).
+    pub fn playing_time(&self) -> Option<(usize, f64)> {
         let (i, ..) = self.map.as_ref().filter(|_| self.audio_active)?;
-        (Some(*i) == entry && self.last_time.is_finite()).then_some(self.last_time)
+        self.last_time.is_finite().then_some((*i, self.last_time))
     }
 
     /// Whether the music is in a kiai now.
@@ -966,14 +1123,18 @@ impl Preview {
             self.pending_seek.unwrap_or(game.time()),
             e.meta.preview_time,
             marker,
+            !self.bare,
         );
         self.graph_rect = Some(rect);
+        // Bare, there's no hint: the timeline is plain enough.
+        let hint = !self.bare;
         self.play_rect = draw_play_button(
             c,
             rect[0] + rect[2] / 2.0,
             rect[1] + rect[3] + 17.0,
             marker,
             button,
+            hint,
         );
         // The same slack as `time_at`.
         c.hit(
@@ -1002,12 +1163,602 @@ impl Preview {
         Some(self.timeline.0 + f * (self.timeline.1 - self.timeline.0))
     }
 
+    /// The details in song select's main menu look at `[x, y, w]` (`l` laid out for them):
+    /// a banner of the map's picture fading out downwards with the title and the artist over
+    /// it, the mapper's line (with the EPIC pill, the status, the heart at its right), the
+    /// difficulty as a chip in its rating's colour beside its rating pill, the stats as tiles
+    /// (a caption over a value), Don and Kat as one bar split in proportion, and the pp as
+    /// three chips. Returns where the OD tile's hit windows go when it's under the pointer.
+    fn draw_bare_details(
+        &mut self,
+        c: &mut Canvas,
+        e: &Entry,
+        l: &Bare,
+        [x, y, w]: [f32; 3],
+        shown: &BareShown,
+    ) -> Option<(f32, f32)> {
+        use crate::style::{Surface, ink, role, space, surface, surface_fill, text};
+        let (lx, iw) = (x + 14.0, w - 28.0);
+        self.draw_banner(c, e, [x, y, w, BANNER_H]);
+        // A song picked on its own comes in a part at a time, from the title down (`enter`).
+        let mut cy = y + BANNER_TOP;
+        let part = c.shapes.len();
+        for line in &l.title {
+            c.text(lx, cy, l.title_size, rgba(ink::PRIMARY, 1.0), line);
+            cy += Canvas::text_height(l.title_size) + 4.0;
+        }
+        self.enter(c, part, 0.0);
+        let part = c.shapes.len();
+        c.text(lx, cy, l.artist_size, rgba(ink::SECONDARY, 1.0), &l.artist);
+        cy += Canvas::text_height(l.artist_size) + 6.0;
+        self.enter(c, part, 40.0);
+        let part = c.shapes.len();
+
+        // The mapper's line: the EPIC pill (bumping on the beat) or the status at its right,
+        // the heart left of that.
+        self.epic_at = None;
+        let mut right = x + w - 14.0;
+        if self.epic {
+            let pw = crate::epic::pill_width();
+            right -= pw;
+            crate::epic::pill(c, right, cy, 1.0, crate::style::pulse());
+            self.epic_at = Some([right, cy]);
+            right -= 8.0;
+        } else if let Some((label, col)) = shown.status.filter(|s| !s.0.is_empty()) {
+            let cw = Canvas::text_width(text::CAPTION, label) + 12.0;
+            right -= cw;
+            let fill = rgba(col, 0.22);
+            c.round_rect([right, cy], [cw, MAPPER_H], MAPPER_H / 2.0, fill, fill, 0.0);
+            let ty = cy + (MAPPER_H - Canvas::text_height(text::CAPTION)) / 2.0;
+            c.text_centered(right + cw / 2.0, ty, text::CAPTION, rgba(col, 1.0), label);
+            right -= 8.0;
+        }
+        if let Some(liked) = shown.liked {
+            const HEART_W: f32 = 16.0;
+            right -= HEART_W;
+            let hover = c.hovered(right, cy, HEART_W, MAPPER_H);
+            let colour = match (liked, hover) {
+                (true, _) => 0xff5fa2,
+                (false, true) => ink::SECONDARY,
+                (false, false) => ink::CAPTION,
+            };
+            crate::player::draw_heart(c, right + 3.5, cy + 2.5, 1.0, colour);
+            c.hit(right, cy, HEART_W, MAPPER_H, Hit::SelectLike);
+            right -= 6.0;
+        }
+        let ty = cy + (MAPPER_H - Canvas::text_height(text::BODY)) / 2.0;
+        let by = tr!("mapped by ", "譜面: ", "маппер: ");
+        let bw = c.text(lx, ty, text::BODY, rgba(ink::CAPTION, 1.0), by);
+        let name = Canvas::fit(text::BODY, (right - lx - bw).max(0.0), &e.meta.creator);
+        c.text(lx + bw, ty, text::BODY, rgba(ink::PRIMARY, 1.0), &name);
+        cy += MAPPER_H + BLOCK_GAP;
+        self.enter(c, part, 70.0);
+
+        // The difficulty: a chip of its rating's colour, its rating pill at the right. The
+        // rating counts from the last song's to this one's; while it's being worked out, a
+        // skeleton stands in the pill's place.
+        let part = c.shapes.len();
+        let level = e.meta.level;
+        let stars = follow(&mut self.stars_shown, shown.stars, c.dt_ms);
+        let pill_w = if level.is_none() && stars.is_none() {
+            let pw = Canvas::text_width(text::HEADING, "0.00") + text::HEADING * 1.6 + 6.0;
+            let ph = text::HEADING + 6.0;
+            crate::style::skeleton(c, [x + w - 14.0 - pw, cy + 3.0, pw, ph], ph / 2.0);
+            pw
+        } else {
+            crate::style::star_chip(c, x + w - 14.0, cy + 3.0, text::HEADING, level, stars)
+        };
+        let chip = role::rating(level, stars);
+        let luma = 0.299 * (chip >> 16 & 0xff) as f32
+            + 0.587 * (chip >> 8 & 0xff) as f32
+            + 0.114 * (chip & 0xff) as f32;
+        let chip_ink = if luma > 140.0 { 0x15151d } else { ink::PRIMARY };
+        let room = (iw - pill_w - space::SECTION - 16.0).max(0.0);
+        let name = Canvas::fit(text::BODY, room, &e.meta.version);
+        let cw = Canvas::text_width(text::BODY, &name) + 16.0;
+        let fill = rgba(chip, 1.0);
+        c.round_rect(
+            [lx, cy],
+            [cw, CHIP_H],
+            crate::style::radius::SMALL,
+            fill,
+            fill,
+            0.0,
+        );
+        let ty = cy + (CHIP_H - Canvas::text_height(text::BODY)) / 2.0;
+        c.text(lx + 8.0, ty, text::BODY, rgba(chip_ink, 1.0), &name);
+        cy += CHIP_H + BLOCK_GAP;
+        self.enter(c, part, 100.0);
+
+        // The stats as tiles: a caption over its value. OD is known at once, the rest when the
+        // map is read (they fade in with it).
+        let speed = self.requested_rate.0.max(0.01);
+        let od = crate::beatmap::od_at_rate(
+            self.mods.od_with(e.meta.od, crate::od_override::get()),
+            self.requested_rate.0,
+        );
+        let d = shown.details;
+        let mut tiles: Vec<(&str, String, f32)> =
+            vec![(tr!("OD", "OD", "OD"), format!("{od:.1}"), 1.0)];
+        let later = |v: Option<String>| v.unwrap_or_default();
+        tiles.push((
+            tr!("BPM", "BPM", "BPM"),
+            later(d.map(|d| {
+                if (d.bpm.1 - d.bpm.0).abs() < 0.5 {
+                    format!("{:.0}", d.bpm.0 * speed)
+                } else {
+                    format!("{:.0}-{:.0}", d.bpm.0 * speed, d.bpm.1 * speed)
+                }
+            })),
+            shown.fade,
+        ));
+        tiles.push((
+            tr!("LENGTH", "長さ", "ДЛИНА"),
+            later(d.map(|d| fmt_time(d.length_ms / speed))),
+            shown.fade,
+        ));
+        tiles.push((
+            tr!("NOTES", "ノーツ", "НОТЫ"),
+            later(d.map(|d| (d.dons + d.kats).to_string())),
+            shown.fade,
+        ));
+        if self.map_offset != 0.0 {
+            let offset = format!("{:+.0}", self.map_offset);
+            tiles.push((tr!("OFFSET", "オフセット", "ОФФСЕТ"), offset, 1.0));
+        }
+        let n = tiles.len() as f32;
+        let tw = (iw - (n - 1.0) * space::CARD_GAP) / n;
+        let mut od_hovered = None;
+        for (k, (caption, value, alpha)) in tiles.iter().enumerate() {
+            let part = c.shapes.len();
+            let tx = lx + k as f32 * (tw + space::CARD_GAP);
+            surface(
+                c,
+                [tx, cy, tw, TILE_H],
+                crate::style::radius::SMALL,
+                Surface::Raised,
+            );
+            let room = tw - 12.0;
+            let caption = Canvas::fit(text::CAPTION, room, caption);
+            c.text(
+                tx + 6.0,
+                cy + 5.0,
+                text::CAPTION,
+                rgba(ink::CAPTION, 1.0),
+                &caption,
+            );
+            // A value too long for its tile (a BPM range) gets smaller rather than cut short,
+            // on the same baseline.
+            let size = fitting_size(value, room);
+            let value = Canvas::fit(size, room, value);
+            let drop = Canvas::text_height(text::HEADING) - Canvas::text_height(size);
+            c.text(
+                tx + 6.0,
+                cy + 13.0 + drop,
+                size,
+                rgba(ink::PRIMARY, *alpha),
+                &value,
+            );
+            // A value still being read: a skeleton where it goes.
+            if value.is_empty() && d.is_none() {
+                let vh = Canvas::text_height(text::HEADING);
+                crate::style::skeleton(c, [tx + 6.0, cy + 13.0, room * 0.6, vh], 2.0);
+            }
+            if k == 0 && c.hovered(tx, cy, tw, TILE_H) {
+                od_hovered = Some((tx, cy + TILE_H));
+            }
+            self.enter(c, part, 130.0 + 25.0 * k as f32);
+        }
+        cy += TILE_H + BLOCK_GAP;
+
+        // Don and Kat as one bar split in proportion, the counts at its ends, rolls and swells
+        // between them.
+        let part = c.shapes.len();
+        let notes = crate::game::note_colours();
+        let caption_h = Canvas::text_height(text::CAPTION);
+        let bar_y = cy + caption_h + 3.0;
+        let bar_h = BAR_H - caption_h - 3.0;
+        match d.filter(|d| d.dons + d.kats > 0) {
+            Some(d) => {
+                let a = shown.fade;
+                let dw = iw * d.dons as f32 / (d.dons + d.kats) as f32;
+                c.rect(lx, bar_y, dw, bar_h, rgba(notes.don(), a));
+                c.rect(lx + dw, bar_y, iw - dw, bar_h, rgba(notes.kat(), a));
+                let quiet = rgba(ink::CAPTION, a);
+                let dons = format!("{} {}", d.dons, tr!("DON", "ドン", "ДОН"));
+                let kats = format!("{} {}", d.kats, tr!("KAT", "カッ", "КАТ"));
+                c.text(lx, cy, text::CAPTION, quiet, &dons);
+                c.text_right(lx + iw, cy, text::CAPTION, quiet, &kats);
+                let mut extra = Vec::new();
+                if d.rolls > 0 {
+                    extra.push(format!("{} {}", d.rolls, tr!("ROLLS", "連打", "РОЛЛЫ")));
+                }
+                if d.swells > 0 {
+                    extra.push(format!("{} {}", d.swells, tr!("SWELLS", "風船", "БАЛЛОНЫ")));
+                }
+                if !extra.is_empty() {
+                    c.text_centered(lx + iw / 2.0, cy, text::CAPTION, quiet, &extra.join("  "));
+                }
+            }
+            None if d.is_none() => crate::style::skeleton(c, [lx, bar_y, iw, bar_h], 0.0),
+            None => {
+                let fill = surface_fill(Surface::Lifted);
+                c.rect(lx, bar_y, iw, bar_h, fill);
+            }
+        }
+        cy += BAR_H + BLOCK_GAP;
+        self.enter(c, part, 230.0);
+
+        // What a full combo would give, on one button that opens the pp simulator in its place,
+        // counting from the last song's; a skeleton while the map is being read. The way to
+        // the leaderboard ends the row (song select draws it at `board_at`).
+        let part = c.shapes.len();
+        let pp_now = follow_pp(&mut self.pp_shown, self.potential, c.dt_ms);
+        let room = if self.board_w > 0.0 {
+            self.board_w + space::CARD_GAP
+        } else {
+            0.0
+        };
+        let row_w = (iw - room).max(0.0);
+        self.board_at =
+            (self.board_w > 0.0).then_some([lx + iw - self.board_w, cy, self.board_w, PP_H]);
+        let ty = cy + (PP_H - Canvas::text_height(text::BODY)) / 2.0;
+        let pointer = c.mouse;
+        let over = |[x, y, w, h]: [f32; 4]| {
+            pointer.0 >= x && pointer.0 < x + w && pointer.1 >= y && pointer.1 < y + h
+        };
+        let button = [lx, cy, row_w, PP_H];
+        if let Some(sim) = self.sim {
+            // Open: what the play set up below gives, on the same button (it closes it).
+            pp_chip(c, button, over(button));
+            c.hit(lx, cy, row_w, PP_H, Hit::PpSim);
+            // What it is: the play under it works out this pp.
+            let what = tr!("PP CALCULATOR", "PP計算", "РАСЧЁТ PP");
+            let pp = self
+                .sim_pp
+                .map_or_else(|| "...".to_string(), |pp| format!("{pp:.0}pp"));
+            let pw = Canvas::text_width(text::BODY, &pp);
+            // Its name when it fits whole beside the pp.
+            if Canvas::text_width(text::CAPTION, what) <= row_w - pw - 24.0 {
+                c.text(
+                    lx + 8.0,
+                    ty + 1.0,
+                    text::CAPTION,
+                    rgba(ink::SECONDARY, 1.0),
+                    what,
+                );
+            }
+            c.text_right(
+                lx + row_w - 8.0,
+                ty,
+                text::BODY,
+                rgba(ink::PRIMARY, 1.0),
+                &pp,
+            );
+            // Under it, the play: accuracy and misses, each with its - and +.
+            let sy = cy + PP_H + SIM_GAP;
+            let half = (iw - space::CARD_GAP) / 2.0;
+            let fields = [
+                (
+                    tr!("ACC", "精度", "ТОЧН."),
+                    format!("{:.2}%", sim.accuracy * 100.0),
+                ),
+                (tr!("MISS", "ミス", "ПРОМАХИ"), sim.misses.to_string()),
+            ];
+            for (field, (label, value)) in fields.iter().enumerate() {
+                let fx = lx + field as f32 * (half + space::CARD_GAP);
+                surface(
+                    c,
+                    [fx, sy, half, PP_H],
+                    crate::style::radius::SMALL,
+                    Surface::Lifted,
+                );
+                // The whole field, for the wheel (its - and +, drawn after, take their clicks).
+                c.hit(fx, sy, half, PP_H, Hit::PpSimField(field as u8));
+                // Its name when there's room for it beside the value and its - and +.
+                let bw = 14.0;
+                let value_w = Canvas::text_width(text::CAPTION, value) + 8.0;
+                let name_w = Canvas::text_width(text::CAPTION, label);
+                let lw = if 8.0 + name_w + 6.0 + 2.0 * bw + value_w + 2.0 <= half {
+                    c.text(
+                        fx + 8.0,
+                        ty + PP_H + SIM_GAP + 1.0,
+                        text::CAPTION,
+                        rgba(ink::CAPTION, 1.0),
+                        label,
+                    )
+                } else {
+                    -6.0
+                };
+                let minus = [fx + 8.0 + lw + 6.0, sy + 2.0, bw, PP_H - 4.0];
+                let plus = [fx + half - 2.0 - bw, sy + 2.0, bw, PP_H - 4.0];
+                for (dir, mark, [bx, by, bw, bh]) in [(-1, "-", minus), (1, "+", plus)] {
+                    let lit = over([bx, sy, bw, PP_H]);
+                    let level = if lit {
+                        Surface::Lifted
+                    } else {
+                        Surface::Raised
+                    };
+                    surface(c, [bx, by, bw, bh], crate::style::radius::SMALL, level);
+                    let mw = Canvas::text_width(text::BODY, mark);
+                    let ink = if lit { ink::PRIMARY } else { ink::SECONDARY };
+                    c.text(
+                        bx + (bw - mw) / 2.0,
+                        ty + PP_H + SIM_GAP,
+                        text::BODY,
+                        rgba(ink, 1.0),
+                        mark,
+                    );
+                    c.hit(bx, sy, bw, PP_H, Hit::PpSimStep(field as u8, dir));
+                }
+                // The value between them, whole.
+                let (mx, room) = (minus[0] + bw, plus[0] - minus[0] - bw);
+                let size = fit_size(value, room - 4.0);
+                let vw = Canvas::text_width(size, value);
+                let vy = sy + (PP_H - Canvas::text_height(size)) / 2.0;
+                c.text(
+                    mx + (room - vw) / 2.0,
+                    vy,
+                    size,
+                    rgba(ink::PRIMARY, 1.0),
+                    value,
+                );
+            }
+        } else if let Some(pp) = pp_now {
+            // Closed: what a full combo gives at SS, 99% and 98%, every number whole.
+            pp_chip(c, button, over(button));
+            c.hit(lx, cy, row_w, PP_H, Hit::PpSim);
+            // As many as fit whole: a narrow panel leaves out 98%, then 99%.
+            let labels = ["SS", "99%", "98%"];
+            let least = |k: usize| {
+                Canvas::text_width(text::CAPTION, labels[k])
+                    + 16.0
+                    + Canvas::text_width(text::CAPTION, &format!("{:.0}", pp[k]))
+            };
+            let shown = (1..=3)
+                .rev()
+                .find(|&n| (0..n).all(|k| least(k) <= row_w / n as f32))
+                .unwrap_or(1);
+            let third = row_w / shown as f32;
+            for (k, (label, pp)) in labels.into_iter().zip(pp).take(shown).enumerate() {
+                let px = lx + k as f32 * third;
+                let lw = c.text(
+                    px + 8.0,
+                    ty + 1.0,
+                    text::CAPTION,
+                    rgba(ink::CAPTION, 1.0),
+                    label,
+                );
+                let room = third - 12.0 - lw - 4.0;
+                let with_unit = format!("{pp:.0}pp");
+                let value = if Canvas::text_width(text::BODY, &with_unit) <= room {
+                    with_unit
+                } else {
+                    format!("{pp:.0}")
+                };
+                let size = fit_size(&value, room);
+                let vy = cy + (PP_H - Canvas::text_height(size)) / 2.0;
+                c.text(px + 12.0 + lw, vy, size, rgba(ink::PRIMARY, 1.0), &value);
+            }
+        } else if d.is_none() {
+            crate::style::skeleton(c, [lx, cy, row_w, PP_H], crate::style::radius::SMALL);
+        }
+        if self.sim.is_some() {
+            cy += SIM_GAP + PP_H;
+        }
+        self.enter(c, part, PP_ENTER_MS);
+        cy += PP_H;
+        if let (true, Some(what)) = (l.left_out, shown.left_out) {
+            cy += 4.0;
+            let label = format!("{} ", left_out_label());
+            let lw = c.text(
+                lx,
+                cy,
+                text::CAPTION,
+                rgba(ink::CAPTION, shown.fade),
+                &label,
+            );
+            let what = Canvas::fit(text::CAPTION, iw - lw, what);
+            c.text(
+                lx + lw,
+                cy,
+                text::CAPTION,
+                rgba(ink::SECONDARY, shown.fade),
+                &what,
+            );
+        }
+        od_hovered
+    }
+
+    /// The bare details' part drawn since shape `start` coming in `delay` ms after its song was
+    /// picked: from `ENTER_SHIFT` right of its place and faded out, into place over `ENTER_MS`.
+    fn enter(&self, c: &mut Canvas, start: usize, delay: f32) {
+        let Some((_, at)) = self.entered else {
+            return;
+        };
+        use crate::style::motion;
+        let since = at + Duration::from_secs_f32(delay / 1000.0);
+        let p = motion::entrance(since, ENTER_MS, motion::out_quint);
+        if p >= 1.0 {
+            return;
+        }
+        c.transform_since(start, [0.0, 0.0], 1.0, ENTER_SHIFT * (1.0 - p), 0.0);
+        c.fade_since(start, p, 1.0);
+    }
+
+    /// Song select's Leaderboard chip, drawn since shape `start` after the details (at
+    /// `board_at`): it comes in with the pp row it ends and goes out with the details.
+    pub(crate) fn enter_board(&mut self, c: &mut Canvas, start: usize) {
+        self.enter(c, start, PP_ENTER_MS);
+        if let (true, Some(drawn)) = (crate::render::animations(), c.shapes.get(start..)) {
+            self.drawn.shapes.extend_from_slice(drawn);
+        }
+    }
+
+    /// The map's picture over `[x, y, w, h]` (cover-cropped), whole down to `BANNER_WHOLE` of
+    /// it and then fading out strip by strip, a shade over it deepening downwards so the title
+    /// reads. It fades in when it first arrives; nothing until then.
+    fn draw_banner(&mut self, c: &mut Canvas, e: &Entry, rect: [f32; 4]) {
+        let Some(bg) = background_path(e) else {
+            return;
+        };
+        // Songs changing fast (Random spammed, the list flown through): a picture not read yet
+        // waits for them to settle, as the map itself does (`DEBOUNCE`).
+        let settling = self
+            .changed_at
+            .is_some_and(|t| crate::render::frame_now().saturating_duration_since(t) < DEBOUNCE);
+        let read = c
+            .picture_slots
+            .contains_key(&crate::render::path_picture_key(&bg));
+        if settling && !read {
+            return;
+        }
+        let since = self
+            .banner_seen
+            .as_ref()
+            .filter(|(p, _)| *p == bg)
+            .map(|(_, t)| *t);
+        let a = match since {
+            Some(t) => crate::render::progress(t, crate::style::motion::CONTENT_MS),
+            None if crate::render::animations() => 0.0,
+            None => 1.0,
+        };
+        let [x, y, w, h] = rect;
+        let sh = h / BANNER_STRIPS as f32;
+        // How much of the picture shows in strip `k`.
+        let keep = |k: usize| {
+            let mid = (k as f32 + 0.5) / BANNER_STRIPS as f32;
+            let t = ((mid - BANNER_WHOLE) / (1.0 - BANNER_WHOLE)).clamp(0.0, 1.0);
+            (1.0 - t * t * (3.0 - 2.0 * t)) * a
+        };
+        // Layers of the picture, each from the banner's top down to the end of its strip, so
+        // strip `k` is under layers `k..`: every edge belongs to one layer alone. Strips cut
+        // side by side would meet on shared edges, which the clip's rounding to whole pixels
+        // draws twice (a light line). Layer `k` adds what strip `k` needs over the layers
+        // below it.
+        let dim = BANNER_BRIGHT;
+        let mut drawn = false;
+        for k in 0..BANNER_STRIPS {
+            let below = if k + 1 < BANNER_STRIPS {
+                1.0 - keep(k + 1)
+            } else {
+                1.0
+            };
+            let alpha = if below > 1e-4 {
+                1.0 - (1.0 - keep(k)) / below
+            } else {
+                0.0
+            };
+            let bottom = crate::render::snap_to_grid(y + (k + 1) as f32 * sh);
+            let clip = [x, y, w, bottom - y];
+            let tint = [dim, dim, dim, alpha.max(0.0)];
+            // At the top of the details' panel, its top corners as round as the panel's.
+            drawn |= c.picture_cover_round_top(&bg, rect, clip, tint, crate::style::radius::CARD);
+        }
+        if drawn && since.is_none() {
+            self.banner_seen = Some((bg, crate::render::frame_now()));
+        }
+    }
+
     /// Details and the autoplay preview in the right-hand panel (virtual units). Returns the
     /// shape range to clip and the clip area.
     #[allow(clippy::too_many_arguments)]
     /// `button`: the action under the timeline as (verb, key hint), e.g. ("Play from", "Shift+Enter").
     /// `status`: the map's on osu! (label, colour), shown by the mapper's name.
+    /// Bare, the details of the song before a change go out under the new ones.
     pub fn draw_panel(
+        &mut self,
+        c: &mut Canvas,
+        library: &[Entry],
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        scroll_speed: f64,
+        stars: Option<f32>,
+        button: Option<(&str, &str)>,
+        status: Option<(&str, u32)>,
+        liked: Option<bool>,
+    ) -> Option<(std::ops::Range<usize>, crate::layout::Area)> {
+        self.draw_leaving(c);
+        let start = c.shapes.len();
+        let clip = self.draw_details(
+            c,
+            library,
+            x,
+            y,
+            w,
+            h,
+            scroll_speed,
+            stars,
+            button,
+            status,
+            liked,
+        );
+        if self.bare && crate::render::animations() {
+            self.keep_drawn(c, start, clip.as_ref().map(|(r, _)| r.clone()));
+        }
+        clip
+    }
+
+    /// The details of the song before the one just picked on its own (`entered`), as they
+    /// were last drawn, going out: `LEAVE_SHIFT` left and fading over `LEAVE_MS`.
+    fn draw_leaving(&mut self, c: &mut Canvas) {
+        let Some(at) = self.entered.map(|(_, at)| at) else {
+            self.leaving = None;
+            return;
+        };
+        if self.leaving.as_ref().is_none_or(|(_, t)| *t != at) {
+            self.leaving = Some((std::mem::take(&mut self.drawn), at));
+        }
+        let Some((gone, at)) = &self.leaving else {
+            return;
+        };
+        let p = crate::style::motion::entrance(*at, LEAVE_MS, |t| t * t);
+        if p >= 1.0 || gone.shapes.is_empty() {
+            return;
+        }
+        let start = c.shapes.len();
+        c.shapes.extend_from_slice(&gone.shapes);
+        for (r, rect) in &gone.clips {
+            c.clips.push((r.start + start..r.end + start, *rect));
+        }
+        c.transform_since(start, [0.0, 0.0], 1.0, -LEAVE_SHIFT * p, 0.0);
+        c.fade_since(start, 1.0 - p, 1.0);
+    }
+
+    /// Keeps what the details drew since shape `start` for `draw_leaving`, the preview's lane
+    /// (`lane`, cut to its box by a clip of its own) left out.
+    fn keep_drawn(&mut self, c: &Canvas, start: usize, lane: Option<std::ops::Range<usize>>) {
+        let d = &mut self.drawn;
+        d.shapes.clear();
+        d.clips.clear();
+        let Some(drawn) = c.shapes.get(start..) else {
+            return;
+        };
+        d.shapes.extend_from_slice(drawn);
+        if let Some(r) = lane {
+            let n = d.shapes.len();
+            let (a, b) = (
+                r.start.saturating_sub(start).min(n),
+                r.end.saturating_sub(start).min(n),
+            );
+            for sh in &mut d.shapes[a..b] {
+                sh.fill[3] = 0.0;
+                sh.border[3] = 0.0;
+            }
+        }
+        d.clips.extend(
+            c.clips
+                .iter()
+                .filter(|(r, _)| r.start >= start && r.start < r.end)
+                .map(|(r, rect)| (r.start - start..r.end - start, *rect)),
+        );
+    }
+
+    /// `draw_panel`'s details themselves.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_details(
         &mut self,
         c: &mut Canvas,
         library: &[Entry],
@@ -1026,9 +1777,10 @@ impl Preview {
         // The lane alone fills the box, laid out as on a 4:3 screen (640 units wide): bigger notes,
         // fewer of them, whatever the panel's shape.
         let (band_top, band_h) = game::lane_only();
-        const GRAPH_H: f32 = 40.0;
-        // Under the preview box: the timeline and its button.
-        let after_box = 8.0 + GRAPH_H + 44.0;
+        // Bare, the timeline's bars are lower: quieter, and room under them.
+        let graph_h = if self.bare { BARE_GRAPH_H } else { 40.0 };
+        // Under the preview box: the timeline and its button, and bare, the board's strip.
+        let after_box = 8.0 + graph_h + 44.0;
         // The preview's height per unit of its size. Smaller, it shows more of the lane ahead in
         // a shorter box: as small as dragged, and smaller still where the panel would otherwise
         // be taller than `h` (the details above it being `head` tall).
@@ -1049,18 +1801,21 @@ impl Preview {
         self.graph_rect = None;
         self.play_rect = None;
         self.box_rect = None;
+        self.board_at = None;
         let Some(i) = self.seen.filter(|&i| i < library.len()) else {
             (self.size_cap, self.size_shown) = (fitted(110.0), wanted.min(fitted(110.0)));
             let below = unit * self.size_shown + 12.0 + after_box;
             self.panel_bottom = y + h.min(110.0 + below);
-            c.round_rect(
-                [x, y],
-                [w, h.min(110.0 + below)],
-                8.0,
-                rgba(0x15151d, 0.82),
-                rgba(0x2a2a38, 1.0),
-                1.0,
-            );
+            if !self.bare {
+                c.round_rect(
+                    [x, y],
+                    [w, h.min(110.0 + below)],
+                    8.0,
+                    rgba(0x15151d, 0.82),
+                    rgba(0x2a2a38, 1.0),
+                    1.0,
+                );
+            }
             return None;
         };
         let e = &library[i];
@@ -1078,7 +1833,15 @@ impl Preview {
         let fade = self
             .ready_at
             .filter(|_| ready)
-            .map(|t| crate::render::progress(t, 180.0))
+            .map(|t| {
+                // Bare: content's entrance from the design tokens; boxed as it was.
+                use crate::style::motion;
+                if self.bare {
+                    motion::entrance(t, motion::CONTENT_MS, motion::out_quint)
+                } else {
+                    crate::render::progress(t, 180.0)
+                }
+            })
             .unwrap_or(0.0);
         let loaded = self.map.as_ref().filter(|(mi, _, _, _)| *mi == i && ready);
 
@@ -1183,6 +1946,12 @@ impl Preview {
             + 6.0
             + stat_rows as f32 * row_h
             + 6.0;
+        // Bare: the banner layout, of its own height.
+        let left_out_text = stats[3].first().map(|cell| cell.1.clone());
+        let bare_layout = self
+            .bare
+            .then(|| Bare::new(e, iw, left_out_text.is_some(), self.sim.is_some()));
+        let head = bare_layout.as_ref().map_or(head, |l| l.head);
         (self.size_cap, self.size_shown) = (fitted(head), wanted.min(fitted(head)));
         // The lane fills the panel's width (at the size chosen), however little room the details
         // leave: the panel grows down, into the leaderboard's room, rather than the lane shrink.
@@ -1197,142 +1966,225 @@ impl Preview {
         let band_h = band_h + (bottom - top - band_h) * fit;
         let preview_h = band_h * k;
         let h = head + preview_h + after_box;
-        self.panel_bottom = y + h;
-        c.round_rect(
-            [x, y],
-            [w, h],
-            8.0,
-            rgba(0x15151d, 0.82),
-            rgba(0x2a2a38, 1.0),
-            1.0,
-        );
-
-        let mut cy = y + 12.0;
-        for line in &title {
-            c.text(lx, cy, 12.0, rgba(0xffffff, 1.0), line);
-            cy += title_step;
-        }
-        cy += 3.0;
-        for line in &artist {
-            c.text(lx, cy, 9.0, rgba(0xc8c8d8, 1.0), line);
-            cy += body_step;
-        }
-        cy += 4.0;
-        // The EPIC mark at the very right of the mapper's line, bumping on the beat. It stands in
-        // the status's place, as on the website: the map's osu! status isn't shown with it.
-        self.epic_at = None;
-        let epic_w = if self.epic {
-            let pw = crate::epic::pill_width();
-            let ex = x + w - 14.0 - pw;
-            crate::epic::pill(c, ex, cy, 1.0, crate::style::pulse());
-            self.epic_at = Some([ex, cy]);
-            pw + 8.0
+        // Bare, the panel ends under what's on it: the room for "Play from" under the timeline
+        // only once a start point is picked (it grows into it).
+        let tail = if self.bare && self.marker(e).is_none() {
+            PLAY_FROM_ROOM
         } else {
             0.0
         };
-        // Otherwise the status on osu!.
-        let status_w = epic_w
-            + match status.filter(|s| !s.0.is_empty() && !self.epic) {
-                Some((label, col)) => {
-                    let lw = Canvas::text_width(7.0, label) + 12.0;
-                    let sx = x + w - 14.0 - epic_w - lw;
-                    c.round_rect(
-                        [sx, cy],
-                        [lw, 13.0],
-                        6.5,
-                        rgba(col, 0.15),
-                        rgba(col, 0.9),
-                        1.0,
-                    );
-                    c.text_centered(sx + lw / 2.0, cy + 3.0, 7.0, rgba(col, 1.0), label);
-                    lw + 8.0
+        self.panel_bottom = y + h - tail;
+        // Bare, it's on a panel of its own that song select draws under the whole page.
+        if !self.bare {
+            c.round_rect(
+                [x, y],
+                [w, h],
+                8.0,
+                rgba(0x15151d, 0.82),
+                rgba(0x2a2a38, 1.0),
+                1.0,
+            );
+        }
+
+        // The OD under the pointer: where its hit windows go, once all else is drawn.
+        let mut od_hovered = None;
+        let mut cy = y + 12.0;
+        let is_loaded = loaded.is_some();
+        if let Some(l) = &bare_layout {
+            let shown = BareShown {
+                stars,
+                status,
+                liked,
+                details: loaded.map(|(_, _, d, _)| *d),
+                left_out: left_out_text.as_deref(),
+                fade,
+            };
+            od_hovered = self.draw_bare_details(c, e, l, [x, y, w], &shown);
+            cy = y + head;
+        } else {
+            for line in &title {
+                c.text(
+                    lx,
+                    cy,
+                    crate::style::text::HEADING,
+                    rgba(0xffffff, 1.0),
+                    line,
+                );
+                cy += title_step;
+            }
+            cy += 3.0;
+            // Outside the bare look the panel keeps its own greys.
+            let bare = self.bare;
+            let ink = |bare_ink: u32, boxed: u32| if bare { bare_ink } else { boxed };
+            for line in &artist {
+                let col = ink(crate::style::ink::SECONDARY, 0xc8c8d8);
+                c.text(lx, cy, 9.0, rgba(col, 1.0), line);
+                cy += body_step;
+            }
+            cy += 4.0;
+            // The EPIC mark at the very right of the mapper's line, bumping on the beat. It stands in
+            // the status's place, as on the website: the map's osu! status isn't shown with it.
+            self.epic_at = None;
+            let epic_w = if self.epic {
+                let pw = crate::epic::pill_width();
+                let ex = x + w - 14.0 - pw;
+                crate::epic::pill(c, ex, cy, 1.0, crate::style::pulse());
+                self.epic_at = Some([ex, cy]);
+                pw + 8.0
+            } else {
+                0.0
+            };
+            // Otherwise the status on osu!.
+            let status_w = epic_w
+                + match status.filter(|s| !s.0.is_empty() && !self.epic) {
+                    Some((label, col)) => {
+                        let lw = Canvas::text_width(7.0, label) + 12.0;
+                        let sx = x + w - 14.0 - epic_w - lw;
+                        // Bare, the chip is its colour's tone alone, no edge.
+                        let (fill, edge) = if bare {
+                            (rgba(col, 0.22), 0.0)
+                        } else {
+                            (rgba(col, 0.15), 1.0)
+                        };
+                        c.round_rect([sx, cy], [lw, 13.0], 6.5, fill, rgba(col, 0.9), edge);
+                        c.text_centered(sx + lw / 2.0, cy + 3.0, 7.0, rgba(col, 1.0), label);
+                        lw + 8.0
+                    }
+                    None => 0.0,
+                };
+            // The heart, left of the status: whether the song's liked, and a click changes it.
+            let heart_w = match liked {
+                Some(liked) => {
+                    const HEART_W: f32 = 16.0;
+                    let hx = x + w - 14.0 - status_w - HEART_W;
+                    let hover = c.hovered(hx, cy, HEART_W, 13.0);
+                    let colour = match (liked, hover) {
+                        (true, _) => 0xff5fa2,
+                        (false, true) => 0xc8c8d8,
+                        (false, false) => 0x5a5a70,
+                    };
+                    crate::player::draw_heart(c, hx + 3.5, cy + 2.5, 1.0, colour);
+                    c.hit(hx, cy, HEART_W, 13.0, Hit::SelectLike);
+                    HEART_W + 6.0
                 }
                 None => 0.0,
             };
-        // The heart, left of the status: whether the song's liked, and a click changes it.
-        let heart_w = match liked {
-            Some(liked) => {
-                const HEART_W: f32 = 16.0;
-                let hx = x + w - 14.0 - status_w - HEART_W;
-                let hover = c.hovered(hx, cy, HEART_W, 13.0);
-                let colour = match (liked, hover) {
-                    (true, _) => 0xff5fa2,
-                    (false, true) => 0xc8c8d8,
-                    (false, false) => 0x5a5a70,
-                };
-                crate::player::draw_heart(c, hx + 3.5, cy + 2.5, 1.0, colour);
-                c.hit(hx, cy, HEART_W, 13.0, Hit::SelectLike);
-                HEART_W + 6.0
+            let mapper = Canvas::fit(
+                8.0,
+                iw - status_w - heart_w,
+                &format!("mapped by {}", e.meta.creator),
+            );
+            c.text(
+                lx,
+                cy + (13.0 - th_small) / 2.0,
+                8.0,
+                rgba(ink(crate::style::ink::CAPTION, 0x8a8aa0), 1.0),
+                &mapper,
+            );
+            cy += 13.0 + 6.0;
+            crate::style::map_pill(c, x + w - 14.0, cy + 3.0, 9.0, e.meta.level, stars);
+            // The difficulty's name: bare, in its rating's colour (the accent is Play's and the
+            // selection's), else the accent.
+            let version_ink = if bare {
+                crate::style::role::rating_ink(e.meta.level, stars)
+            } else {
+                accent()
+            };
+            for line in &version {
+                c.text(lx, cy + 3.0, 9.0, rgba(version_ink, 1.0), line);
+                cy += body_step;
             }
-            None => 0.0,
-        };
-        let mapper = Canvas::fit(
-            8.0,
-            iw - status_w - heart_w,
-            &format!("mapped by {}", e.meta.creator),
-        );
-        c.text(
-            lx,
-            cy + (13.0 - th_small) / 2.0,
-            8.0,
-            rgba(0x8a8aa0, 1.0),
-            &mapper,
-        );
-        cy += 13.0 + 6.0;
-        crate::style::map_pill(c, x + w - 14.0, cy + 3.0, 9.0, e.meta.level, stars);
-        for line in &version {
-            c.text(lx, cy + 3.0, 9.0, rgba(accent(), 1.0), line);
-            cy += body_step;
-        }
-        cy += (15.0 - version.len() as f32 * body_step).max(0.0) + 6.0;
-        // Muted labels, bright values.
-        // The OD under the pointer: where its hit windows go, once all else is drawn.
-        let mut od_hovered = None;
-        for group in &rows {
-            for row in group {
-                let mut sx = lx;
-                for cell @ (label, value, alpha) in row.iter().copied() {
-                    if *label == "OD" && c.hovered(sx, cy - 2.0, cell_w(cell), row_h) {
-                        od_hovered = Some((sx, cy + row_h));
+            cy += (15.0 - version.len() as f32 * body_step).max(0.0) + 6.0;
+            // Muted labels, bright values.
+            for group in &rows {
+                for row in group {
+                    let mut sx = lx;
+                    for cell @ (label, value, alpha) in row.iter().copied() {
+                        if *label == "OD" && c.hovered(sx, cy - 2.0, cell_w(cell), row_h) {
+                            od_hovered = Some((sx, cy + row_h));
+                        }
+                        let (label_ink, value_ink) = if bare {
+                            (crate::style::ink::CAPTION, crate::style::ink::PRIMARY)
+                        } else {
+                            (0x8a8aa0, 0xe8e8f4)
+                        };
+                        let size = crate::style::text::BODY;
+                        sx += c.text(sx, cy, size, rgba(label_ink, *alpha), &format!("{label} "));
+                        sx += c.text(sx, cy, size, rgba(value_ink, *alpha), value) + STAT_GAP;
                     }
-                    sx += c.text(sx, cy, 8.0, rgba(0x8a8aa0, *alpha), &format!("{label} "));
-                    sx += c.text(sx, cy, 8.0, rgba(0xe8e8f4, *alpha), value) + STAT_GAP;
+                    cy += row_h;
                 }
-                cy += row_h;
             }
+            cy = cy.max(y + 12.0)
+                + (stat_rows.saturating_sub(rows.iter().map(Vec::len).sum()) as f32) * row_h
+                + 6.0;
         }
-        cy = cy.max(y + 12.0)
-            + (stat_rows.saturating_sub(rows.iter().map(Vec::len).sum()) as f32) * row_h
-            + 6.0;
 
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
         // As wide as the lane at that scale (all of the panel at full size), centred.
         let bw = lane_w * k;
-        let (bx, by, bh) = (x + 10.0 + (w - 20.0 - bw) / 2.0, cy, preview_h);
-        c.round_rect(
-            [bx, by],
-            [bw, bh],
-            6.0,
-            rgba(0x0c0c12, 1.0),
-            rgba(0x2a2a38, 1.0),
-            1.0,
-        );
+        // Bare, the lane's tile starts at the details' left edge: the drum at its start, or (the
+        // drum off in the settings) off it to the left, cut off.
+        let drum_w = crate::game::PANEL_W * k;
+        let bx = if self.bare {
+            x + 14.0 - if self.hide_drum { drum_w } else { 0.0 }
+        } else {
+            x + 10.0 + (w - 20.0 - bw) / 2.0
+        };
+        let (by, bh) = (cy, preview_h);
+        // Bare, the autoplay is a lane like the menu's, its drum at the left, running on to the
+        // tiles' right edge; the notes come in from its end.
+        let lane_end = if self.bare {
+            x + w - 14.0 - LANE_FADE[0]
+        } else {
+            bx + bw
+        };
+        // Bare, the tile's left edge: the drum's, or where the lane starts without it.
+        let lane_x = if self.bare { x + 14.0 } else { bx };
+        // Bare: no lines round it, its corners as round as the tiles', the tile out past the
+        // lane's end (the lane is cut square to its box, so a tile ending with it would lose its
+        // right corners).
+        let strip = [lane_x, by, lane_end - lane_x + LANE_FADE[0], bh];
+        // A tile as the stats' are, not a dark box: on a bright picture that read as black.
+        if self.bare {
+            let r = crate::style::radius::SMALL;
+            crate::style::surface(c, strip, r, crate::style::Surface::Raised);
+        } else {
+            c.round_rect(
+                [bx, by],
+                [bw, bh],
+                6.0,
+                rgba(0x0c0c12, 1.0),
+                rgba(0x2a2a38, 1.0),
+                1.0,
+            );
+        }
         self.box_rect = Some([bx, by, bw, bh]);
-        c.hit(bx, by, bw, bh, Hit::Preview);
-        let loaded = loaded.is_some();
+        c.hit(lane_x, by, lane_end.min(c.width) - lane_x, bh, Hit::Preview);
+        // Bare, the timeline is as wide as the lane's tile, edge to edge.
+        let (gx, gw) = if self.bare {
+            (strip[0], strip[2])
+        } else {
+            (bx, bw)
+        };
+        let loaded = is_loaded;
         if loaded {
-            self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], button);
+            let graph_start = c.shapes.len();
+            self.draw_timeline(c, e, [gx, by + bh + 8.0, gw, graph_h], button);
             // Seeking goes by the music: until this map's plays, a click would move the last one.
             if !playing {
                 self.graph_rect = None;
                 self.play_rect = None;
             }
-            if fade < 1.0 {
+            if self.bare {
+                // Nothing behind it to cover it with: it fades in itself.
+                c.fade_since(graph_start, fade, 1.0);
+            } else if fade < 1.0 {
                 c.rect(
                     bx - 1.0,
                     by + bh + 4.0,
                     bw + 2.0,
-                    GRAPH_H + 40.0,
+                    graph_h + 40.0,
                     rgba(0x15151d, 1.0 - fade),
                 );
             }
@@ -1356,42 +2208,72 @@ impl Preview {
             }
             return None;
         };
+        // Bare, the notes run on under the tile's rounded end and come in out of its edge, not
+        // out of the middle of it where the lane would be cut square.
+        let notes_end = if self.bare {
+            bare_notes_end(lane_end)
+        } else {
+            lane_end
+        };
         let full_w = c.width;
         let start = c.shapes.len();
-        c.width = lane_w;
+        c.width = (notes_end - bx) / k;
         game.view.kiai_effects = self.kiai_effects;
-        game.draw_playfield(c, scroll_speed);
+        // Never the black playfield here (a black box on the map's picture); plays keep it.
+        crate::game::with_look(preview_look(crate::game::playfield_look()), || {
+            game.draw_playfield(c, scroll_speed)
+        });
         let oy = by - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
+        // Bare, the lane fits its round tile; its notes slide in from under the tile's edge (the
+        // lane is clipped to it: faded in short of it, they seemed to appear in plain view).
+        if self.bare {
+            bare_lane_end(&mut c.shapes, start, bx, lane_x, notes_end, bh);
+        }
         if button.is_some() {
-            // Song select only (download previews have no fullscreen view).
-            c.text_right(
-                bx + bw - 6.0,
-                by + bh - 10.0,
-                6.0,
-                rgba(0x6f6f86, 1.0),
-                if crate::mobile::active() {
-                    "tap: fullscreen"
-                } else {
-                    "click: fullscreen (Ctrl+Enter)"
-                },
-            );
+            // Song select only (download previews have no fullscreen view). Only where it fits
+            // the lane (narrow, it ran out past its left edge), shorter first.
+            let right = if self.bare {
+                lane_end - LANE_FADE[1] - 4.0
+            } else {
+                bx + bw - 6.0
+            };
+            // Right of the drum (the hit target's where it starts).
+            let room = right - (bx + drum_w) - 6.0;
+            let size = crate::style::text::CAPTION;
+            let hint = if crate::mobile::active() {
+                &["tap: fullscreen"][..]
+            } else {
+                &["click: fullscreen (Ctrl+Enter)", "click: fullscreen"][..]
+            }
+            .iter()
+            .find(|s| Canvas::text_width(size, s) <= room);
+            if let Some(hint) = hint {
+                c.text_right(right, by + bh - 10.0, size, rgba(0x6f6f86, 1.0), hint);
+            }
         }
         if fade < 1.0 {
-            c.round_rect(
-                [bx, by],
-                [bw, bh],
-                6.0,
-                rgba(0x0c0c12, 1.0 - fade),
-                rgba(0, 0.0),
-                0.0,
-            );
+            if self.bare {
+                // Nothing dark to cover them with: the notes fade in themselves.
+                c.fade_since(start, fade, 1.0);
+            } else {
+                c.round_rect(
+                    [bx, by],
+                    [bw, bh],
+                    6.0,
+                    rgba(0x0c0c12, 1.0 - fade),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+            }
         }
+        // Bare, from the tile's left edge: the drum and its panel left of it are cut off.
+        let clip_x = if self.bare { lane_x } else { bx };
         let clip = crate::layout::Area {
-            x: bx / full_w,
+            x: clip_x / full_w,
             y: by / VIRTUAL_HEIGHT,
-            w: bw / full_w,
+            w: (notes_end - clip_x) / full_w,
             h: bh / VIRTUAL_HEIGHT,
         };
         // Only the lane is clipped to the box.
@@ -1407,6 +2289,205 @@ pub use crate::config::PREVIEW_SIZE;
 
 /// Space between the stats in the details.
 const STAT_GAP: f32 = 10.0;
+
+/// Bare: how far the autoplay's lane fades in at its left end (out from the drum's side) and its
+/// right (where the notes come in), and how tall the timeline's bars are.
+const LANE_FADE: [f32; 2] = [10.0, 28.0];
+
+/// The look the preview's playfield is drawn with: the play's, but never the black playfield.
+pub(crate) fn preview_look(play: crate::game::Look) -> crate::game::Look {
+    crate::game::Look {
+        black_lane: false,
+        ..play
+    }
+}
+
+/// Bare, where the lane's notes end, its tile's right edge (the lane ending at `lane_end`, the
+/// tile running on past it): they come in out of it, not out of the middle of the tile.
+pub(crate) fn bare_notes_end(lane_end: f32) -> f32 {
+    lane_end + LANE_FADE[0]
+}
+
+/// Bare, the lane's shapes as drawn from `start` (its drum's panel from `lane_x`, the lane on
+/// to `notes_end`, `band_h` tall) fitted to its tile, which starts at `tile_left`: at the drum
+/// (`lane_x`), or right of it with the drum off. Its own bands (as tall as the tile, running its
+/// length) start at the tile's edges and are as round (square, it made the lane read as a square
+/// box on a dark picture); the drum's panel is round at the tile's edge and square against the
+/// lane, or not drawn at all left of the tile; the lines along it aren't drawn.
+pub(crate) fn bare_lane_end(
+    shapes: &mut Vec<crate::render::Shape>,
+    start: usize,
+    lane_x: f32,
+    tile_left: f32,
+    notes_end: f32,
+    band_h: f32,
+) {
+    let round = crate::style::radius::SMALL;
+    let mut panels = Vec::new();
+    for (i, sh) in shapes.iter_mut().enumerate().skip(start) {
+        if sh.params != [0.0; 4] || sh.angle != 0.0 {
+            continue;
+        }
+        let (left, right) = (sh.center[0] - sh.half[0], sh.center[0] + sh.half[0]);
+        let tall = sh.half[1] * 2.0 >= band_h * 0.5;
+        if tall && right >= notes_end - 0.5 {
+            // From the tile's left edge, so it's round at both ends.
+            if (left - lane_x).abs() < 0.5 {
+                sh.center[0] = (tile_left + right) / 2.0;
+                sh.half[0] = (right - tile_left) / 2.0;
+            }
+            sh.params[0] = round;
+        } else if tall && (left - lane_x).abs() < 0.5 && right - left < (notes_end - lane_x) / 2.0 {
+            if right <= tile_left + 0.5 {
+                // Left of the tile, cut off with the drum: none of it shows.
+                sh.fill[3] = 0.0;
+                sh.border[3] = 0.0;
+            } else {
+                panels.push(i);
+            }
+        } else if !tall && left <= lane_x + 0.5 && right >= notes_end - 0.5 {
+            // The lines along it: none (the tile is its frame). Cut by the tile's edge, what was
+            // left of them flickered as a hairline as the panel followed the pointer.
+            sh.fill[3] = 0.0;
+            sh.border[3] = 0.0;
+        }
+    }
+    // The drum's panel round at the tile's edge; a square copy over its right half keeps it
+    // square against the lane.
+    for i in panels.into_iter().rev() {
+        let mut square = shapes[i];
+        shapes[i].params[0] = round;
+        square.half[0] /= 2.0;
+        square.center[0] += square.half[0];
+        shapes.insert(i + 1, square);
+    }
+}
+
+/// The biggest size, from a tile's value size down to the body's, that `value` fits `room` at.
+fn fitting_size(value: &str, room: f32) -> f32 {
+    use crate::style::text;
+    [text::HEADING, 10.0, 9.0, text::BODY]
+        .into_iter()
+        .find(|&s| Canvas::text_width(s, value) <= room)
+        .unwrap_or(text::BODY)
+}
+
+/// The biggest size from the body's down to the caption's that `value` fits `room` at (the
+/// caption's when nothing does: a number is never cut).
+fn fit_size(value: &str, room: f32) -> f32 {
+    use crate::style::text;
+    [text::BODY, 7.0, text::CAPTION]
+        .into_iter()
+        .find(|&s| Canvas::text_width(s, value) <= room)
+        .unwrap_or(text::CAPTION)
+}
+
+/// The pp row's button: the lifted surface, lighter under the pointer.
+fn pp_chip(c: &mut Canvas, rect: [f32; 4], lit: bool) {
+    use crate::style::{Surface, radius, surface};
+    surface(c, rect, radius::SMALL, Surface::Lifted);
+    if lit {
+        let [x, y, w, h] = rect;
+        c.round_rect(
+            [x, y],
+            [w, h],
+            radius::SMALL,
+            rgba(0xffffff, 0.06),
+            rgba(0xffffff, 0.0),
+            0.0,
+        );
+    }
+}
+
+const BARE_GRAPH_H: f32 = 28.0;
+/// The room under the timeline for its "Play from" button, past its times' line.
+const PLAY_FROM_ROOM: f32 = 22.0;
+/// Bare: the timeline's bars, a neutral ink (the accent is Play's and the selection's), kiai's in
+/// gold; how strong they are ahead of the playhead and behind it.
+const KIAI_GOLD: u32 = 0xFFD34D;
+const BARS_AHEAD: f32 = 0.35;
+const BARS_PLAYED: f32 = 0.8;
+
+/// The details in song select's main menu look (`Preview::bare`): how tall the map picture's
+/// banner is and where the title starts on it (under the leaderboard button's row), the rows'
+/// heights (the mapper's line, the difficulty's chip, the stat tiles, the Don/Kat bar with its
+/// counts, the pp chips, what a TJA course leaves out) and the gaps between the blocks.
+const BANNER_H: f32 = 96.0;
+const BANNER_TOP: f32 = 14.0;
+const MAPPER_H: f32 = 13.0;
+const CHIP_H: f32 = 18.0;
+const TILE_H: f32 = 30.0;
+const BAR_H: f32 = 14.0;
+const PP_H: f32 = 16.0;
+/// Between the pp button, open, and the play it works out under it.
+const SIM_GAP: f32 = 4.0;
+const LEFT_OUT_H: f32 = 12.0;
+const BLOCK_GAP: f32 = 8.0;
+/// The banner's strips (it fades out down them) and how far down it stays whole.
+const BANNER_STRIPS: usize = 12;
+const BANNER_WHOLE: f32 = 0.45;
+/// How bright the banner's picture is drawn, so the title reads over it.
+const BANNER_BRIGHT: f32 = 0.6;
+
+/// The bare details' text, laid out before anything is drawn (the panel's height follows it):
+/// the title at the title size on one line, or two lines a step smaller; the artist one step
+/// below the title, on one line.
+struct Bare {
+    title_size: f32,
+    title: Vec<String>,
+    artist_size: f32,
+    artist: String,
+    left_out: bool,
+    head: f32,
+}
+
+impl Bare {
+    fn new(e: &Entry, iw: f32, left_out: bool, sim: bool) -> Bare {
+        use crate::style::text::{BODY, HEADING, TITLE};
+        let (title_size, title, artist_size) = if Canvas::text_width(TITLE, &e.meta.title) <= iw {
+            (TITLE, vec![e.meta.title.clone()], HEADING)
+        } else {
+            (HEADING, wrap(HEADING, iw, &e.meta.title, 2), BODY)
+        };
+        let artist = Canvas::fit(artist_size, iw, &e.meta.artist);
+        let head = BANNER_TOP
+            + title.len() as f32 * (Canvas::text_height(title_size) + 4.0)
+            + Canvas::text_height(artist_size)
+            + 6.0
+            + MAPPER_H
+            + BLOCK_GAP
+            + CHIP_H
+            + BLOCK_GAP
+            + TILE_H
+            + BLOCK_GAP
+            + BAR_H
+            + BLOCK_GAP
+            + PP_H
+            + if sim { SIM_GAP + PP_H } else { 0.0 }
+            + if left_out { 4.0 + LEFT_OUT_H } else { 0.0 }
+            + 10.0;
+        Bare {
+            title_size,
+            title,
+            artist_size,
+            artist,
+            left_out,
+            head,
+        }
+    }
+}
+
+/// What the bare details show of the map besides its entry.
+struct BareShown<'a> {
+    stars: Option<f32>,
+    status: Option<(&'a str, u32)>,
+    liked: Option<bool>,
+    /// Once the map is read: its BPM, length and notes.
+    details: Option<Details>,
+    left_out: Option<&'a str>,
+    /// How far the details read with the map have faded in.
+    fade: f32,
+}
 
 /// The label of the row of what a TJA course leaves out, said plainly as the other details are.
 fn left_out_label() -> &'static str {
@@ -1449,34 +2530,45 @@ fn fmt_time(ms: f64) -> String {
 
 /// Difficulty timeline like lazer's song progress graph: strain bars over the map's length,
 /// kiai tinted, the preview point marked, and a playhead. Returns the time range it spans.
-pub fn draw_graph(
+/// `boxed`: in a box of its own, else its bars bare over what's behind them.
+fn draw_graph(
     c: &mut Canvas,
     g: &Graph,
     [x, y, w, h]: [f32; 4],
     now: f64,
     preview_at: f64,
     marker: Option<f64>,
+    boxed: bool,
 ) -> (f64, f64) {
     let (t0, t1) = (g.start.min(0.0).max(g.start - 2000.0), g.end);
     let span = (t1 - t0).max(1.0);
     let x_of = |t: f64| x + (((t - t0) / span).clamp(0.0, 1.0) as f32) * w;
-    c.round_rect(
-        [x, y],
-        [w, h],
-        5.0,
-        rgba(0x0c0c12, 1.0),
-        rgba(0x2a2a38, 1.0),
-        1.0,
-    );
-    for &(s, e) in &g.kiai {
-        c.rect(
-            x_of(s),
-            y + 1.0,
-            (x_of(e) - x_of(s)).max(1.0),
-            h - 2.0,
-            rgba(0xff8a3d, 0.12),
+    // A line `lw` wide at `at`: its left edge, kept on the timeline (at its very ends, centred on
+    // them, half of it stuck out past the playfield's edge).
+    let line = |at: f32, lw: f32| (at - lw / 2.0).clamp(x, x + w - lw);
+    if boxed {
+        c.round_rect(
+            [x, y],
+            [w, h],
+            5.0,
+            rgba(0x0c0c12, 1.0),
+            rgba(0x2a2a38, 1.0),
+            1.0,
         );
     }
+    // Boxed, kiai is a tint behind the bars; bare, it's their colour.
+    if boxed {
+        for &(s, e) in &g.kiai {
+            c.rect(
+                x_of(s),
+                y + 1.0,
+                (x_of(e) - x_of(s)).max(1.0),
+                h - 2.0,
+                rgba(0xff8a3d, 0.12),
+            );
+        }
+    }
+    let span_at = |px: f32| t0 + f64::from((px - x) / w.max(1.0)) * span;
     // Bars cover the strain sections; the axis starts a little earlier for the intro.
     let (bx0, bx1) = (
         x_of(g.peaks_start),
@@ -1486,41 +2578,77 @@ pub fn draw_graph(
     let bar_w = (bx1 - bx0) / n as f32;
     for (i, v) in g.bins(n).into_iter().enumerate() {
         let bh = 2.0 + v * (h - 8.0);
-        let col = strain_colour(v);
-        let played = (bx0 + (i as f32 + 0.5) * bar_w) <= x_of(now);
+        let mid = bx0 + (i as f32 + 0.5) * bar_w;
+        let played = mid <= x_of(now);
+        let colour = if boxed {
+            rgba(strain_colour(v), if played { 1.0 } else { 0.55 })
+        } else {
+            let t = span_at(mid);
+            let kiai = g.kiai.iter().any(|&(s, e)| t >= s && t < e);
+            let ink = match (kiai, played) {
+                (true, _) => KIAI_GOLD,
+                (false, true) => crate::style::ink::PRIMARY,
+                (false, false) => crate::style::ink::SECONDARY,
+            };
+            rgba(ink, if played { BARS_PLAYED } else { BARS_AHEAD })
+        };
         c.rect(
             bx0 + i as f32 * bar_w,
             y + h - 3.0 - bh,
             (bar_w - 0.5).max(0.5),
             bh,
-            rgba(col, if played { 1.0 } else { 0.55 }),
+            colour,
         );
     }
     if preview_at >= 0.0 {
         let px = x_of(preview_at);
-        c.rect(px - 0.5, y + 1.0, 1.0, 5.0, rgba(0x86E05A, 1.0));
+        c.rect(line(px, 1.0), y + 1.0, 1.0, 5.0, rgba(0x86E05A, 1.0));
     }
     if let Some(m) = marker {
         // The picked start point: a blue line with a little flag.
-        let mx = x_of(m);
-        c.rect(mx - 0.75, y - 3.0, 1.5, h + 6.0, rgba(MARKER, 1.0));
-        c.rect(mx + 0.75, y - 3.0, 6.0, 4.5, rgba(MARKER, 1.0));
+        // The flag points right, or left where there's no room for it before the end.
+        let mx = line(x_of(m), 1.5);
+        c.rect(mx, y - 3.0, 1.5, h + 6.0, rgba(MARKER, 1.0));
+        let flag = if mx + 1.5 + 6.0 <= x + w {
+            mx + 1.5
+        } else {
+            mx - 6.0
+        };
+        c.rect(flag, y - 3.0, 6.0, 4.5, rgba(MARKER, 1.0));
     }
     let hx = x_of(now);
-    c.rect(hx - 0.75, y - 2.0, 1.5, h + 4.0, rgba(0xffffff, 0.95));
-    c.text(
-        x,
-        y + h + 5.0,
-        7.0,
-        rgba(0xc8c8d8, 1.0),
-        &format!("{} / {}", fmt_time(now - t0.min(0.0)), fmt_time(t1)),
-    );
-    let peak = format!(
-        "peak {:.1} notes/s at {}",
-        g.peak_nps,
-        fmt_time(g.peak_nps_at)
-    );
-    c.text_right(x + w, y + h + 5.0, 7.0, rgba(0x8a8aa0, 1.0), &peak);
+    // Bare, the playhead is a plain line of the bars' ink, as tall as they are: no glow round
+    // it and no white past their ends, so it reads as part of the timeline beside the marker.
+    if boxed {
+        c.rect(line(hx, 1.5), y - 2.0, 1.5, h + 4.0, rgba(0xffffff, 0.95));
+    } else {
+        c.rect(
+            line(hx, 1.0),
+            y + 1.0,
+            1.0,
+            h - 4.0,
+            rgba(crate::style::ink::PRIMARY, 0.9),
+        );
+    }
+    let times = format!("{} / {}", fmt_time(now - t0.min(0.0)), fmt_time(t1));
+    c.text(x, y + h + 5.0, 7.0, rgba(0xc8c8d8, 1.0), &times);
+    // The peak at the right, shorter where the timeline is narrow, none where even that would
+    // run into the times.
+    let room = w - Canvas::text_width(7.0, &times) - 8.0;
+    let peak = [
+        format!(
+            "peak {:.1} notes/s at {}",
+            g.peak_nps,
+            fmt_time(g.peak_nps_at)
+        ),
+        format!("peak {:.1} notes/s", g.peak_nps),
+        format!("{:.1}/s", g.peak_nps),
+    ]
+    .into_iter()
+    .find(|s| Canvas::text_width(7.0, s) <= room);
+    if let Some(peak) = peak {
+        c.text_right(x + w, y + h + 5.0, 7.0, rgba(0x8a8aa0, 1.0), &peak);
+    }
     (t0, t1)
 }
 
@@ -1542,17 +2670,21 @@ pub fn strain_colour(v: f32) -> u32 {
     }
 }
 
-/// "<verb> 1:23" under the timeline once a start point is picked (else a hint). `button` is
-/// (verb, key hint); None shows no button (only the host picks a match's start). Returns the
-/// button's rect.
+/// "<verb> 1:23" under the timeline once a start point is picked (else a hint, when `show_hint`).
+/// `button` is (verb, key hint); None shows no button (only the host picks a match's start).
+/// Returns the button's rect.
 fn draw_play_button(
     c: &mut Canvas,
     cx: f32,
     y: f32,
     marker: Option<f64>,
     button: Option<(&str, &str)>,
+    show_hint: bool,
 ) -> Option<[f32; 4]> {
     let (Some(t), Some((verb, hint))) = (marker, button) else {
+        if !show_hint {
+            return None;
+        }
         let text = if crate::mobile::active() {
             "tap or drag to scroll"
         } else if button.is_some() {
@@ -1724,6 +2856,34 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Play {
 
 #[cfg(test)]
 mod beat_tests {
+    #[test]
+    fn a_shown_rating_counts_to_the_new_one_and_keeps_its_value_while_none_comes() {
+        let mut shown = None;
+        assert_eq!(
+            follow(&mut shown, Some(3.0), 16.0),
+            Some(3.0),
+            "at once from nothing"
+        );
+        assert_eq!(
+            follow(&mut shown, None, 16.0),
+            None,
+            "nothing shown while it's worked out"
+        );
+        assert_eq!(shown, Some(3.0), "kept to count from");
+        let mut last = 3.0;
+        for _ in 0..40 {
+            let v = follow(&mut shown, Some(5.5), 16.0).expect("a value");
+            assert!(v >= last && v <= 5.5, "counting up: {last} then {v}");
+            last = v;
+        }
+        assert_eq!(last, 5.5, "there in the end");
+        let mut pp = Some([100.0, 90.0, 80.0]);
+        for _ in 0..40 {
+            follow_pp(&mut pp, Some([200.0, 180.0, 160.0]), 16.0);
+        }
+        assert_eq!(pp, Some([200.0, 180.0, 160.0]));
+    }
+
     use super::*;
     use crate::beatmap::ControlPoint;
 
@@ -1860,6 +3020,186 @@ mod beat_tests {
         for (x, y) in spots {
             assert!(matches!(top(&c, x, y), Some(Hit::SocialPanel)));
         }
+    }
+
+    #[test]
+    fn bare_the_timeline_is_as_wide_as_the_lanes_tile() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.osu"),
+            map.meta.clone(),
+        )];
+        let mut p = Preview {
+            seen: Some(0),
+            ready_for: Some(0),
+            game: Some(new_preview_game(&map, 1.0)),
+            map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+            bare: true,
+            ..Default::default()
+        };
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        p.draw_panel(
+            &mut c, &library, 500.0, 40.0, 340.0, 400.0, 1.0, None, None, None, None,
+        );
+        let [_, by, _, bh] = p.box_rect.expect("the lane");
+        let fill = crate::style::surface_fill(crate::style::Surface::Raised);
+        let tile = c
+            .shapes
+            .iter()
+            .find(|sh| {
+                sh.fill == fill
+                    && sh.params[0] == crate::style::radius::SMALL
+                    && (sh.center[1] - (by + bh / 2.0)).abs() < 0.5
+                    && (sh.half[1] * 2.0 - bh).abs() < 0.5
+            })
+            .expect("the lane's tile");
+        let (left, right) = (tile.center[0] - tile.half[0], tile.center[0] + tile.half[0]);
+        let [gx, _, gw, _] = p.graph_rect.expect("the timeline");
+        assert!(
+            (gx - left).abs() < 0.01 && (gx + gw - right).abs() < 0.01,
+            "the timeline {gx}..{} under the tile {left}..{right}",
+            gx + gw
+        );
+    }
+
+    #[test]
+    fn bare_the_drum_starts_the_lanes_tile_unless_its_off() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.osu"),
+            map.meta.clone(),
+        )];
+        let panel_ink = crate::render::rgba(0x191921, 1.0);
+        for hide_drum in [false, true] {
+            let mut p = Preview {
+                seen: Some(0),
+                ready_for: Some(0),
+                game: Some(new_preview_game(&map, 1.0)),
+                map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+                bare: true,
+                hide_drum,
+                ..Default::default()
+            };
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            let (_, clip) = p
+                .draw_panel(
+                    &mut c, &library, 500.0, 40.0, 340.0, 400.0, 1.0, None, None, None, None,
+                )
+                .expect("the lane drawn");
+            let [_, by, _, bh] = p.box_rect.expect("the lane");
+            let fill = crate::style::surface_fill(crate::style::Surface::Raised);
+            let tile = c
+                .shapes
+                .iter()
+                .find(|sh| {
+                    sh.fill == fill
+                        && sh.params[0] == crate::style::radius::SMALL
+                        && (sh.center[1] - (by + bh / 2.0)).abs() < 0.5
+                        && (sh.half[1] * 2.0 - bh).abs() < 0.5
+                })
+                .expect("the lane's tile");
+            let left = tile.center[0] - tile.half[0];
+            // The tile on the details' line either way, the lane cut at its edge.
+            assert!((left - 514.0).abs() < 0.01, "the tile from {left}");
+            assert!(
+                (clip.x * 853.3 - left).abs() < 0.01,
+                "cut from {}",
+                clip.x * 853.3
+            );
+            let panels: Vec<&crate::render::Shape> = c
+                .shapes
+                .iter()
+                .filter(|sh| {
+                    sh.fill[3] > 0.0
+                        && sh.fill[..3] == panel_ink[..3]
+                        && (sh.half[1] * 2.0 - bh).abs() < 1.0
+                })
+                .collect();
+            if hide_drum {
+                assert!(panels.is_empty(), "no drum panel: {}", panels.len());
+            } else {
+                // Round at the tile's edge, square against the lane.
+                assert!(
+                    panels
+                        .iter()
+                        .any(|sh| (sh.center[0] - sh.half[0] - left).abs() < 0.01
+                            && sh.params[0] == crate::style::radius::SMALL),
+                    "the drum's panel from the tile's edge, round"
+                );
+                assert!(
+                    panels.iter().any(|sh| sh.params[0] == 0.0),
+                    "its square half"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_timelines_lines_stay_on_it_at_its_very_ends() {
+        let g = difficulty::Graph {
+            start: 0.0,
+            end: 10_000.0,
+            peaks: vec![0.5; 10],
+            peaks_start: 0.0,
+            section: 1000.0,
+            peak_nps: 7.0,
+            peak_nps_at: 1000.0,
+            kiai: vec![(9000.0, 10_000.0)],
+        };
+        let rect = [100.0, 50.0, 300.0, 32.0];
+        for boxed in [false, true] {
+            // The playhead, the preview point and the start point at the start, then at the end.
+            for (now, at) in [(0.0, 0.0), (10_000.0, 10_000.0)] {
+                let mut c = Canvas::default();
+                draw_graph(&mut c, &g, rect, now, at, Some(at), boxed);
+                for sh in &c.shapes {
+                    let (l, r) = (sh.center[0] - sh.half[0], sh.center[0] + sh.half[0]);
+                    assert!(
+                        l >= rect[0] - 1e-3 && r <= rect[0] + rect[2] + 1e-3,
+                        "boxed {boxed}, at {at}: {l}..{r} out of {}..{}",
+                        rect[0],
+                        rect[0] + rect[2]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn another_map_picked_drops_the_start_point_even_on_the_same_song() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        // Two difficulties of a set: one song.
+        let library = [
+            Entry::new(PathBuf::from("/nonexistent/a.osu"), map.meta.clone()),
+            Entry::new(PathBuf::from("/nonexistent/b.osu"), map.meta.clone()),
+        ];
+        assert_eq!(audio_path(&library[0]), audio_path(&library[1]));
+        let mut p = Preview {
+            seen: Some(0),
+            marker: Some((audio_path(&library[0]), 1000.0)),
+            ..Default::default()
+        };
+        let now = Instant::now();
+        let update = |p: &mut Preview, selected| {
+            p.update(
+                now,
+                &library,
+                selected,
+                None,
+                false,
+                true,
+                0.0,
+                (1.0, false),
+            );
+        };
+        update(&mut p, Some(0));
+        assert_eq!(p.marker(&library[0]), Some(1000.0), "kept on its own map");
+        update(&mut p, Some(1));
+        assert_eq!(p.marker(&library[1]), None, "not on the other difficulty");
+        update(&mut p, Some(0));
+        assert_eq!(p.marker(&library[0]), None, "nor back on the first");
     }
 
     #[test]
@@ -2001,5 +3341,54 @@ mod background_tests {
         assert!(p.bg_path.is_none() && !p.has_background);
         assert!(matches!(p.bg_upload, Some(None)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod sim_tests {
+    use super::PpSim;
+
+    #[test]
+    fn a_simulated_play_comes_as_near_its_accuracy_as_whole_hits_can() {
+        let sim = PpSim {
+            accuracy: 0.98,
+            misses: 2,
+        };
+        let (great, ok, miss) = sim.counts(1000);
+        assert_eq!(great + ok + miss, 1000);
+        assert_eq!(miss, 2);
+        let acc = (f64::from(great) + f64::from(ok) / 2.0) / 1000.0;
+        assert!((acc - 0.98).abs() <= 0.0005, "{acc}");
+        // More accuracy than the misses leave room for: all the rest greats.
+        let sim = PpSim {
+            accuracy: 1.0,
+            misses: 10,
+        };
+        assert_eq!(sim.counts(100), (90, 0, 10));
+        // More misses than notes.
+        assert_eq!(
+            PpSim {
+                accuracy: 0.9,
+                misses: 500
+            }
+            .counts(100),
+            (0, 0, 100)
+        );
+    }
+
+    #[test]
+    fn its_steps_stay_in_reach() {
+        let mut sim = PpSim {
+            accuracy: 0.998,
+            misses: 0,
+        };
+        sim.step(0, 1);
+        assert_eq!(sim.accuracy, 1.0);
+        sim.step(1, -1);
+        assert_eq!(sim.misses, 0);
+        sim.step(1, 1);
+        sim.step(0, -1);
+        assert_eq!(sim.misses, 1);
+        assert!((sim.accuracy - 0.995).abs() < 1e-9);
     }
 }

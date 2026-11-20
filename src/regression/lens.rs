@@ -456,3 +456,44 @@ fn the_filters_stay_across_tabs_and_count_what_they_leave() {
         "taiko.rs's map, never submitted: Local only"
     );
 }
+
+#[test]
+fn each_source_tab_sits_on_a_chip_of_its_own_the_shown_one_lifted() {
+    use crate::style::{Surface, radius, surface_fill};
+    let lib = library();
+    let s = select(&lib);
+    let tabs = s.source_tabs();
+    let mut c = crate::render::Canvas {
+        width: 853.0,
+        ..Default::default()
+    };
+    s.draw_source_tabs(&mut c, 24.0, 60.0, 400.0, &tabs);
+    let chip = |level: Surface| {
+        c.shapes
+            .iter()
+            .filter(move |sh| sh.fill == surface_fill(level) && sh.params[0] == radius::SMALL)
+            .map(|sh| sh.center)
+            .collect::<Vec<_>>()
+    };
+    let (raised, lifted) = (chip(Surface::Raised), chip(Surface::Lifted));
+    assert_eq!(lifted.len(), 1, "the shown tab lifted: {lifted:?}");
+    assert_eq!(
+        raised.len(),
+        tabs.len() - 1,
+        "the others raised: {raised:?}"
+    );
+    for (k, tab) in tabs.iter().enumerate() {
+        let hit = c
+            .hits
+            .iter()
+            .find(|h| h.hit == crate::hit::Hit::SongSource(tab.index()))
+            .map(|h| h.rect)
+            .unwrap_or_else(|| panic!("{}'s tab", tab.label()));
+        let on = |[x, y]: [f32; 2]| {
+            x > hit[0] && x < hit[0] + hit[2] && y > hit[1] && y < hit[1] + hit[3]
+        };
+        let under: Vec<_> = raised.iter().chain(&lifted).filter(|p| on(**p)).collect();
+        assert_eq!(under.len(), 1, "one chip under {}", tab.label());
+        assert_eq!(on(lifted[0]), k == 0, "{} lifted", tab.label());
+    }
+}

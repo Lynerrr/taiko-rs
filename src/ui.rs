@@ -365,6 +365,15 @@ pub struct Select {
     /// Where the pointer is while flying through the list (right drag, scrollbar): the heading
     /// passing by shows beside it.
     pub scrubbing: Option<f32>,
+    /// Selections come faster than the list gets to them (`draw`): the banner's picture of
+    /// where it's going isn't read ahead.
+    hold_pictures: bool,
+    /// Where the list was scrolled last frame, and how fast it's going (units a ms, smoothed):
+    /// the cards' pictures ahead of it are read first.
+    seen_scroll: Option<f32>,
+    scroll_speed: f32,
+    /// How far the routes behind lean away from the pointer now (virtual units, eased).
+    pub parallax: [f32; 2],
     /// Songs visited with F2, so Shift+F2 can step back (library indices).
     random_history: Vec<usize>,
     rng: u64,
@@ -378,10 +387,21 @@ pub struct Select {
     pub to_menu: bool,
     /// A mod's customization is open over the top of the screen: no way back to show.
     pub covered: bool,
+    /// The main menu's look shows the library's counts and the status line (`Config::select_info`);
+    /// the classic look always does.
+    pub show_info: bool,
+    /// How grey the cards' pictures are at their left and right edges (`config::CardFade`).
+    pub card_greys: [f32; 2],
+    /// On the way from the main menu (`menu_shift`): how far the list has come in
+    /// (`Phases::cascade`), its cards dropping out of the search row one after another.
+    pub arriving: Option<f32>,
+    /// Where the list's own shapes start and end on the canvas, as last drawn (the search row's
+    /// are before them, the scroll bar's and the rest after).
+    pub list_shapes: [usize; 2],
 }
 
 /// A play's letter in its colour, the same as on the website.
-fn grade_colour(grade: &str) -> u32 {
+pub(crate) fn grade_colour(grade: &str) -> u32 {
     match grade {
         "SS" | "S" => 0xFFD34D,
         "A" => 0x86E05A,
@@ -418,6 +438,17 @@ struct ListAnim {
     closing_now: f32,
     /// Length of the current transition (ms); 0 means `LIST_ANIM_MS`.
     ms: f32,
+    /// How lit each set's card is under the pointer (0 to 1), by its first row.
+    card_light: std::collections::HashMap<usize, f32>,
+    /// When each card picture (`render::path_picture_key`) was first drawn, to fade it in.
+    covers: std::collections::HashMap<String, std::time::Instant>,
+    /// When the transition before this one started (selections coming faster than they land).
+    last_start: Option<std::time::Instant>,
+    /// The selection last landed in the target, and when it did (its flash).
+    landed: Option<usize>,
+    flash: Option<std::time::Instant>,
+    /// The set last opened (its first row) and when: its difficulties drop in one by one.
+    opened_at: Option<(usize, std::time::Instant)>,
 }
 
 /// The list held by the pointer: it scrolls with it, then flies on and settles on a song.
@@ -438,9 +469,14 @@ struct FreeScroll {
     song: Option<std::path::PathBuf>,
 }
 
-/// How far a notch of the wheel moves the list, and how quickly.
+/// How far a notch of the wheel moves the list, and how quickly: slow enough that the cards are
+/// seen gliding, not jumping three rows on (which, the cards all alike, reads as standing still).
 const WHEEL_STEP: f32 = SONG_ROW_H * 3.0;
-const WHEEL_TAU: f32 = 45.0;
+const WHEEL_TAU: f32 = 110.0;
+/// How far a notch past an end of the list pushes it before it springs back.
+const WHEEL_END_BUMP: f32 = 10.0;
+/// From a list moved by hand to a song picked in it: a longer glide the farther it goes.
+const FROM_FREE_MS: (f32, f32) = (260.0, 520.0);
 const SCRUB_TAU: f32 = 20.0;
 const THROW_TAU: f32 = 130.0;
 
@@ -456,6 +492,49 @@ const LIST_MIN: f32 = 260.0;
 const PANEL_MIN: f32 = 220.0;
 /// Height of a song's own row in the list (virtual units).
 pub const SONG_ROW_H: f32 = 34.0;
+
+/// The cards of the main menu's look: how far in a set's card sits unless it's open, how far one
+/// under the pointer comes out, how bright the sets not open are, the corners, how long a card's
+/// picture takes to fade in, the shade over it (left, under the title, to right), how far up the
+/// list's bottom the last cards fade out, and how bright a difficulty's bar is unless selected.
+const CARD_INSET: f32 = 12.0;
+const CARD_HOVER: f32 = 4.0;
+const CARD_DIM: f32 = 0.7;
+const CARD_RADIUS: f32 = crate::style::radius::CARD;
+/// How bright the faint edge round a card is (not the open one, which has the selection's).
+const CARD_EDGE: f32 = 0.1;
+/// A set opening: its difficulties drop in from this far above, this many ms apart, out from
+/// the selected one both ways, the last of them at most `DIFF_CASCADE_SPAN_MS` after it (a set
+/// of many difficulties drops them in closer together, its selected one first).
+const DIFF_DROP: f32 = 8.0;
+const DIFF_CASCADE_MS: f32 = 30.0;
+const DIFF_CASCADE_SPAN_MS: f32 = 120.0;
+const COVER_FADE_MS: f32 = 200.0;
+/// How round a difficulty row's card is, and its light under the pointer or the selection's.
+const DIFF_ROUND: f32 = 4.0;
+const COVER_SHADE: (f32, f32) = (0.85, 0.4);
+const BOTTOM_FADE: f32 = 16.0;
+const DIFF_BAR_DIM: f32 = 0.35;
+/// How long after the list has got to a new selection the banner's picture is read ahead.
+const PICTURE_SETTLE_MS: f32 = 60.0;
+/// The cards' pictures read ahead of the list: as far as it goes in this long (ms) at its speed,
+/// smoothed over this long.
+const CARD_AHEAD_MS: f32 = 400.0;
+const CARD_AHEAD_TAU: f32 = 80.0;
+
+/// The list as a lane through the selection's target brackets: the cards stay straight near the
+/// target (`ARC_STRAIGHT` of the list's height), then bend away from it along an arc, `ARC_K`
+/// units per (list height)² beyond that, at most `ARC_MAX`, and fade by up to `ARC_FADE`
+/// (all of it `ARC_FADE_REACH` of the list's height beyond the straight part). A song or
+/// difficulty landing in the target flashes it for `LAND_FLASH_MS`, its brackets opening out
+/// `LAND_FLASH_GROW` units, like a note hit on the menu's target.
+const ARC_STRAIGHT: f32 = 0.12;
+const ARC_K: f32 = 64.0;
+const ARC_MAX: f32 = 24.0;
+const ARC_FADE: f32 = 0.3;
+const ARC_FADE_REACH: f32 = 0.5;
+const LAND_FLASH_MS: f32 = 300.0;
+const LAND_FLASH_GROW: f32 = 6.0;
 
 /// What a song's name starts with, as its heading when the list is by artist or title.
 fn initial(name: &str) -> String {
@@ -513,6 +592,10 @@ impl Select {
             legacy: false,
             to_menu: true,
             covered: false,
+            show_info: false,
+            card_greys: [0.0; 2],
+            arriving: None,
+            list_shapes: [0, 0],
             filter: String::new(),
             searching: false,
             sort: SortMode::Artist,
@@ -577,6 +660,10 @@ impl Select {
             scroll_max: 0.0,
             thumb: 0.0,
             scrubbing: None,
+            hold_pictures: false,
+            seen_scroll: None,
+            scroll_speed: 0.0,
+            parallax: [0.0; 2],
             random_history: Vec::new(),
             rng: seed | 1,
         };
@@ -1121,8 +1208,12 @@ impl Select {
     }
 
     fn regroup(&mut self, library: &[Entry]) {
-        // Row indices change meaning: start the list's motion afresh.
+        // Row indices change meaning: start the list's motion afresh. The card pictures shown
+        // are kept (they go by picture, not row): dropped, every card on screen faded its
+        // picture in again, a blink across the list whenever it was rebuilt.
+        let covers = std::mem::take(&mut self.anim.covers);
         self.anim = ListAnim::default();
+        self.anim.covers = covers;
         self.groups.clear();
         self.group_of.clear();
         let each = self.split_difficulties();
@@ -1345,7 +1436,7 @@ impl Select {
         }
     }
 
-    fn list_top(&self) -> f32 {
+    pub(crate) fn list_top(&self) -> f32 {
         if self.source_tabs().is_empty() {
             self.frame_top()
         } else {
@@ -1372,7 +1463,13 @@ impl Select {
     pub fn scroll_by(&mut self, notches: i32, library: &[Entry]) {
         let max = self.scroll_max;
         let glide = self.free(library, WHEEL_TAU);
-        glide.goal = (glide.goal + notches as f32 * WHEEL_STEP).clamp(0.0, max);
+        let goal = glide.goal + notches as f32 * WHEEL_STEP;
+        // Past an end: a little push the list springs back from, so the wheel is never dead.
+        let past = goal - goal.clamp(0.0, max);
+        if past != 0.0 && crate::render::animations() && (glide.now - glide.goal).abs() < 1.0 {
+            glide.now += past.signum() * WHEEL_END_BUMP;
+        }
+        glide.goal = goal.clamp(0.0, max);
     }
 
     /// Back to following the selection, gliding there from wherever the list is.
@@ -1381,7 +1478,8 @@ impl Select {
             let a = &mut self.anim;
             (a.scroll_from, a.outline_from, a.open_from, a.closing_from) =
                 (a.scroll, a.outline, a.open_now, a.closing_now);
-            a.start = Some(std::time::Instant::now());
+            a.last_start = a.start;
+            a.start = Some(crate::render::frame_now());
             a.ms = 0.0;
         }
     }
@@ -1616,6 +1714,12 @@ impl Select {
     }
 
     /// The songs as ranges of `rows`.
+    /// Tests: the library index of list row `row`.
+    #[cfg(test)]
+    pub fn visible_index(&self, row: usize) -> usize {
+        self.visible[row]
+    }
+
     pub fn song_groups(&self) -> &[std::ops::Range<usize>] {
         &self.groups
     }
@@ -2141,25 +2245,56 @@ impl Select {
         if legacy {
             crate::settings::tab_bar(c, 0, &summary);
         } else {
-            let back = if self.to_menu {
-                tr!("< MENU", "< メニュー", "< МЕНЮ")
-            } else {
-                tr!("< BACK", "< 戻る", "< НАЗАД")
-            };
-            if self.covered {
-                left += Canvas::text_width(8.0, back) + 26.0;
-            } else {
-                left += crate::settings::back_button(c, row + 2.0, back, Hit::ToMenu) + 6.0;
+            // The search row and the list are one window: the panel runs from above the row
+            // down the list, a line between them. Not while a mod's customization covers the
+            // top of the screen: it has the row's place.
+            // The search row on a raised strip, no edge round it; the list's cards below it are
+            // surfaces of their own, straight on the map's picture.
+            if !self.covered {
+                let (top, bottom) = (row - 6.0, self.frame_top() - 4.0);
+                let rect = [20.0, top, lw + 8.0, bottom - top];
+                crate::style::surface(c, rect, 8.0, crate::style::Surface::Raised);
             }
-            // Over the panel beside the list, where there is one.
+            // The way back: an arrow and where it goes, as bare as the menu's icons.
+            let back = if self.to_menu {
+                tr!("Menu", "メニュー", "Меню")
+            } else {
+                tr!("Back", "戻る", "Назад")
+            };
+            left += 8.0;
+            if self.covered {
+                left += crate::style::icon_button_width(back, None, 8.0) + 6.0;
+            } else {
+                let at = [left, row + 12.0];
+                let bw = crate::style::icon_button(
+                    c,
+                    at,
+                    &crate::style::BACK,
+                    back,
+                    None,
+                    8.0,
+                    false,
+                    Hit::ToMenu,
+                );
+                left += bw + 6.0;
+            }
+            // On a small chip beside the search row, over the panel's side, where there is one.
             let (x, right) = (24.0 + lw + 12.0, w - 24.0);
-            if right - x > 60.0 {
-                c.text_right(
-                    right,
-                    row + 8.0,
-                    7.0,
-                    rgba(0x9a9ab0, 1.0),
-                    &Canvas::fit(7.0, right - x, &summary),
+            if self.show_info && right - x > 60.0 {
+                let text = Canvas::fit(6.0, right - x - 16.0, &summary);
+                let chip = [x, row + 4.0, Canvas::text_width(6.0, &text) + 16.0, 16.0];
+                crate::style::surface(
+                    c,
+                    chip,
+                    crate::style::radius::CARD,
+                    crate::style::Surface::Raised,
+                );
+                c.text(
+                    x + 8.0,
+                    row + 12.0 - Canvas::text_height(6.0) / 2.0,
+                    6.0,
+                    rgba(crate::style::ink::CAPTION, 1.0),
+                    &text,
                 );
             }
         }
@@ -2186,15 +2321,28 @@ impl Select {
         } else {
             String::new()
         };
+        // Outside the Legacy layout they're bare icons: the word on a small caption above, the
+        // value as the label.
+        let sort_labels = if legacy {
+            vec![format!("Sort: {sort}{then}{more}"), format!("{sort}{more}")]
+        } else {
+            vec![format!("{sort}{then}{more}"), format!("{sort}{more}")]
+        };
         let mut buttons = vec![(
-            vec![format!("Sort: {sort}{then}{more}"), format!("{sort}{more}")],
+            sort_labels,
             Hit::SortList,
             filters > 0 || self.lens_ui.is_some(),
+            (&crate::style::SORT, tr!("SORT", "ソート", "СОРТ")),
         )];
         if legacy {
             buttons.insert(
                 0,
-                (mods.clone(), Hit::ModsButton, !self.mods_label.is_empty()),
+                (
+                    mods.clone(),
+                    Hit::ModsButton,
+                    !self.mods_label.is_empty(),
+                    (&crate::style::SPARK, ""),
+                ),
             );
         }
         if !self.collections.is_empty() {
@@ -2202,20 +2350,35 @@ impl Select {
                 .collection
                 .and_then(|c| self.collections.get(c))
                 .map_or("all", |c| c.name.as_str());
+            let labels = if legacy {
+                vec![format!("Collection: {name}"), name.to_string()]
+            } else {
+                vec![name.to_string()]
+            };
             buttons.push((
-                vec![format!("Collection: {name}"), name.to_string()],
+                labels,
                 Hit::CollectionPick,
                 self.collection.is_some(),
+                (
+                    &crate::style::FOLDER,
+                    tr!("COLLECTION", "コレクション", "КОЛЛЕКЦИЯ"),
+                ),
             ));
         }
-        let width = |label: &str| Canvas::text_width(7.0, label) + 20.0;
+        let width = |label: &str, caption: &str| {
+            if legacy {
+                Canvas::text_width(7.0, label) + 20.0
+            } else {
+                crate::style::icon_button_width(label, Some(caption), 7.0)
+            }
+        };
         let budget = lw - (left - 24.0) - SEARCH_MIN - 6.0 * buttons.len() as f32;
         let mut pick = vec![0; buttons.len()];
         loop {
             let widths: Vec<f32> = buttons
                 .iter()
                 .zip(&pick)
-                .map(|((labels, ..), &k)| width(&labels[k]))
+                .map(|((labels, .., (_, cap)), &k)| width(&labels[k], cap))
                 .collect();
             if widths.iter().sum::<f32>() <= budget {
                 break;
@@ -2231,13 +2394,27 @@ impl Select {
             .zip(&pick)
             .map(|((labels, ..), &k)| labels[k].as_str())
             .collect();
-        let natural: Vec<f32> = labels.iter().map(|l| width(l)).collect();
+        let natural: Vec<f32> = labels
+            .iter()
+            .zip(&buttons)
+            .map(|(l, (.., (_, cap)))| width(l, cap))
+            .collect();
         let cap = shared_cap(&natural, budget);
-        let mut bx = 24.0 + lw;
-        for ((label, (_, hit, accent)), nw) in labels.iter().zip(&buttons).zip(natural) {
+        let mut bx = 24.0 + lw - if legacy { 0.0 } else { 6.0 };
+        for ((label, (_, hit, accent, (icon, caption))), nw) in
+            labels.iter().zip(&buttons).zip(natural)
+        {
             let bw = nw.min(cap);
             bx -= bw;
-            c.button(bx, row + 2.0, bw, 20.0, label, 7.0, *hit, *accent);
+            if legacy {
+                c.button(bx, row + 2.0, bw, 20.0, label, 7.0, *hit, *accent);
+            } else {
+                let room = bw - crate::style::icon_button_width("", None, 7.0);
+                let label = Canvas::fit(7.0, room, label);
+                let caption = Canvas::fit(5.0, room, caption);
+                let at = [bx + 6.0, row + 12.0];
+                crate::style::icon_button(c, at, icon, &label, Some(&caption), 7.0, *accent, *hit);
+            }
             bx -= 6.0;
         }
         let search_w = bx - left;
@@ -2246,14 +2423,44 @@ impl Select {
         } else {
             rgba(0x3a3a4e, 1.0)
         };
-        c.round_rect(
-            [left, row],
-            [search_w, 24.0],
-            6.0,
-            rgba(0x23232f, 0.9),
-            edge,
-            1.0,
-        );
+        if legacy {
+            c.round_rect(
+                [left, row],
+                [search_w, 24.0],
+                6.0,
+                rgba(0x23232f, 0.9),
+                edge,
+                1.0,
+            );
+        } else {
+            // A lifted field, no edge; while typing a line of the accent under the text (the
+            // focus).
+            let field = [left, row, search_w, 24.0];
+            crate::style::surface(c, field, 6.0, crate::style::Surface::Lifted);
+            if self.searching {
+                c.rect(
+                    left + 6.0,
+                    row + 21.0,
+                    (search_w - 12.0).max(0.0),
+                    1.5,
+                    edge,
+                );
+            }
+        }
+        // Outside the Legacy layout the box starts with a magnifying glass.
+        let glass = if legacy { 0.0 } else { 14.0 };
+        if !legacy {
+            crate::style::icon(
+                c,
+                &crate::style::SEARCH,
+                [left + 12.0, row + 12.0],
+                10.0,
+                crate::style::ink::CAPTION,
+                1.0,
+            );
+        }
+        let left = left + glass;
+        let search_w = search_w - glass;
         // The filters on, as tokens at the start of the box: the text goes after them.
         let token_room = search_w * 0.6;
         let mut tokens_w = 0.0;
@@ -2267,18 +2474,49 @@ impl Select {
         let text_x = left + 10.0 + tokens_w;
         let room = search_w - 20.0 - tokens_w;
         let caret = "";
+        // Outside the Legacy layout the hint is smaller, and the key that opens the search sits
+        // on a key cap at the box's right end.
+        let hint_size = if legacy { 10.0 } else { 8.0 };
+        let mut room = room;
+        if !legacy && self.filter.is_empty() && !self.searching {
+            let key = "ctrl+f";
+            let kw = Canvas::text_width(5.0, key) + 8.0;
+            if room - kw - 8.0 >= Canvas::text_width(hint_size, "search...") {
+                let kx = left + search_w - 6.0 - kw;
+                let cap = [kx, row + 6.0, kw, 12.0];
+                crate::style::surface(c, cap, 3.0, crate::style::Surface::Raised);
+                c.text(
+                    kx + 4.0,
+                    row + 12.0 - Canvas::text_height(5.0) / 2.0,
+                    5.0,
+                    rgba(crate::style::ink::CAPTION, 1.0),
+                    key,
+                );
+                room -= kw + 8.0;
+            }
+        }
         let (search, search_col) = if self.filter.is_empty() {
             let (long, short) = if self.searching {
                 ("type to search...", "search...")
-            } else {
+            } else if legacy {
                 ("click to search (ctrl+f)...", "search...")
+            } else {
+                ("click to search...", "search...")
             };
-            let hint = if Canvas::text_width(10.0, long) <= room {
+            let hint = if Canvas::text_width(hint_size, long) <= room {
                 long
             } else {
                 short
             };
-            (Canvas::fit(10.0, room, &format!("{hint}{caret}")), 0x6f6f86)
+            let quiet = if legacy {
+                0x6f6f86
+            } else {
+                crate::style::ink::CAPTION
+            };
+            (
+                Canvas::fit(hint_size, room, &format!("{hint}{caret}")),
+                quiet,
+            )
         } else {
             let full = format!("search: {}{caret}", self.filter);
             let text = if Canvas::text_width(10.0, &full) <= room {
@@ -2299,10 +2537,13 @@ impl Select {
                 false,
                 true,
             );
+        } else if self.filter.is_empty() {
+            let y = row + 12.0 - Canvas::text_height(hint_size) / 2.0;
+            c.text(text_x, y, hint_size, rgba(search_col, 1.0), &search);
         } else {
             c.text(text_x, row + 7.0, 10.0, rgba(search_col, 1.0), &search);
         }
-        c.hit(left, row, search_w, 24.0, Hit::TextField);
+        c.hit(left - glass, row, search_w + glass, 24.0, Hit::TextField);
         self.draw_tokens(c, left + 6.0, row + 4.0, token_room);
 
         if let Some(n) = self.scanning {
@@ -2441,11 +2682,11 @@ impl Select {
         let final_scroll = (final_cursor - view * 0.4).clamp(0.0, max_scroll);
         let final_outline = top + final_cursor - final_scroll;
         // Another song selected: the list goes to it.
-        if self
+        let from_free = self
             .free
             .as_ref()
-            .is_some_and(|f| f.song.as_deref() != self.selected_folder(library))
-        {
+            .is_some_and(|f| f.song.as_deref() != self.selected_folder(library));
+        if from_free {
             self.free = None;
         }
 
@@ -2453,16 +2694,18 @@ impl Select {
         let a = &mut self.anim;
         if a.cursor != Some(self.cursor) || a.open != open_start {
             if a.cursor.is_none() {
-                // First frame: no motion.
+                // First frame: no motion. The card pictures already shown stay (see `regroup`).
                 *a = ListAnim {
                     open: open_start,
                     open_from: 1.0,
                     scroll_from: final_scroll,
                     outline_from: final_outline,
+                    covers: std::mem::take(&mut a.covers),
                     ..Default::default()
                 };
             } else {
                 if open_start != a.open {
+                    a.opened_at = open_start.map(|s| (s, crate::render::frame_now()));
                     let reopen = open_start.is_some() && open_start == a.closing;
                     let from = if reopen { a.closing_now } else { 0.0 };
                     a.closing = a.open;
@@ -2475,10 +2718,16 @@ impl Select {
                 }
                 a.scroll_from = a.scroll;
                 a.outline_from = a.outline;
-                a.start = Some(std::time::Instant::now());
+                a.last_start = a.start;
+                a.start = Some(crate::render::frame_now());
                 // A release's longer glide applies to the transition it starts, then resets.
                 if a.cursor != Some(usize::MAX) {
                     a.ms = 0.0;
+                }
+                // Picked in a list moved by hand: from where it was, at an easy pace.
+                if from_free {
+                    let far = (final_scroll - a.scroll_from).abs();
+                    a.ms = (FROM_FREE_MS.0 + far * 1.2).min(FROM_FREE_MS.1);
                 }
             }
             a.cursor = Some(self.cursor);
@@ -2487,6 +2736,15 @@ impl Select {
         let p = a.start.map(|t| progress(t, ms)).unwrap_or(1.0);
         let open_f = a.open_from + (1.0 - a.open_from) * p;
         let closing_f = a.closing_from * (1.0 - p);
+        // Landed: the selection got to the target (not while the pointer flies the list), and
+        // the target flashes. Not on the first frame, nor without animations.
+        let flying = self.drag.is_some() || self.free.is_some();
+        if p >= 1.0 && !flying && a.landed != a.cursor {
+            if a.landed.is_some() && crate::render::animations() {
+                a.flash = Some(crate::render::frame_now());
+            }
+            a.landed = a.cursor;
+        }
         let mut scroll = a.scroll_from + (final_scroll - a.scroll_from) * p;
         let mut outline = a.outline_from + (final_outline - a.outline_from) * p;
         if let Some(f) = &mut self.free {
@@ -2585,9 +2843,56 @@ impl Select {
             }
             let _ = sec;
         }
+        // The cards' pictures near the list and ahead of it, the way it's going (at least a
+        // screen, more the faster it goes), are read before they come into view: dragging or
+        // wheeling through the list draws them from memory.
+        let moved = self.seen_scroll.map_or(0.0, |s| scroll - s);
+        self.seen_scroll = Some(scroll);
+        if c.dt_ms > 0.0 {
+            let speed = moved / c.dt_ms;
+            crate::render::approach(&mut self.scroll_speed, speed, c.dt_ms, CARD_AHEAD_TAU);
+        }
+        if !legacy {
+            let lead = (self.scroll_speed.abs() * CARD_AHEAD_MS).clamp(view, view * 8.0);
+            let (back, ahead) = if self.scroll_speed < 0.0 {
+                (lead, view * 0.5)
+            } else {
+                (view * 0.5, lead)
+            };
+            let (from, to) = (scroll - back, scroll + view + ahead);
+            // Nearest the screen first, those ahead before those behind.
+            let mut near: Vec<(f32, usize)> = Vec::new();
+            for (si, &open) in section_open.iter().enumerate() {
+                if !open {
+                    continue;
+                }
+                for gi in layout.visible_songs(si, from, to) {
+                    let y = layout.song_y(si, gi);
+                    let off = if y < scroll {
+                        (scroll - y) * if self.scroll_speed < 0.0 { 1.0 } else { 2.0 }
+                    } else if y > scroll + view {
+                        (y - scroll - view) * if self.scroll_speed < 0.0 { 2.0 } else { 1.0 }
+                    } else {
+                        0.0
+                    };
+                    near.push((off, gi));
+                }
+            }
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for (_, gi) in near {
+                let e = &library[self.visible[groups[gi].start]];
+                if let Some(bg) = crate::preview::background_path(e) {
+                    c.want_card(&bg);
+                }
+            }
+        }
         // The main menu's look: one dark panel the list runs down, rows as lines on it.
         let frame_top = self.frame_top();
-        crate::style::panel(c, 20.0, frame_top - 4.0, lw + 8.0, bottom - frame_top + 8.0);
+        // Outside the Legacy layout it was drawn with the search row, unless that's covered.
+        let frame = [20.0, frame_top - 4.0, lw + 8.0, bottom - frame_top + 8.0];
+        if legacy {
+            crate::style::panel(c, frame[0], frame[1], frame[2], frame[3]);
+        }
         let tabs = self.source_tabs();
         if !tabs.is_empty() {
             self.draw_source_tabs(c, 24.0, frame_top, lw, &tabs);
@@ -2601,11 +2906,63 @@ impl Select {
             self.source_switched = None;
         }
         let mut drawn = 0usize;
+        // The drawn row the selection is in, for its outline to come in with it.
+        let mut cursor_row = 0usize;
+        let arriving = self.arriving.filter(|_| !legacy);
         let list_start = c.shapes.len();
         let hits_start = c.hits.len();
         let fit = |s: String, size: f32, room: f32| {
             Canvas::fit(size, room.max(Canvas::char_width(size) * 4.0), &s)
         };
+        // Under the pointer: Legacy's grey, the main menu's look the lifted surface.
+        let hover_fill = |alpha: f32| {
+            if legacy {
+                rgba(0x24242f, 0.6 * alpha)
+            } else {
+                let [r, g, b, a] = crate::style::surface_fill(crate::style::Surface::Lifted);
+                [r, g, b, a * alpha]
+            }
+        };
+        // Flying through the list (the pointer or the scrollbar holding it, or a new selection
+        // before the last one has got there: Random spammed, an arrow held down), the banner's
+        // whole picture of where it's going isn't read ahead: the sets passing by would each start
+        // a slow reading. The cards' strips are small and read all the same.
+        let settle = LIST_ANIM_MS + PICTURE_SETTLE_MS;
+        let ms = |t: std::time::Instant, since: std::time::Instant| {
+            t.saturating_duration_since(since).as_secs_f32() * 1000.0
+        };
+        let now = crate::render::frame_now();
+        let rushed = match (self.anim.start, self.anim.last_start) {
+            (Some(t), Some(last)) => ms(t, last) < settle && ms(now, t) < settle,
+            _ => false,
+        };
+        self.hold_pictures =
+            self.scrubbing.is_some() || self.drag.is_some() || self.free.is_some() || rushed;
+        // On its way to a new selection: the cards where it's going are read meanwhile, so
+        // they come in with their pictures, and the banner's picture of the set it lands on
+        // (not while selections come faster than the list gets to them).
+        if !legacy
+            && self.anim.start.is_some_and(|t| ms(now, t) < LIST_ANIM_MS)
+            && let Some(g0) = cursor_group
+        {
+            let above = final_cursor - final_scroll;
+            let up = (above / SONG_H).ceil() as usize + 1;
+            let down = ((view - above) / SONG_H).ceil() as usize + 1;
+            for g in g0.saturating_sub(up)..(g0 + down + 1).min(groups.len()) {
+                let e = &library[self.visible[groups[g].start]];
+                if let Some(bg) = crate::preview::background_path(e) {
+                    c.want_card(&bg);
+                    if g == g0 && !self.hold_pictures {
+                        c.want_picture_path(&bg);
+                    }
+                }
+            }
+        }
+        // How far a row's middle is from the target's, beyond the straight part (list heights).
+        let target_y = outline + DIFF_H / 2.0;
+        let away = |cy: f32| ((cy - target_y).abs() / view.max(1.0) - ARC_STRAIGHT).max(0.0);
+        let mut lights = std::mem::take(&mut self.anim.card_light);
+        let mut covers = std::mem::take(&mut self.anim.covers);
         for (row, ry, rh, alpha) in &rows {
             let y = top + ry - self.scroll;
             if y + rh < top || y > bottom || *alpha < 0.02 {
@@ -2616,7 +2973,15 @@ impl Select {
             match row {
                 Row::Section(si) => {
                     let sec = &self.sections[*si];
-                    let col = sec.colour.unwrap_or_else(accent);
+                    // Without a colour of its own a heading is neutral outside Legacy: the
+                    // accent is the selection's.
+                    let col = sec.colour.unwrap_or_else(|| {
+                        if legacy {
+                            accent()
+                        } else {
+                            crate::style::role::NEUTRAL
+                        }
+                    });
                     let open = section_open[*si];
                     let hover = c.hovered(24.0, y, lw, rh - 2.0);
                     let holds_cursor = cursor_section == Some(*si) && !open;
@@ -2626,7 +2991,7 @@ impl Select {
                             [24.0, y],
                             [lw, rh - 3.0],
                             6.0,
-                            rgba(0x24242f, 0.6),
+                            hover_fill(1.0),
                             rgba(0, 0.0),
                             0.0,
                         );
@@ -2669,39 +3034,80 @@ impl Select {
                 Row::Song(g) => {
                     let e = &library[self.visible[g.start]];
                     let open = g.contains(&self.cursor);
-                    let hover = !open && c.hovered(24.0, y, lw, rh - 4.0);
                     if open {
-                        c.round_rect(
-                            [24.0, y],
-                            [lw, rh - 4.0],
-                            7.0,
-                            rgba(crate::style::selector_colour(), 0.08),
-                            rgba(0, 0.0),
-                            0.0,
-                        );
-                    } else if hover {
-                        c.round_rect(
-                            [24.0, y],
-                            [lw, rh - 4.0],
-                            7.0,
-                            rgba(0x262634, 0.6),
-                            rgba(0, 0.0),
-                            0.0,
-                        );
+                        cursor_row = drawn - 1;
                     }
-                    c.rect(32.0, y + rh - 3.0, lw - 16.0, 1.0, rgba(0x23232f, 1.0));
-                    c.hit(24.0, y, lw, *rh, Hit::SongHeader(g.start));
-                    // A note for the song, as on the main menu: a don for taiko maps, a kat for
-                    // converts; the open song's bigger and lit.
-                    let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
-                    let colours = crate::game::note_colours();
-                    let tag = if any_taiko {
-                        colours.don()
+                    // Under the pointer by where the row is, not where its card has moved to.
+                    let hover = !open && c.hovered(24.0, y, lw, rh - 4.0);
+                    // The main menu's look: a card with the map's picture. The open set's card
+                    // slides out to the list's left edge, the others sit in by CARD_INSET, and
+                    // one under the pointer comes out a little and brightens.
+                    let light = if legacy {
+                        0.0
                     } else {
-                        colours.kat()
+                        let l = lights.entry(g.start).or_insert(0.0);
+                        let tau = crate::style::motion::MICRO_MS / 3.0;
+                        crate::render::approach(l, if hover { 1.0 } else { 0.0 }, c.dt_ms, tau);
+                        *l
                     };
-                    let (nr, ny) = (if open { 6.5 } else { 5.0 }, y + (rh - 4.0) / 2.0);
-                    crate::style::note(c, 33.0, ny, nr, tag, open, 0.7);
+                    let (x0, rw) = if legacy {
+                        (24.0, lw)
+                    } else {
+                        let out = if Some(g.start) == open_g {
+                            open_f
+                        } else if Some(g.start) == closing_g {
+                            closing_f
+                        } else {
+                            0.0
+                        };
+                        // Farther from the target, bent away along the lane's arc (not the open
+                        // set's card as it slides out).
+                        let e = away(y + rh / 2.0);
+                        let bend = (ARC_K * e * e).min(ARC_MAX) * (1.0 - out);
+                        let inset = (CARD_INSET * (1.0 - out) + bend - CARD_HOVER * light).max(0.0);
+                        (24.0 + inset, lw - inset)
+                    };
+                    if legacy {
+                        if open {
+                            c.round_rect(
+                                [24.0, y],
+                                [lw, rh - 4.0],
+                                7.0,
+                                rgba(crate::style::selector_colour(), 0.08),
+                                rgba(0, 0.0),
+                                0.0,
+                            );
+                        } else if hover {
+                            c.round_rect(
+                                [24.0, y],
+                                [lw, rh - 4.0],
+                                7.0,
+                                rgba(0x262634, 0.6),
+                                rgba(0, 0.0),
+                                0.0,
+                            );
+                        }
+                        // Legacy's line under each row; the main menu's look parts rows by room.
+                        c.rect(32.0, y + rh - 3.0, lw - 16.0, 1.0, rgba(0x23232f, 1.0));
+                    } else {
+                        let card = [x0, y, rw, rh - 4.0];
+                        self.draw_set_card(c, e, card, open, light, &mut covers);
+                    }
+                    c.hit(x0, y, rw, *rh, Hit::SongHeader(g.start));
+                    // Legacy: a note for the song, as on the main menu: a don for taiko maps, a
+                    // kat for converts; the open song's bigger and lit. A card has its picture.
+                    if legacy {
+                        let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
+                        let colours = crate::game::note_colours();
+                        let tag = if any_taiko {
+                            colours.don()
+                        } else {
+                            colours.kat()
+                        };
+                        let (nr, ny) = (if open { 6.5 } else { 5.0 }, y + (rh - 4.0) / 2.0);
+                        crate::style::note(c, 33.0, ny, nr, tag, open, 0.7);
+                    }
+                    let tx = if legacy { 44.0 } else { x0 + 12.0 };
                     // A song with a map marked EPIC: a prism stripe down its left edge, its title
                     // in the shimmer, and a spark round the open one.
                     let epic = g.clone().any(|i| self.is_epic(&library[self.visible[i]]));
@@ -2725,16 +3131,16 @@ impl Select {
                         Vec::new()
                     };
                     let ladder_w: f32 = ladder.iter().map(|l| l.2 + 2.0).sum();
-                    let title_room = (lw - 110.0).min(lw - 12.0 - ladder_w - 28.0);
+                    let title_room = (rw - 110.0).min(rw - 12.0 - ladder_w - 28.0);
                     let title = fit(e.meta.title.clone(), 10.0, title_room);
                     if epic {
-                        crate::epic::stripe(c, 24.0, y + 3.0, rh - 10.0, 1.0);
-                        crate::epic::text(c, 44.0, y + 6.0, 10.0, &title, 1.0);
+                        crate::epic::stripe(c, x0, y + 3.0, rh - 10.0, 1.0);
+                        crate::epic::text(c, tx, y + 6.0, 10.0, &title, 1.0);
                         if open {
-                            crate::epic::spark_round(c, [24.0, y, lw, rh - 4.0], 1.0);
+                            crate::epic::spark_round(c, [x0, y, rw, rh - 4.0], 1.0);
                         }
                     } else {
-                        c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &title);
+                        c.text(tx, y + 6.0, 10.0, rgba(0xffffff, 1.0), &title);
                     }
                     // A row per difficulty: which one it is, rather than who mapped the set.
                     let sub = if one {
@@ -2748,11 +3154,11 @@ impl Select {
                     let room = 2.0 * (23.5 - title_bottom - 1.5).min(rh - 4.0 - 1.5 - 23.5);
                     let sub_size = Canvas::fit_height(7.0, room);
                     c.text(
-                        44.0,
+                        tx,
                         y + 20.0 + (7.0 - sub_size) / 2.0,
                         sub_size,
                         rgba(0x9a9ab0, 1.0),
-                        &fit(sub, sub_size, lw - 110.0),
+                        &fit(sub, sub_size, rw - 110.0),
                     );
                     // A newer version on osu!: click (or Ctrl+Shift+U) to get it. Under the
                     // difficulty count (moved up for it), inside the row (not on one cut off at
@@ -2773,16 +3179,18 @@ impl Select {
                             .map(|v| v as f32);
                         // A TJA course is ordered by its level, and shows it as its charter wrote it.
                         let level = e.meta.level.filter(|_| self.sort == SortMode::Difficulty);
-                        crate::style::map_pill(
+                        // In its rating's colour only when it's the selected one (Legacy: all).
+                        crate::style::map_pill_lit(
                             c,
-                            24.0 + lw - 12.0,
+                            x0 + rw - 12.0,
                             diffs_y - 1.0,
                             8.0,
                             level,
                             sorted_by,
+                            legacy || open,
                         );
                     } else if !ladder.is_empty() {
-                        let mut right = 24.0 + lw - 12.0;
+                        let mut right = x0 + rw - 12.0;
                         for (colour, text, bw) in ladder.iter().rev() {
                             let (colour, bw) = (*colour, *bw);
                             right -= bw;
@@ -2797,9 +3205,11 @@ impl Select {
                             );
                             right -= 2.0;
                         }
-                    } else {
+                    } else if legacy {
+                        // Legacy only: on the main menu look's cards, over the set's picture,
+                        // it can't be read on many pictures (the open set lists them anyway).
                         c.text_right(
-                            24.0 + lw - 12.0,
+                            x0 + rw - 12.0,
                             diffs_y,
                             8.0,
                             rgba(0x8a8aa0, 1.0),
@@ -2812,7 +3222,7 @@ impl Select {
                         Some(SetUpdate::Available) => {
                             let label = "update";
                             let bw = Canvas::text_width(6.0, label) + 10.0;
-                            let bx = 24.0 + lw - 12.0 - bw;
+                            let bx = x0 + rw - 12.0 - bw;
                             let hover = c.hovered(bx, by, bw, bh);
                             c.round_rect(
                                 [bx, by],
@@ -2826,7 +3236,7 @@ impl Select {
                             c.hit(bx, by, bw, bh, Hit::UpdateSet(self.visible[g.start]));
                         }
                         Some(SetUpdate::Updating) => c.text_right(
-                            24.0 + lw - 12.0,
+                            x0 + rw - 12.0,
                             ty,
                             6.0,
                             rgba(0x4fb4ff, 1.0),
@@ -2840,10 +3250,29 @@ impl Select {
                     let e = &library[self.visible[*i]];
                     let selected = *i == self.cursor;
                     if selected {
+                        cursor_row = drawn - 1;
+                    }
+                    // The main menu's look: a slimmer card, a bar of its rating's colour at its
+                    // left (full on the selected one).
+                    if !legacy {
+                        let [r, g, b, fa] =
+                            crate::style::surface_fill(crate::style::Surface::Raised);
+                        let card = [44.0, y, lw - 20.0, rh - 3.0];
+                        let clear = rgba(0, 0.0);
+                        c.round_rect(
+                            [card[0], card[1]],
+                            [card[2], card[3]],
+                            DIFF_ROUND,
+                            [r, g, b, fa * a],
+                            clear,
+                            0.0,
+                        );
+                    }
+                    if selected {
                         c.round_rect(
                             [44.0, y],
                             [lw - 20.0, rh - 3.0],
-                            5.0,
+                            DIFF_ROUND,
                             rgba(
                                 crate::style::selector_colour(),
                                 (0.12 + 0.05 * crate::style::pulse()) * a,
@@ -2855,24 +3284,38 @@ impl Select {
                         c.round_rect(
                             [44.0, y],
                             [lw - 20.0, rh - 3.0],
-                            5.0,
-                            rgba(0x24242f, 0.6 * a),
+                            DIFF_ROUND,
+                            hover_fill(a),
                             rgba(0, 0.0),
                             0.0,
                         );
                     }
-                    c.rect(52.0, y + rh - 2.0, lw - 36.0, 1.0, rgba(0x1d1d27, a));
+                    // The rating's bar over the light (under it, its ends stuck out past the
+                    // light's round corners: a few unlit pixels at the row's left).
+                    if !legacy {
+                        let bar = crate::style::role::rating(e.meta.level, stars(self.visible[*i]));
+                        let lit = if selected { 1.0 } else { DIFF_BAR_DIM };
+                        c.rect(44.0, y + 3.0, 3.0, rh - 9.0, rgba(bar, lit * a));
+                    }
+                    if legacy {
+                        c.rect(52.0, y + rh - 2.0, lw - 36.0, 1.0, rgba(0x1d1d27, a));
+                    }
                     c.hit(44.0, y, lw - 20.0, *rh, Hit::SongRow(*i));
-                    let col = if selected { 0xffffff } else { 0xc8c8d8 };
+                    let col = match (selected, legacy) {
+                        (true, _) => crate::style::ink::PRIMARY,
+                        (false, true) => 0xc8c8d8,
+                        (false, false) => crate::style::ink::SECONDARY,
+                    };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
                     let pill = if a > 0.6 {
-                        crate::style::map_pill(
+                        crate::style::map_pill_lit(
                             c,
                             24.0 + lw - 10.0,
                             y + 6.0,
                             7.0,
                             e.meta.level,
                             stars(self.visible[*i]),
+                            legacy || selected,
                         )
                     } else {
                         40.0
@@ -2895,6 +3338,51 @@ impl Select {
                     );
                 }
             }
+            if !legacy {
+                // The main menu's look: the sets not open dim (less under the pointer), and
+                // the last cards fade out at the list's bottom instead of being cut.
+                if let Row::Song(g) = row
+                    && !g.contains(&self.cursor)
+                {
+                    let l = lights.get(&g.start).copied().unwrap_or(0.0);
+                    c.fade_since(row_start, CARD_DIM + (1.0 - CARD_DIM) * l, 1.0);
+                }
+                // Farther from the target, a little fainter.
+                let e = (away(y + rh / 2.0) / ARC_FADE_REACH).min(1.0);
+                if e > 0.0 {
+                    c.fade_since(row_start, 1.0 - ARC_FADE * e * e, 1.0);
+                }
+                let over = (y + rh - (bottom - BOTTOM_FADE)).max(0.0);
+                let f = (1.0 - over / (rh + BOTTOM_FADE)).clamp(0.0, 1.0);
+                if f < 1.0 {
+                    c.fade_since(row_start, f * f * (3.0 - 2.0 * f), 1.0);
+                }
+            }
+            // A set just opened: its difficulties drop in one after another, out from the
+            // selected one.
+            if !legacy
+                && let Row::Diff(i) = row
+                && let Some((start, at)) = self.anim.opened_at
+                && let Some(&g) = self.group_of.get(*i)
+                && groups[g].start == start
+            {
+                use crate::style::motion;
+                let set = &groups[g];
+                let from = if set.contains(&self.cursor) {
+                    self.cursor
+                } else {
+                    start
+                };
+                let far = (from - set.start).max(set.end - 1 - from).max(1) as f32;
+                let step = DIFF_CASCADE_MS.min(DIFF_CASCADE_SPAN_MS / far);
+                let k = i.abs_diff(from) as f32;
+                let since = at + std::time::Duration::from_secs_f32(step * k / 1000.0);
+                let p = motion::entrance(since, motion::CONTENT_MS, motion::out_quint);
+                if p < 1.0 {
+                    c.transform_since(row_start, [0.0, 0.0], 1.0, 0.0, -DIFF_DROP * (1.0 - p));
+                    c.fade_since(row_start, p, 1.0);
+                }
+            }
             if let Some(ms) = switch_ms {
                 let t = ((ms - drawn as f32 * 18.0) / lens::SWITCH_MS).clamp(0.0, 1.0);
                 if t < 1.0 {
@@ -2903,7 +3391,19 @@ impl Select {
                     c.fade_since(row_start, ease, 1.0);
                 }
             }
+            // From the main menu: each card drops out of the search row after the one above.
+            if let Some(f) = arriving {
+                let (dy, a) = crate::menu_shift::card_drop(f, drawn - 1);
+                if dy != 0.0 || a < 1.0 {
+                    c.transform_since(row_start, [0.0, 0.0], 1.0, 0.0, dy);
+                    c.fade_since(row_start, a, 1.0);
+                }
+            }
         }
+        // Lights gone out are forgotten.
+        lights.retain(|_, l| *l > 0.001);
+        self.anim.card_light = lights;
+        self.anim.covers = covers;
         if let Some(ms) = switch_ms.filter(|&ms| ms < 160.0) {
             crate::style::glitch_bars(c, [24.0, top, lw, bottom - top], ms / 160.0);
         }
@@ -2911,11 +3411,45 @@ impl Select {
         // The selection outline moves with the same transition.
         // Not with its heading closed: the heading shows where the selection is instead.
         let oy = outline;
+        let outline_start = c.shapes.len();
         if !self.visible.is_empty() && !cursor_hidden && oy > top - DIFF_H && oy < bottom {
-            crate::style::brackets(c, [41.0, oy - 3.0, lw - 14.0, DIFF_H + 3.0], 1.0);
+            let target = [41.0, oy - 3.0, lw - 14.0, DIFF_H + 3.0];
+            crate::style::brackets(c, target, 1.0);
+            // A song landing in it: a flash, the brackets opening out and fading.
+            if let Some(t) = self
+                .anim
+                .flash
+                .filter(|_| !legacy)
+                .map(|t| progress(t, LAND_FLASH_MS))
+            {
+                if t < 1.0 {
+                    let [x, y, w, h] = target;
+                    let flash = rgba(0xffffff, 0.22 * (1.0 - t));
+                    c.round_rect(
+                        [x + 3.0, y + 3.0],
+                        [w - 6.0, h - 3.0],
+                        5.0,
+                        flash,
+                        flash,
+                        0.0,
+                    );
+                    let g = LAND_FLASH_GROW * t;
+                    let out = [x - g, y - g, w + 2.0 * g, h + 2.0 * g];
+                    crate::style::brackets(c, out, 1.0 - t);
+                } else {
+                    self.anim.flash = None;
+                }
+            }
+        }
+        // From the main menu the outline comes in with the selection's card.
+        if let Some(f) = arriving {
+            let (dy, a) = crate::menu_shift::card_drop(f, cursor_row);
+            c.transform_since(outline_start, [0.0, 0.0], 1.0, 0.0, dy);
+            c.fade_since(outline_start, a, 1.0);
         }
         // Rows scrolling past the edges slide under them instead of over the search row.
         c.clip_since(list_start, 20.0, top - 2.0, lw + 8.0, bottom - top + 4.0);
+        self.list_shapes = [list_start, c.shapes.len()];
         for h in &mut c.hits[hits_start..] {
             let [_, y, _, hh] = &mut h.rect;
             let (y0, y1) = (y.max(top - 2.0), (*y + *hh).min(bottom + 2.0));
@@ -2927,14 +3461,23 @@ impl Select {
             let (track_x, track_w) = (8.0, 8.0);
             let track = bottom - top;
             let hover = c.hovered(track_x - 4.0, top, track_w + 12.0, track);
-            c.round_rect(
-                [track_x, top],
-                [track_w, track],
-                4.0,
-                rgba(0x15151d, if hover { 0.9 } else { 0.6 }),
-                rgba(0x2a2a38, 1.0),
-                1.0,
-            );
+            if legacy {
+                c.round_rect(
+                    [track_x, top],
+                    [track_w, track],
+                    4.0,
+                    rgba(0x15151d, if hover { 0.9 } else { 0.6 }),
+                    rgba(0x2a2a38, 1.0),
+                    1.0,
+                );
+            } else {
+                let level = if hover {
+                    crate::style::Surface::Lifted
+                } else {
+                    crate::style::Surface::Raised
+                };
+                crate::style::surface(c, [track_x, top, track_w, track], 4.0, level);
+            }
             let total = final_y.max(view);
             // Where each heading starts, as a mark on the track.
             if self.headings && self.sections.len() > 1 {
@@ -2951,7 +3494,15 @@ impl Select {
                 [track_x + 1.0, top + pos * (track - thumb)],
                 [track_w - 2.0, thumb],
                 3.0,
-                rgba(if hover { accent() } else { 0x8a8aa8 }, 0.95),
+                // The accent is the selection's outside Legacy: under the pointer, white.
+                rgba(
+                    match (hover, legacy) {
+                        (true, true) => accent(),
+                        (true, false) => crate::style::ink::PRIMARY,
+                        (false, _) => 0x8a8aa8,
+                    },
+                    0.95,
+                ),
                 rgba(0, 0.0),
                 0.0,
             );
@@ -2975,14 +3526,19 @@ impl Select {
                 let label = Canvas::fit(10.0, lw - 40.0, &self.sections[si].label);
                 let bw = Canvas::text_width(10.0, &label) + 24.0;
                 let by = (py - 13.0).clamp(top, bottom - 26.0);
-                c.round_rect(
-                    [30.0, by],
-                    [bw, 26.0],
-                    6.0,
-                    rgba(0x15151d, 0.96),
-                    rgba(accent(), 1.0),
-                    1.5,
-                );
+                if legacy {
+                    c.round_rect(
+                        [30.0, by],
+                        [bw, 26.0],
+                        6.0,
+                        rgba(0x15151d, 0.96),
+                        rgba(accent(), 1.0),
+                        1.5,
+                    );
+                } else {
+                    let fill = rgba(crate::style::SURFACE_2, 0.96);
+                    c.round_rect([30.0, by], [bw, 26.0], 6.0, fill, fill, 0.0);
+                }
                 c.text(42.0, by + 8.0, 10.0, rgba(0xffffff, 1.0), &label);
             }
         }
@@ -3030,13 +3586,111 @@ impl Select {
             7.0,
             2.0 * (469.5 - (455.5 + Canvas::text_height(7.0) / 2.0) - 3.0),
         );
-        c.text(
-            24.0,
-            466.0 + (7.0 - status_size) / 2.0,
-            status_size,
-            rgba(0x55556a, 1.0),
-            &Canvas::fit(status_size, w - 48.0, status),
-        );
+        if legacy || self.show_info {
+            c.text(
+                24.0,
+                466.0 + (7.0 - status_size) / 2.0,
+                status_size,
+                rgba(0x55556a, 1.0),
+                &Canvas::fit(status_size, w - 48.0, status),
+            );
+        }
+    }
+
+    /// A set's card in the main menu's look over `[x, y, w, h]`: a surface (lifted when open or
+    /// under the pointer), the map's picture over it behind a shade from dark under the title
+    /// to lighter on the right (fading in as it arrives; the plain surface until then), lit by
+    /// `light` under the pointer, and the selection's outline round the open one.
+    fn draw_set_card(
+        &self,
+        c: &mut Canvas,
+        e: &Entry,
+        [x, y, w, h]: [f32; 4],
+        open: bool,
+        light: f32,
+        covers: &mut std::collections::HashMap<String, std::time::Instant>,
+    ) {
+        use crate::style::{self, Surface};
+        let level = if open || light > 0.5 {
+            Surface::Lifted
+        } else {
+            Surface::Raised
+        };
+        style::surface(c, [x, y, w, h], CARD_RADIUS, level);
+        if let Some(bg) = crate::preview::background_path(e) {
+            let key = crate::render::path_picture_key(&bg);
+            let shown = c.card_slots.contains_key(&key);
+            if !shown {
+                // Let go of to make room for others: it fades in again when it's back.
+                covers.remove(&key);
+            }
+            let since = covers.get(&key).copied();
+            let a = match since {
+                Some(t) => crate::render::progress(t, COVER_FADE_MS),
+                None if crate::render::animations() => 0.0,
+                None => 1.0,
+            };
+            let inner = [x + 1.0, y + 1.0, w - 2.0, h - 2.0];
+            // Until its picture is in, the card shows the picture's average colour (once known),
+            // and the picture fades in over it: nothing on the card pops.
+            let colour = c.card_colour(&bg);
+            // Everything on the card is as round as it, 1 in.
+            let round = CARD_RADIUS - 1.0;
+            if let Some([r, g, b]) = colour
+                && (!shown || a < 1.0)
+            {
+                let col = [r, g, b, 1.0];
+                c.round_rect(
+                    [inner[0], inner[1]],
+                    [inner[2], inner[3]],
+                    round,
+                    col,
+                    col,
+                    0.0,
+                );
+            }
+            let tint = [1.0, 1.0, 1.0, a];
+            let drawn = c.card_picture(&bg, inner, tint, round, self.card_greys);
+            if drawn && since.is_none() {
+                covers.insert(key, crate::render::frame_now());
+            }
+            if drawn || colour.is_some() {
+                // Over the colour the shade is there at once; over the bare surface it comes in
+                // with the picture.
+                let base = if colour.is_some() { 1.0 } else { a };
+                // One sweep from dark under the title to lighter on the right, as round as the
+                // card.
+                let shade = |s: f32| rgba(style::SURFACE_1, s * base);
+                let (left, right) = (shade(COVER_SHADE.0), shade(COVER_SHADE.1));
+                c.shade_across(
+                    [inner[0], inner[1]],
+                    [inner[2], inner[3]],
+                    round,
+                    left,
+                    right,
+                );
+            }
+        }
+        if open {
+            // On the beat its edge and tone light a little; in a kiai the edge turns gold.
+            let kiai = style::kiai();
+            let col = crate::menu::tint(style::selector_colour(), style::KIAI_GOLD, kiai);
+            let beat = style::pulse();
+            c.round_rect(
+                [x, y],
+                [w, h],
+                CARD_RADIUS,
+                rgba(col, 0.1 + 0.03 * beat),
+                rgba(col, 0.8 + 0.2 * beat),
+                1.0,
+            );
+        } else {
+            // A faint edge round every card, so neighbouring pictures of like colours don't run
+            // into each other; brighter under the pointer.
+            let lift = rgba(0xffffff, 0.06 * light);
+            let edge = rgba(0xffffff, CARD_EDGE + 0.08 * light);
+            c.round_rect([x, y], [w, h], CARD_RADIUS, lift, edge, 1.0);
+        }
     }
 
     /// The collection picker and the right-click menu, over everything else on the screen

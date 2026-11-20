@@ -560,3 +560,115 @@ fn settings_mark_a_key_that_does_two_jobs() {
         "the preset key's row says so"
     );
 }
+
+/// Draws the caret at `x` (line top 20) `ms` after `t0` with animations on: its shapes.
+fn caret_at(t0: Instant, ms: u64, x: f32) -> Vec<render::Shape> {
+    render::set_frame_theme(Some(render::Theme {
+        accent: 0x13c4a7,
+        animations: true,
+        legacy_menu: false,
+        pulse: 0.0,
+        kiai: 0.0,
+    }));
+    render::set_frame_time(Some(t0 + Duration::from_millis(ms)));
+    let mut c = Canvas::default();
+    c.caret(x, 21.0, 8.0, rgba(0xffffff, 1.0));
+    render::set_frame_time(None);
+    render::set_frame_theme(None);
+    c.shapes
+}
+
+/// The caret's trail drawn: its left and right ends and its alpha at each.
+fn caret_trail(s: &[render::Shape]) -> Option<[f32; 4]> {
+    s.iter()
+        .find(|sh| sh.params[3] == render::SHADE_ACROSS)
+        .map(|sh| {
+            [
+                sh.center[0] - sh.half[0],
+                sh.center[0] + sh.half[0],
+                sh.fill[3],
+                sh.border[3],
+            ]
+        })
+}
+
+/// Whether the caret's beam is drawn (it's off half the time as it blinks).
+fn caret_beam(s: &[render::Shape]) -> bool {
+    s.iter().any(|sh| sh.params[3] != render::SHADE_ACROSS)
+}
+
+#[test]
+fn the_caret_leaves_a_trail_its_leading_edge_first_and_catches_up() {
+    let t0 = Instant::now();
+    // Resting at 10, then moved to 60.
+    assert_eq!(caret_at(t0, 0, 10.0).len(), 1, "a lone beam at rest");
+    caret_at(t0, 16, 60.0);
+    let s = caret_at(t0, 32, 60.0);
+    let [left, right, far, near] = caret_trail(&s).expect("a trail behind the moved caret");
+    assert!(
+        left > 10.0 && left < 45.0,
+        "its far end still behind: {left}"
+    );
+    assert!(right > 45.0, "its near end most of the way: {right}");
+    assert!(
+        far == 0.0 && near > 0.3,
+        "clear far, the caret's colour near: {far} {near}"
+    );
+    // Within the leading edge's time (0.1 s) the near end is there, the far end still behind.
+    let mut ms = 32;
+    while ms < 112 {
+        ms += 16;
+        caret_at(t0, ms, 60.0);
+    }
+    let [left, right, ..] =
+        caret_trail(&caret_at(t0, ms + 16, 60.0)).expect("the far end still catching up");
+    ms += 16;
+    assert!(right > 59.0 && left < 55.0, "{left}..{right}");
+    // Within the trailing edge's time it has caught up.
+    while ms < 450 {
+        ms += 16;
+        caret_at(t0, ms, 60.0);
+    }
+    assert!(
+        caret_trail(&caret_at(t0, ms + 16, 60.0)).is_none(),
+        "caught up"
+    );
+    // Back left: the trail is on its right, clear at its far (right) end.
+    caret_at(t0, ms + 32, 20.0);
+    let [_, _, near, far] =
+        caret_trail(&caret_at(t0, ms + 48, 20.0)).expect("a trail to the right");
+    assert!(near > 0.3 && far == 0.0, "{near} {far}");
+}
+
+#[test]
+fn the_caret_blinks_once_it_rests_and_stops_blinking_after_a_while() {
+    let t0 = Instant::now();
+    let mut ms = 0;
+    let mut at = |to: u64, x: f32| {
+        // Drawn every frame on the way, as the game does.
+        while ms + 16 < to {
+            ms += 16;
+            caret_at(t0, ms, x);
+        }
+        ms = to;
+        caret_beam(&caret_at(t0, ms, x))
+    };
+    assert!(at(0, 30.0));
+    assert!(at(400, 30.0), "on for half a second");
+    assert!(!at(700, 30.0), "then off");
+    assert!(at(1100, 30.0), "and on again");
+    assert!(at(16_200, 30.0) && at(16_700, 30.0), "steady after a while");
+    assert!(at(16_716, 34.0), "on as it moves");
+    assert!(at(17_000, 34.0), "and stays on for half a second");
+    assert!(!at(17_300, 34.0), "then blinks again");
+}
+
+#[test]
+fn without_animations_the_caret_is_a_steady_beam() {
+    let mut c = Canvas::default();
+    for x in [10.0, 60.0] {
+        c.caret(x, 21.0, 8.0, rgba(0xffffff, 1.0));
+    }
+    assert_eq!(c.shapes.len(), 2, "one beam each, no trail");
+    assert!(c.shapes.iter().all(|s| s.params[3] != render::SHADE_ACROSS));
+}

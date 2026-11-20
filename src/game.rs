@@ -76,6 +76,15 @@ pub fn set_frame_look(look: Option<Look>) {
     FRAME_LOOK.with(|l| l.set(look));
 }
 
+/// Runs `f` with this thread drawing the playfield with `look`, then puts back the look it had.
+pub fn with_look<R>(look: Look, f: impl FnOnce() -> R) -> R {
+    let before = FRAME_LOOK.with(std::cell::Cell::get);
+    FRAME_LOOK.with(|l| l.set(Some(look)));
+    let out = f();
+    FRAME_LOOK.with(|l| l.set(before));
+    out
+}
+
 /// What this thread draws the playfield with.
 pub fn playfield_look() -> Look {
     FRAME_LOOK

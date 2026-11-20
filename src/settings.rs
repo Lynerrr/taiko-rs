@@ -50,6 +50,7 @@ pub enum Item {
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
+    PreviewDrum,
     MenuGlitch,
     BlackLane,
     TrueNotes,
@@ -92,6 +93,9 @@ pub enum Item {
     HalfResolution,
     FpsCap,
     ShowFps,
+    /// Song select's library counts and device line in the main menu's look.
+    SelectInfo,
+    CardFade,
     Animations,
     Splash,
     /// The flashing-lights warning at startup (`Config::epilepsy_warning`).
@@ -136,12 +140,14 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 143] = [
+pub const ITEMS: [(&str, Item); 146] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::TjaFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
+    ("LIBRARY", Item::SelectInfo),
     ("LIBRARY", Item::SongSelectLayout),
+    ("LIBRARY", Item::CardFade),
     ("LIBRARY", Item::DataFolder),
     ("LIBRARY", Item::CustomFolder),
     ("LIBRARY", Item::MoveCustomMaps),
@@ -171,6 +177,7 @@ pub const ITEMS: [(&str, Item); 143] = [
     ("VIEW", Item::BackgroundDim),
     ("VIEW", Item::BackgroundDimBlack),
     ("VIEW", Item::KiaiEffects),
+    ("VIEW", Item::PreviewDrum),
     ("VIEW", Item::MenuGlitch),
     ("VIEW", Item::BlackLane),
     ("INPUT", Item::Key(0)),
@@ -545,6 +552,11 @@ impl Item {
             Item::Hotkey(i) => crate::keys::Hotkey::ALL[i].label(),
             Item::TouchLayout => tr!("Touch layout", "タッチの配置", "Сенсорная раскладка"),
             Item::Screenshots => tr!("Screenshots", "スクリーンショット", "Скриншоты"),
+            Item::CardFade => tr!(
+                "Card colour fade",
+                "カードの色フェード",
+                "Угасание цвета карточек"
+            ),
             // Also in English, so anyone who picked a language by mistake finds their way back.
             Item::Language => tr!("Language", "言語 (Language)", "Язык (Language)"),
             Item::UiFont => tr!("Interface font", "表示フォント", "Шрифт интерфейса"),
@@ -559,6 +571,11 @@ impl Item {
                 "Колесо меняет размер поля"
             ),
             Item::KiaiEffects => tr!("Kiai effects", "キアイの演出", "Эффекты киай"),
+            Item::PreviewDrum => tr!(
+                "Drum in the preview",
+                "プレビューの太鼓",
+                "Барабан в превью"
+            ),
             Item::MenuGlitch => tr!("Menu glitch", "メニューのグリッチ", "Глитч в меню"),
             Item::BlackLane => tr!("Black lane", "黒いレーン", "Чёрная дорожка"),
             Item::DrumMenus => tr!(
@@ -669,6 +686,7 @@ impl Item {
             Item::HalfResolution => tr!("Half resolution", "半分の解像度", "Половинное разрешение"),
             Item::FpsCap => tr!("FPS cap", "FPSの上限", "Ограничение FPS"),
             Item::ShowFps => tr!("FPS overlay", "FPSの表示", "Счётчик FPS"),
+            Item::SelectInfo => tr!("Library info", "ライブラリ情報", "Инфо о библиотеке"),
             Item::Animations => tr!("UI animations", "UIのアニメーション", "Анимации интерфейса"),
             Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
             Item::EpilepsyWarning => tr!(
@@ -777,6 +795,7 @@ impl Item {
             Item::PlayfieldPreset
             | Item::TouchLayout
             | Item::Screenshots
+            | Item::CardFade
             | Item::IdleScreen
             | Item::Language
             | Item::UiFont
@@ -807,6 +826,7 @@ impl Item {
             | Item::BackgroundDimBlack
             | Item::Interface
             | Item::KiaiEffects
+            | Item::PreviewDrum
             | Item::MenuGlitch
             | Item::BlackLane
             | Item::DrumMenus
@@ -831,6 +851,7 @@ impl Item {
             | Item::MenuVsync
             | Item::HalfResolution
             | Item::ShowFps
+            | Item::SelectInfo
             | Item::Animations
             | Item::Splash
             | Item::EpilepsyWarning
@@ -987,6 +1008,11 @@ impl Item {
                 "メニュー、設定、メッセージの言語。曲名は譜面のままです。",
                 "Язык меню, настроек и сообщений. Названия песен остаются как в картах."
             ),
+            Item::CardFade => tr!(
+                "Song select's cards: their picture's colour fades to grey towards one side, keeping it on the other.",
+                "選曲画面のカード: 画像の色が片側へ向かってグレーになり、反対側は色のまま。",
+                "Карточки в выборе песен: цвет картинки к одному краю уходит в серый, у другого остаётся."
+            ),
             Item::Screenshots => tr!(
                 "Where a screenshot goes: on the clipboard to paste, as a picture in the Screenshots folder, or both.",
                 "スクリーンショットの行き先: 貼り付け用のクリップボード、Screenshotsフォルダの画像、またはその両方。",
@@ -1056,6 +1082,11 @@ impl Item {
                 "Notes on the main menu glitch when hit, and the whole screen with them and between menus. Off: they still spin and jump.",
                 "メインメニューのノーツが叩くとグリッチし、画面全体もそのときとメニューの切り替えでグリッチします。オフでも回って跳ねます。",
                 "Ноты в главном меню глитчат от удара, а весь экран вместе с ними и при переходе между меню. Выкл.: они всё равно крутятся и подпрыгивают."
+            ),
+            Item::PreviewDrum => tr!(
+                "Song select's preview shows the drum at the start of its lane. Off: just the lane.",
+                "曲選択のプレビューでレーンの左端に太鼓を表示します。オフ: レーンだけ。",
+                "Превью в выборе песни показывает барабан в начале дорожки. Выкл.: только дорожка."
             ),
             Item::KiaiEffects => tr!(
                 "During kiai time, tint the lane and pulse the hit target with the beat. The main menu joins in too.",
@@ -1181,6 +1212,11 @@ impl Item {
                 "mailbox/immediate only. A few times your refresh rate is plenty.",
                 "mailbox/immediateのみ。リフレッシュレートの数倍で十分です。",
                 "Только mailbox/immediate. Хватит нескольких частот обновления экрана."
+            ),
+            Item::SelectInfo => tr!(
+                "Song select shows how many songs and maps there are, and the graphics and audio devices at the bottom.",
+                "選曲画面に曲と譜面の数、下にグラフィックとオーディオのデバイスを表示。",
+                "Выбор песни показывает число песен и карт, а внизу видеокарту и аудиоустройство."
             ),
             Item::ShowFps => tr!(
                 "Frame rate and frame time in the corner. Shortcut: F10.",

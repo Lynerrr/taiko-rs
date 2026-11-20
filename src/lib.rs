@@ -69,6 +69,7 @@ mod medals;
 mod media;
 mod menu;
 mod menu_notes;
+mod menu_shift;
 mod mobile;
 mod mod_setup;
 use taiko_logic::mods;
@@ -81,6 +82,7 @@ use taiko_proto::net;
 mod od_override;
 mod offline;
 use taiko_proto::online;
+mod card_pictures;
 mod osudb;
 #[cfg(test)]
 mod perf_audit;
@@ -226,6 +228,11 @@ const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
 
 /// How often the open song list asks again which of its custom sets the website approved.
 const CUSTOM_REFRESH: Duration = Duration::from_secs(2 * 60);
+/// How often the logged-in player's own pp and rank are fetched again.
+const ME_REFRESH: Duration = Duration::from_secs(60);
+/// How long after a play is taken they are fetched again: the server plays its replay back
+/// and settles its pp within about a second.
+const ME_AFTER_SUBMIT: Duration = Duration::from_secs(2);
 
 /// How far behind a watched friend the view plays (room for the network).
 const WATCH_DELAY_MS: f64 = 2000.0;
@@ -383,6 +390,9 @@ type HostTransfer = (
     Arc<std::sync::atomic::AtomicU64>,
 );
 
+/// What the pp simulator's answer is for: the map, accuracy and misses, speed, mods, scroll speed.
+type SimKey = (std::path::PathBuf, u64, u32, u64, mods::Mods, u64);
+
 /// Everything the input and render threads share. The render thread holds the lock only while
 /// building a frame (well under a millisecond) and never across a GPU wait, so key presses are
 /// handled — and timestamped — immediately no matter how the swapchain paces frames.
@@ -419,6 +429,17 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
+    /// The camera on its way between the main menu and song select.
+    menu_shift: Option<menu_shift::Shift>,
+    /// Song select's routes behind it: where they drift to (carried on from the menu's, and back
+    /// to it: `menu::Menu::routes_at`), and, leaving for the menu, how far they've cleared off.
+    song_routes: menu_notes::Drift,
+    song_routes_drain: Option<(f64, f32)>,
+    /// Where song select's Play note is, its middle and radius (as drawn, before the camera
+    /// moves it): the menu's hit note lands there.
+    play_icon_at: Option<([f32; 2], f32)>,
+    /// When song select's Random was last pressed: its die rolls for a moment.
+    dice_roll: Option<Instant>,
     /// Its easter eggs, which outlast it (`eggs`).
     menu_eggs: eggs::MenuEggs,
     /// One map started again and again, for a secret medal (`ura::Again`).
@@ -517,6 +538,9 @@ struct State {
     me_relax: Option<(f64, Option<u32>)>,
     me_for: String,
     me_fetch: Job<Result<online::Profile, String>>,
+    /// When they are fetched again: the server works pp out again after a play is taken (its
+    /// replay is played back), and recalculations and plays elsewhere change it too.
+    me_due: Option<Instant>,
     /// The song select leaderboard shows the server's scores, not the local ones.
     board_online: bool,
     /// A player's profile, over everything else.
@@ -538,6 +562,8 @@ struct State {
     /// rows or why not), and the one being fetched.
     online_boards: std::collections::HashMap<(u64, bool), (Instant, Board)>,
     board_fetch: Option<BoardFetch>,
+    /// The pp simulator's last answer: for which map, pick, speed and mods, and the pp.
+    sim_pp: Option<(SimKey, Option<f64>)>,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
     /// Mods of the play being loaded.
@@ -578,6 +604,8 @@ struct State {
     avatars: avatars::Avatars,
     /// The playing or edited `.tko` map's own pictures.
     pictures: pictures::Pictures,
+    /// Song select's card pictures (strips of the maps' pictures).
+    card_pictures: card_pictures::CardPictures,
     /// The account logged in is an admin (the server says so; it checks every admin action).
     admin: bool,
     /// Checking the address the server says it moved to (`Reply::Account::server`): the server
@@ -2516,11 +2544,13 @@ impl State {
     /// Opens the screen of the note that was hit. Coming back from those lands here again,
     /// except from the songs, which is what the menu is for leaving to.
     fn menu_open(&mut self, item: menu::Item) {
-        if !matches!(item, menu::Item::Exit) {
+        // Song select is reached by moving the camera (`menu_shift`), not out of black.
+        let shifts = item == menu::Item::Play && self.cfg.animations && menu_shift::animated();
+        if !matches!(item, menu::Item::Exit) && !shifts {
             self.screen_fade = Some(0.0);
         }
         match item {
-            menu::Item::Play => self.main_menu = None,
+            menu::Item::Play => self.leave_menu_for_songs(shifts),
             menu::Item::Multiplayer => self.open_multiplayer(),
             menu::Item::Download => self.open_download(),
             menu::Item::Medals => self.open_medals(self.mp_menu.account.clone()),
@@ -2528,6 +2558,85 @@ impl State {
             menu::Item::Settings => self.open_settings(),
             menu::Item::Exit => self.ask_quit(),
         }
+    }
+
+    /// Play on the menu: the camera moves on along its lane to song select (`shifts`), or song
+    /// select is simply there.
+    /// The pp a play picked in the simulator would give on library entry `i` at speed `rate`
+    /// with the mods on (None until the map is read, or for no pp with these mods); worked out
+    /// again only when any of it changes.
+    pub(crate) fn simulated_pp(&mut self, i: usize, sim: preview::PpSim, rate: f64) -> Option<f64> {
+        let notes = self.preview.notes()?;
+        let e = self.library.get(i)?;
+        let key: SimKey = (
+            e.path.clone(),
+            sim.accuracy.to_bits(),
+            sim.misses,
+            rate.to_bits(),
+            self.cfg.mods,
+            self.cfg.scroll_speed.to_bits(),
+        );
+        if let Some((k, pp)) = &self.sim_pp
+            && *k == key
+        {
+            return *pp;
+        }
+        let (great, ok, miss) = sim.counts(notes);
+        let play = pp::Play {
+            great,
+            ok,
+            miss,
+            max_combo: great + ok,
+            rate,
+            mods: self.cfg.mods,
+            scroll_speed: self.cfg.scroll_speed,
+            seed: 0,
+            half: Default::default(),
+        };
+        let pp = pp::play_pp(&e.path, &play);
+        self.sim_pp = Some((key, pp));
+        pp
+    }
+
+    fn leave_menu_for_songs(&mut self, shifts: bool) {
+        let left = self.main_menu.take();
+        if !shifts {
+            self.menu_shift = None;
+            return;
+        }
+        if let Some(m) = &left {
+            self.song_routes = m.routes_at();
+        }
+        self.song_routes_drain = None;
+        let from = self.menu_shift.take().filter(|s| !s.into_songs);
+        self.menu_shift = Some(menu_shift::Shift::into_songs(
+            left,
+            menu::Item::Play,
+            from.as_ref(),
+        ));
+    }
+
+    /// Song select's way back to the main menu: the camera moves back along the menu's lane, the
+    /// menu where it was left if the camera hadn't got all the way yet.
+    fn back_to_menu(&mut self) {
+        let shifts = self.cfg.animations && menu_shift::animated();
+        // Not yet all the way to song select: the menu it was leaving comes back.
+        let (left, from) = match self.menu_shift.take() {
+            Some(mut s) if shifts && s.into_songs => (s.menu.take(), Some(s)),
+            _ => (None, None),
+        };
+        let mut m = left.map_or_else(menu::Menu::new, |m| *m);
+        if shifts {
+            m.resume(self.song_routes);
+            self.menu_shift = Some(menu_shift::Shift::back(from.as_ref()));
+            // Song select's own routes clear off from where the song is now.
+            let playing = self.preview.playing_time();
+            self.song_routes_drain = self
+                .menu_notes
+                .time(playing, Instant::now())
+                .map(|t| (t, 0.0));
+        }
+        self.main_menu = Some(m);
     }
 
     /// Logged in as krokodil_koban (their settings row shows).
@@ -2912,6 +3021,7 @@ impl State {
             Item::AutoplayBinding => autoplay::BINDINGS[c.autoplay.binding].into(),
             Item::AutoplayLeftHanded => on(c.autoplay.left_handed),
             Item::Screenshots => c.screenshot_to.name().into(),
+            Item::CardFade => c.card_fade.name().into(),
             Item::IdleScreen => idle::minutes_name(c.idle_minutes),
             Item::UiFont => {
                 if c.ui_font.is_empty() {
@@ -2925,6 +3035,7 @@ impl State {
             Item::WheelResize => on(c.wheel_resizes_playfield),
             Item::BackgroundDimBlack => on(c.bg_dim_black),
             Item::KiaiEffects => on(c.kiai_effects),
+            Item::PreviewDrum => on(c.preview_drum),
             Item::MenuGlitch => on(c.menu_glitch),
             Item::BlackLane => on(c.black_lane),
             Item::TrueNotes => on(c.true_notes),
@@ -3036,6 +3147,7 @@ impl State {
                 }
             }
             Item::ShowFps => on(c.show_fps),
+            Item::SelectInfo => on(c.select_info),
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
             Item::EpilepsyWarning => on(c.epilepsy_warning),
@@ -3258,6 +3370,7 @@ impl State {
                 self.cfg.autoplay.left_handed = !self.cfg.autoplay.left_handed
             }
             Item::Screenshots => self.cfg.screenshot_to = self.cfg.screenshot_to.step(dir),
+            Item::CardFade => self.cfg.card_fade = self.cfg.card_fade.step(dir),
             Item::IdleScreen => {
                 let i = idle::MINUTES
                     .iter()
@@ -3300,6 +3413,7 @@ impl State {
             }
             Item::BackgroundDimBlack => self.cfg.bg_dim_black = !self.cfg.bg_dim_black,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
+            Item::PreviewDrum => self.cfg.preview_drum = !self.cfg.preview_drum,
             Item::MenuGlitch => self.cfg.menu_glitch = !self.cfg.menu_glitch,
             Item::BlackLane => self.cfg.black_lane = !self.cfg.black_lane,
             Item::TrueNotes => self.cfg.true_notes = !self.cfg.true_notes,
@@ -3381,6 +3495,7 @@ impl State {
                 self.cfg.fps_cap = FPS_CAPS[(i + dir).rem_euclid(FPS_CAPS.len() as i32) as usize];
             }
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
+            Item::SelectInfo => self.cfg.select_info = !self.cfg.select_info,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::EpilepsyWarning => self.cfg.epilepsy_warning = !self.cfg.epilepsy_warning,
@@ -3629,6 +3744,14 @@ impl State {
                 (
                     strings(&mut all.iter().map(|t| t.name())),
                     all.iter().position(|&t| t == c.screenshot_to),
+                    String::new(),
+                )
+            }
+            Item::CardFade => {
+                let all = config::CardFade::ALL;
+                (
+                    strings(&mut all.iter().map(|t| t.name())),
+                    all.iter().position(|&t| t == c.card_fade),
                     String::new(),
                 )
             }
@@ -3954,6 +4077,7 @@ impl State {
         match list.item {
             Item::TouchLayout => self.cfg.touch_layout = config::TouchLayout::ALL[i],
             Item::Screenshots => self.cfg.screenshot_to = config::ScreenshotTo::ALL[i],
+            Item::CardFade => self.cfg.card_fade = config::CardFade::ALL[i],
             Item::IdleScreen => self.cfg.idle_minutes = idle::MINUTES[i],
             Item::AutoplayStyle => self.cfg.autoplay.style = autoplay::Style::ALL[i],
             Item::AutoplayBinding => self.cfg.autoplay.binding = i,
@@ -6693,6 +6817,18 @@ impl State {
             }
             return;
         }
+        // Over a field of the pp simulator: the wheel steps it, up for more.
+        if self.scene.is_select()
+            && let Some(hit::Hit::PpSimField(field) | hit::Hit::PpSimStep(field, _)) =
+                self.hit_at(vx, vy)
+        {
+            if let Some(sim) = &mut self.preview.sim {
+                for _ in 0..notches.unsigned_abs() {
+                    sim.step(field, notches.signum());
+                }
+            }
+            return;
+        }
         let on_board = self
             .board_rect
             .is_some_and(|[bx, by, bw, bh]| vx >= bx && vx <= bx + bw && vy >= by && vy <= by + bh);
@@ -9162,6 +9298,18 @@ impl State {
         self.stars.clear();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
+        // Song select's cards show every set's background: small copies made ahead read fast.
+        if self.cfg.main_menu {
+            let mut seen = std::collections::HashSet::new();
+            let paths: Vec<PathBuf> = self
+                .library
+                .iter()
+                .filter_map(preview::background_path)
+                .filter(|p| seen.insert(p.clone()))
+                .collect();
+            self.card_pictures.prewarm(paths.clone());
+            self.pictures.prewarm(paths);
+        }
         // Keep whatever was typed into the search box while scanning, and the sort.
         let filter = std::mem::take(&mut self.select.filter);
         let played = std::mem::take(&mut self.select.played);
@@ -10541,6 +10689,20 @@ impl State {
             social::TAB_MIDDLE
         };
         (!covered).then_some(middle)
+    }
+
+    /// How far the background is into its blurred copy: the idle screen's, and all of it on song
+    /// select in the main menu's look, where the map's picture is a field of colour under the
+    /// cards and the banner (they show it sharp). On the way between the menu and song select it
+    /// blurs and clears with the camera. Legacy and the phone layout keep it sharp.
+    pub(crate) fn background_blur(&self) -> f32 {
+        let look = !self.select.legacy && !mobile::active() && self.scene.is_select();
+        let select = match &self.menu_shift {
+            Some(shift) if look => menu_shift::phases(shift.t()).cam,
+            _ if look && !self.on_menu() => 1.0,
+            _ => 0.0,
+        };
+        self.idle.amount().max(select)
     }
 
     /// Song select, or a screen that is part of it (its fullscreen preview, the download tab):
@@ -12594,13 +12756,17 @@ impl State {
             picture_dir.as_deref(),
             &canvas.pictures_wanted,
             &canvas.picture_times,
+            &canvas.picture_paths,
         );
+        self.card_pictures.update(&canvas.cards_wanted);
         canvas.clear(width);
         canvas.input_editor = self
             .sync_text_input()
             .map(|field| (field, self.text_input.view()));
         canvas.avatar_slots = self.avatars.slots();
         canvas.picture_slots = self.pictures.slots();
+        canvas.card_slots = self.card_pictures.slots();
+        canvas.card_colours = self.card_pictures.colours();
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
         self.mob.begin_frame();
@@ -12682,6 +12848,7 @@ impl State {
             };
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
+            self.preview.hide_drum = !self.cfg.preview_drum;
             self.preview.own_background =
                 shows_own_background(self.behind_settings().unwrap_or(&self.scene));
             self.preview.autoplay = self.cfg.autoplay;
@@ -12704,7 +12871,8 @@ impl State {
             self.stars.poll();
             self.stars.set_mods(self.cfg.mods, self.cfg.scroll_speed);
             let play_rate = self.play_speed().0;
-            if self.cfg.menu_notes && self.on_menu() {
+            // Song select keeps the song's notes behind it too, whichever song it's on.
+            if self.cfg.menu_notes && self.scene.is_select() {
                 let playing = self.preview_target();
                 self.menu_notes
                     .update(playing, &self.library, &mut self.stars, play_rate);
@@ -12997,6 +13165,8 @@ impl State {
         }
         let on_menu = self.on_menu();
         if !self.scene.is_select() {
+            // Off to another screen: no camera left on its way.
+            self.menu_shift = None;
             self.select.menu = None;
             self.list_drag = None;
             self.select.cancel_drag();
@@ -14023,6 +14193,10 @@ impl State {
                     // + 0.0: servers before the fix sent a new player's pp as -0.0 ("-0 pp").
                     let pp = pp + 0.0;
                     *mine = Some((pp, rank));
+                    // The server settles the play's pp off this answer: ask again shortly, and
+                    // drop a fetch already on its way, which may hold the total before the play.
+                    self.me_fetch.cancel();
+                    self.me_due = Some(Instant::now() + ME_AFTER_SUBMIT);
                     if !again
                         && let Some(results) = self
                             .scene
@@ -14115,7 +14289,8 @@ impl State {
         self.online_boards.get(&key).map(|(_, rows)| rows)
     }
 
-    /// The logged-in player's own pp and rank, fetched once per login.
+    /// The logged-in player's own pp and rank: fetched on login, again shortly after each play
+    /// the server takes and every `ME_REFRESH` (outside songs), so they match the website's.
     fn poll_me(&mut self) {
         let account = self.mp_menu.account.clone().unwrap_or_default();
         if account != self.me_for {
@@ -14123,17 +14298,21 @@ impl State {
             self.me = None;
             self.me_relax = None;
             self.me_fetch.cancel();
-            if !account.is_empty() {
-                let server = self.cfg.online_server.clone();
-                self.me_fetch = Job::spawn(move || {
-                    online::call(&server, online::Request::Profile { name: account }).and_then(
-                        |r| match r {
-                            online::Reply::Profile(p) => Ok(*p),
-                            _ => Err(crate::lang::odd_reply()),
-                        },
-                    )
-                });
-            }
+            self.me_due = (!account.is_empty()).then(Instant::now);
+        }
+        if self.me_fetch.is_idle()
+            && !self.me_for.is_empty()
+            && self.me_due.is_some_and(|due| Instant::now() >= due)
+            && !self.in_song()
+        {
+            self.me_due = Some(Instant::now() + ME_REFRESH);
+            let (server, name) = (self.cfg.online_server.clone(), self.me_for.clone());
+            self.me_fetch = Job::spawn(move || {
+                online::call(&server, online::Request::Profile { name }).and_then(|r| match r {
+                    online::Reply::Profile(p) => Ok(*p),
+                    _ => Err(crate::lang::odd_reply()),
+                })
+            });
         }
         if let Some(Ok(p)) = self.me_fetch.poll() {
             self.me = Some((p.pp + 0.0, p.rank));
@@ -14875,6 +15054,14 @@ impl State {
                     self.select.toggle_like(e);
                 }
             }
+            Hit::PpSim => self.preview.toggle_sim(),
+            Hit::PpSimStep(field, dir) => {
+                if let Some(sim) = &mut self.preview.sim {
+                    sim.step(field, dir);
+                }
+            }
+            // The wheel's: a click between a field's - and + does nothing.
+            Hit::PpSimField(_) => {}
             Hit::PlayerFolders => {
                 if let Some(p) = &mut self.player {
                     p.folders_open = !p.folders_open;
@@ -15143,7 +15330,7 @@ impl State {
             Hit::ListBack => self.select.follow_selection(),
             Hit::ToMenu if self.select.to_menu => {
                 self.select.searching = false;
-                self.main_menu = Some(menu::Menu::new());
+                self.back_to_menu();
             }
             Hit::ToMenu => self.key_inner(KeyCode::Escape, false, None, Instant::now(), window),
             Hit::ModsButton => self.open_mod_select(),
