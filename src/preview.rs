@@ -299,6 +299,8 @@ pub struct Preview {
     pub mods: crate::mods::Mods,
     /// Bottom of the song select panel as last drawn (virtual units).
     pub panel_bottom: f32,
+    /// How tall song select draws the details' page, following `panel_bottom` (0: not yet).
+    pub page_h: f32,
     /// Room kept free at the right of the title line, for a button over the panel's corner
     /// (song select's way to the leaderboard); 0 elsewhere.
     pub title_room: f32,
@@ -1959,7 +1961,14 @@ impl Preview {
         let band_h = band_h + (bottom - top - band_h) * fit;
         let preview_h = band_h * k;
         let h = head + preview_h + after_box;
-        self.panel_bottom = y + h;
+        // Bare, the panel ends under what's on it: the room for "Play from" under the timeline
+        // only once a start point is picked (it grows into it).
+        let tail = if self.bare && self.marker(e).is_none() {
+            PLAY_FROM_ROOM
+        } else {
+            0.0
+        };
+        self.panel_bottom = y + h - tail;
         // Bare, it's on a panel of its own that song select draws under the whole page.
         if !self.bare {
             c.round_rect(
@@ -2375,6 +2384,8 @@ fn pp_chip(c: &mut Canvas, rect: [f32; 4], lit: bool) {
 }
 
 const BARE_GRAPH_H: f32 = 28.0;
+/// The room under the timeline for its "Play from" button, past its times' line.
+const PLAY_FROM_ROOM: f32 = 22.0;
 /// Bare: the timeline's bars, a neutral ink (the accent is Play's and the selection's), kiai's in
 /// gold; how strong they are ahead of the playhead and behind it.
 const KIAI_GOLD: u32 = 0xFFD34D;

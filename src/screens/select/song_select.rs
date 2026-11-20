@@ -447,6 +447,31 @@ fn dice_face(at: Option<Instant>, now: Instant) -> &'static style::Icon {
         [((rolled * style::DICE_ROLL.len() as f32) as usize).min(style::DICE_ROLL.len() - 1)]
 }
 
+/// How tall the details' page is drawn (`panel_top` down, at most `panel_h`): as tall as what's on
+/// it (`Preview::panel_bottom`, as last drawn), not the whole column, growing or shrinking to it
+/// smoothly when that changes (a .tko map's taller lane, the pp simulator, a start point picked).
+fn fit_page(preview: &mut crate::preview::Preview, panel_top: f32, panel_h: f32, dt: f32) -> f32 {
+    let want = preview.panel_bottom - panel_top;
+    let want = if want > 0.0 {
+        want.min(panel_h)
+    } else {
+        panel_h
+    };
+    if preview.page_h <= 0.0 {
+        preview.page_h = want;
+    } else {
+        render::approach(&mut preview.page_h, want, dt, PAGE_FIT_TAU_MS);
+        // The last of the way at once, not a hairline's worth for a while longer.
+        if (preview.page_h - want).abs() < 1.0 {
+            preview.page_h = want;
+        }
+    }
+    preview.page_h
+}
+
+/// The time constant the details' page grows or shrinks to its contents with.
+const PAGE_FIT_TAU_MS: f32 = 60.0;
+
 /// Play pressed (Enter, or a click on it): the map starts at once, in every layout.
 fn press_play(state: &mut State, i: usize) {
     state.start_loading(i);
@@ -612,7 +637,8 @@ fn draw_songs(
             // The main menu's look: the details on a panel of their own, as the board's page
             // beside them, so nothing on the right floats over the map's picture.
             if bare {
-                let page = [x - t * step, panel_top, pw, panel_h];
+                let page_h = fit_page(&mut state.preview, panel_top, panel_h, canvas.dt_ms);
+                let page = [x - t * step, panel_top, pw, page_h];
                 style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
             }
             state.preview.title_room = bw + 10.0;
