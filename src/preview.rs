@@ -2287,10 +2287,10 @@ pub(crate) fn bare_notes_end(lane_end: f32) -> f32 {
 }
 
 /// Bare, the lane's shapes as drawn from `start` (from `lane_x` to `notes_end`, `band_h` tall)
-/// fitted to its tile: its own bands (as
-/// tall as the tile, running its length) run out to its edges and are as round, the drum's dark panel
-/// runs out to the tile's left edge and is as round there (square, it made the lane read as a
-/// square box on a dark picture), and the lines along it stop where the corners start rounding.
+/// fitted to its tile: its own bands (as tall as the tile, running its length) run out to its
+/// edges and are as round, the drum's dark panel runs out to the tile's left edge and is as round
+/// there (square, it made the lane read as a square box on a dark picture), and the lines along
+/// it are left out.
 pub(crate) fn bare_lane_end(
     shapes: &mut Vec<crate::render::Shape>,
     start: usize,
@@ -2317,9 +2317,10 @@ pub(crate) fn bare_lane_end(
         } else if tall && (left - lane_x).abs() < 0.5 && right - left < (notes_end - lane_x) / 2.0 {
             panels.push(i);
         } else if !tall && left <= lane_x + 0.5 && right >= notes_end - 0.5 {
-            let (l, r) = (left.max(tile_left + round), right.min(notes_end - round));
-            sh.center[0] = (l + r) / 2.0;
-            sh.half[0] = (r - l) / 2.0;
+            // The lines along it: none (the tile is its frame). Cut by the tile's edge, what was
+            // left of them flickered as a hairline as the panel followed the pointer.
+            sh.fill[3] = 0.0;
+            sh.border[3] = 0.0;
         }
     }
     // The panel out to the tile's edge, round; a square copy over its right half keeps it square

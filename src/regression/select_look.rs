@@ -2133,14 +2133,9 @@ fn the_preview_lane_fits_its_round_tile_and_its_notes_slide_in_from_under_its_ed
         "the band from the tile's left edge to its right one: {:?}",
         span(&shapes[1])
     );
-    let line = span(&shapes[2]);
-    assert_eq!(
-        shapes[2].params[0], 0.0,
-        "a thin line along it isn't rounded"
-    );
     assert!(
-        line[1] <= end - round + 0.01,
-        "it stops before the rounded corner: {line:?}"
+        shapes[2].fill[3] == 0.0 && shapes[2].border[3] == 0.0,
+        "no line along it: the tile is its frame"
     );
     // The panel runs out to the tile's left edge, round there, square against the lane.
     let tile_left = x - 10.0;
