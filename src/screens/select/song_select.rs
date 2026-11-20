@@ -443,6 +443,10 @@ pub(crate) const DICE_ROLL_MS: f32 = 300.0;
 /// least room they are drawn in.
 const MOD_BADGE_H: f32 = 11.0;
 const MOD_BADGES_MIN: f32 = 24.0;
+/// How far Mods and Random move up while badges are shown under them, and how far Random's
+/// icon is from the end of Mods (the small mark between them in that room).
+const MOD_ROW_LIFT: f32 = 7.0;
+const RANDOM_STEP: f32 = 18.0;
 
 /// How far (0 to 1) Play's burst pressed `at` is by `now`.
 fn burst_progress(at: Instant, now: Instant) -> f32 {
@@ -824,16 +828,26 @@ fn draw_songs(
             let right = panel_x + panel_w;
             style::lane_surface(canvas, [panel_x, by, right - panel_x, bh]);
             let play_x = right - (w * PLAY_SHARE).clamp(120.0, 200.0);
-            let mid = by + bh / 2.0;
             let mods_word = tr!("Mods", "Mod", "Моды");
             let random = tr!("Random", "ランダム", "Случайная");
-            let random_w = 18.0 + style::icon_button_width(random, None, 8.0);
-            let mut bx = panel_x + 16.0;
-            let room = play_x - bx - style::icon_button_width("", None, 8.0) - 6.0;
+            let room = play_x - panel_x - 32.0 - style::icon_button_width("", None, 8.0);
             let mods_word = Canvas::fit(8.0, room, mods_word);
-            bx += style::icon_button(
+            let (mods_w, random_w) = (
+                style::icon_button_width(&mods_word, None, 8.0),
+                RANDOM_STEP + style::icon_button_width(random, None, 8.0),
+            );
+            // Mods and Random as one group in the middle of the lane left of Play, as far from
+            // its start as from Play whatever mods are on: those go under the group as badges,
+            // the group moving up a little to make room for them.
+            let fits_random = mods_w + random_w <= play_x - panel_x - 32.0;
+            let group_w = mods_w + if fits_random { random_w } else { 0.0 };
+            // (A button's width counts its pointer slack past the label: 12 units.)
+            let gx = panel_x + ((play_x - panel_x - group_w + 12.0) / 2.0).max(16.0);
+            let on = !state.cfg.mods.is_empty();
+            let mid = by + bh / 2.0 - if on { MOD_ROW_LIFT } else { 0.0 };
+            style::icon_button(
                 canvas,
-                [bx, mid],
+                [gx, mid],
                 &style::SPARK,
                 &mods_word,
                 None,
@@ -841,27 +855,33 @@ fn draw_songs(
                 !mods.is_empty(),
                 hit::Hit::ModsButton,
             );
-            // The mods that are on as badges after the word, each in its mod select column's
-            // colour, leaving Random its room; a click on them opens the mod select too.
-            let room = play_x - bx - random_w - 6.0;
-            if !state.cfg.mods.is_empty() && room >= MOD_BADGES_MIN {
-                let top = mid - MOD_BADGE_H / 2.0;
-                let w = crate::multiplayer::mod_badges(canvas, bx, top, state.cfg.mods, room);
-                canvas.hit(bx - 2.0, mid - 12.0, w + 4.0, 24.0, hit::Hit::ModsButton);
-                bx += w + 6.0;
-            }
-            if bx + random_w < play_x {
+            if fits_random {
+                let rx = gx + mods_w;
                 // The menu's small mark between two notes.
-                canvas.rect(bx + 4.0, mid - 2.0, 4.0, 4.0, render::rgba(0x6a6a88, 0.8));
+                canvas.rect(rx + 4.0, mid - 2.0, 4.0, 4.0, render::rgba(0x6a6a88, 0.8));
                 style::icon_button(
                     canvas,
-                    [bx + 18.0, mid],
+                    [rx + RANDOM_STEP, mid],
                     dice_face(state.dice_roll, render::frame_now()),
                     random,
                     None,
                     8.0,
                     false,
                     hit::Hit::Key(KeyCode::F2),
+                );
+            }
+            // The mods that are on, each in its mod select column's colour; a click on them
+            // opens the mod select too.
+            let room = play_x - gx - 8.0;
+            if on && room >= MOD_BADGES_MIN {
+                let top = mid + MOD_ROW_LIFT * 2.0 - MOD_BADGE_H / 2.0 + 1.0;
+                let bw = crate::multiplayer::mod_badges(canvas, gx, top, state.cfg.mods, room);
+                canvas.hit(
+                    gx - 2.0,
+                    top - 1.0,
+                    bw + 4.0,
+                    MOD_BADGE_H + 2.0,
+                    hit::Hit::ModsButton,
                 );
             }
             let hit = hit::Hit::Key(KeyCode::Enter);

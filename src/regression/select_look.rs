@@ -938,6 +938,13 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
     assert_eq!(strip.params[1], 0.0, "no edge round it");
     let [left, y, w, h] = rect(strip);
     let right = left + w;
+    // As far out past the lane's end as before its drum, so it's round at both ends (the lane
+    // itself is cut square to its box).
+    let (before, after) = (lane_hit[0] - left, right - (lane_hit[0] + lane_hit[2]));
+    assert!(
+        before > 4.0 && (before - after).abs() < 0.5,
+        "{before} before the lane, {after} after it"
+    );
     // No lines along it or across its ends.
     let edge = render::rgba(style::PANEL_EDGE, 1.0);
     let lines: Vec<[f32; 4]> = c
@@ -980,6 +987,15 @@ fn the_timeline_is_quiet_and_its_kiai_in_gold() {
         .filter(|sh| !same_rgb(sh.fill, green))
         .collect();
     assert!(bars.len() > 20, "a timeline of bars: {}", bars.len());
+    // The playhead a plain line among the bars: nothing glows round it.
+    let glows: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| sh.center[0] > 28.0 + lw && sh.center[1] > top && sh.center[1] < bottom)
+        .filter(|sh| sh.params[1] == 0.0 && sh.params[2] > 0.0 && sh.half[0] == sh.params[0])
+        .map(rect)
+        .collect();
+    assert!(glows.is_empty(), "a glow on the timeline: {glows:?}");
     let (gold, ahead, played) = (
         render::rgba(0xFFD34D, 1.0),
         render::rgba(style::ink::SECONDARY, 1.0),
@@ -1078,26 +1094,59 @@ fn without_animations_play_starts_the_map_at_once() {
 }
 
 #[test]
-fn the_mods_on_show_as_coloured_badges_after_the_word() {
+fn mods_and_random_keep_their_place_and_the_mods_on_show_as_badges_under_them() {
     let (mut s, _songs, mut now) = menu_look("select-look-mod-badges");
+    let c = settled(&mut s, &mut now);
+    let mods = |c: &Canvas| hit_rect(c, |h| *h == Hit::ModsButton).expect("Mods");
+    let random = |c: &Canvas| hit_rect(c, |h| matches!(h, Hit::Key(KeyCode::F2))).expect("Random");
+    let play = hit_rect(&c, |h| matches!(h, Hit::Key(KeyCode::Enter))).expect("Play");
+    let fill = style::surface_fill(style::Surface::Raised);
+    let lane = c
+        .shapes
+        .iter()
+        .filter(|sh| same_rgb(sh.fill, fill) && sh.params[0] == style::radius::CARD)
+        .map(rect)
+        .find(|r| inside([play[0] + 1.0, play[1] + play[3] / 2.0], *r, 0.0))
+        .expect("the lane of actions");
+    // The two as one group in the middle of the lane left of Play: what's drawn of them (a
+    // button's hit has 6 units of slack each side) as far from the lane's start as from Play.
+    let (m, r) = (mods(&c), random(&c));
+    let before = m[0] + 6.0 - lane[0];
+    let after = play[0] - (r[0] + r[2] - 6.0);
+    assert!(
+        before > 16.0 && (before - after).abs() < 1.0,
+        "{before} before Mods, {after} from Random to Play"
+    );
+    let [_, wy] = text_at(&c, "Mods").expect("the word");
+    // Mods on: the two stay where they were across, a little higher, the badges under them.
     s.cfg.mods = crate::mods::Mods::parse("HD,HR");
     s.select.mods_label = s.cfg.mods.label();
     let c = settled(&mut s, &mut now);
-    let [wx, wy] = text_at(&c, "Mods").expect("the word alone");
-    let [rx, _] = text_at(&c, "Random").expect("Random");
-    for m in ["HD", "HR"] {
-        let [x, y] = text_at(&c, m).unwrap_or_else(|| panic!("{m}"));
-        assert!(x > wx && x < rx && (y - wy).abs() < 4.0, "{m} between: {x}");
+    let (m2, r2) = (mods(&c), random(&c));
+    assert!(
+        (m2[0] - m[0]).abs() < 0.01 && (r2[0] - r[0]).abs() < 0.01,
+        "moved across: {m:?} -> {m2:?}, {r:?} -> {r2:?}"
+    );
+    assert!(m2[1] < m[1] && (m2[1] - r2[1]).abs() < 0.01, "up, together");
+    let [_, wy2] = text_at(&c, "Mods").expect("the word");
+    assert!(wy2 < wy, "the word moves up with them");
+    for name in ["HD", "HR"] {
+        let [x, y] = text_at(&c, name).unwrap_or_else(|| panic!("{name}"));
+        assert!(
+            y > wy2 + 8.0 && x >= m2[0] && x < play[0],
+            "{name} under the group: {x}, {y}"
+        );
+        assert!(y < lane[1] + lane[3] - 4.0, "{name} inside the lane: {y}");
         let badge = c.shapes.iter().any(|sh| {
             let [bx, by, bw, bh] = rect(sh);
             sh.params[1] > 0.0 && bx < x && bx + bw > x && by < y + 3.0 && by + bh > y + 3.0
         });
-        assert!(badge, "{m} on a badge");
+        assert!(badge, "{name} on a badge");
         let opens = c
             .hits
             .iter()
             .any(|b| b.hit == Hit::ModsButton && inside([x + 2.0, y + 3.0], b.rect, 0.0));
-        assert!(opens, "a click on {m} opens the mod select");
+        assert!(opens, "a click on {name} opens the mod select");
     }
 }
 

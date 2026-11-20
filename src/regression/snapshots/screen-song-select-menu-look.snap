@@ -46,10 +46,10 @@ text   53,264  Regression  |  mapped by tests
 text   57,284  high-od
 text   57,298  Regression  |  mapped by tests
 text  490,337  0:00 / 0:10
-text  661,337  peak 7.0 notes/s at 0:01
+text  647,337  peak 7.0 notes/s at 0:01
 text  749,428  Play
-text  513,429  Mods
-text  587,429  Random
+text  537,429  Mods
+text  611,429  Random
 hit    26,20     56x24   ToMenu
 hit   397,20     65x24   SortList
 hit    94,20    296x24   TextField
@@ -64,11 +64,11 @@ hit    45,278   423x34   SongHeader(6)
 hit     4,52     20x402  SongScrollbar
 hit   712,102    16x13   SelectLike
 hit   494,209   223x16   PpSim
-hit   490,235   330x61   Preview
-hit   488,302   320x32   Preview
+hit   490,235   316x61   Preview
+hit   488,302   306x32   Preview
 hit   720,205    95x24   BoardPage
-hit   490,421    56x24   ModsButton
-hit   564,421    70x24   Key(F2)
+hit   514,421    56x24   ModsButton
+hit   588,421    70x24   Key(F2)
 hit   693,408   137x50   Key(Enter)
 hit   472,229     8x48   SplitList
 hit   771,2      74x14   Changelog
