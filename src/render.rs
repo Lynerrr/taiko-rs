@@ -727,7 +727,7 @@ struct Target<'a> {
 
 /// How soft song select's note routes are behind it (`Canvas::blur_since`): the blur's spread
 /// (sigma) in virtual units, as soft as the map's picture reads behind them.
-pub const ROUTES_BLUR: f32 = 8.0;
+pub const ROUTES_BLUR: f32 = 6.0;
 /// How many times the routes' image is halved before it is blurred (to 1/8 of the screen).
 const BLUR_HALVINGS: usize = 3;
 
@@ -841,8 +841,8 @@ struct BgLayer {
     disc_uniform: wgpu::Buffer,
 }
 
-/// The blurred copy's height (pixels): each is about 1/48 of the picture, then box-blurred.
-const BLUR_ROWS: u32 = 48;
+/// The blurred copy's height (pixels): each is about 1/64 of the picture, then box-blurred.
+const BLUR_ROWS: u32 = 64;
 
 /// The size of a background's blurred copy: `BLUR_ROWS` high, its aspect kept.
 fn blurred_size(w: u32, h: u32) -> (u32, u32) {
@@ -5126,7 +5126,7 @@ mod tests {
 
     #[test]
     fn a_background_s_blurred_copy_is_small_and_keeps_its_colours() {
-        assert_eq!(super::blurred_size(1920, 1080), (85, 48));
+        assert_eq!(super::blurred_size(1920, 1080), (113, 64));
         assert_eq!(
             super::blurred_size(10, 4),
             (10, 4),
