@@ -489,7 +489,13 @@ const LIST_ANIM_MS: f32 = 200.0;
 /// Top and bottom of the song list (virtual units): with the tabs of the Legacy menu above it,
 /// and without.
 const LIST_TOP_LEGACY: f32 = 86.0;
-const LIST_TOP: f32 = 52.0;
+const LIST_TOP: f32 = 60.0;
+/// The classic (1.0) look keeps its row and list where they were.
+const LIST_TOP_CLASSIC: f32 = 52.0;
+const SEARCH_ROW_CLASSIC: f32 = 20.0;
+/// The main menu's look: where the search row starts, and how far its strip reaches past it.
+pub(crate) const SEARCH_ROW: f32 = 28.0;
+pub(crate) const SEARCH_STRIP_PAD: f32 = 4.0;
 pub use crate::config::LIST_SHARE;
 /// The narrowest the song list and the panel beside it get (virtual units).
 const LIST_MIN: f32 = 260.0;
@@ -516,8 +522,19 @@ const DIFF_CASCADE_SPAN_MS: f32 = 120.0;
 const COVER_FADE_MS: f32 = 200.0;
 /// How round a difficulty row's card is, and its light under the pointer or the selection's.
 const DIFF_ROUND: f32 = 4.0;
-const COVER_SHADE: (f32, f32) = (0.85, 0.4);
-const BOTTOM_FADE: f32 = 16.0;
+/// The shade over a card's picture: one sweep from dark at its left to light at its right, and
+/// over it a plate under the text (its alpha at the left, how much of the card it reaches over)
+/// fading out to nothing, so the title reads on a bright picture and the right of the picture
+/// stays bright. Two smooth sweeps, as round as the card: no bands, no seams.
+const COVER_SHADE: (f32, f32) = (0.92, 0.3);
+const COVER_PLATE: (f32, f32) = (0.9, 0.6);
+/// The open set's card: its edge in the selection's colour (muted: its brackets are the strong
+/// mark), and how strong its brackets are next to the selected difficulty's.
+const OPEN_EDGE: f32 = 0.5;
+const OPEN_BRACKETS: f32 = 0.8;
+/// Where the line joining an open set's difficulties to its card runs down.
+const DIFF_LINK_X: f32 = 34.0;
+const BOTTOM_FADE: f32 = 20.0;
 const DIFF_BAR_DIM: f32 = 0.35;
 /// How long after the list has got to a new selection the banner's picture is read ahead.
 const PICTURE_SETTLE_MS: f32 = 60.0;
@@ -1436,6 +1453,8 @@ impl Select {
     fn frame_top(&self) -> f32 {
         if self.legacy {
             LIST_TOP_LEGACY
+        } else if self.classic {
+            LIST_TOP_CLASSIC
         } else {
             LIST_TOP
         }
@@ -2251,7 +2270,16 @@ impl Select {
         let lw = Self::list_width(w, self.list_share);
         let legacy = self.legacy;
         // The row with the search: under the tabs, or at the top beside the way back.
-        let row = if legacy { 54.0 } else { 20.0 };
+        // Outside Legacy the row sits under the performance readout (`show_fps`, 6 to 22 at the
+        // top left), as the main menu's logo does.
+        let row = if legacy {
+            54.0
+        } else if self.classic {
+            SEARCH_ROW_CLASSIC
+        } else {
+            SEARCH_ROW
+        };
+        let blocks = !self.classic;
         let mut left = 24.0;
         if legacy {
             crate::settings::tab_bar(c, 0, &summary);
@@ -2262,7 +2290,8 @@ impl Select {
             // The search row on a raised strip, no edge round it; the list's cards below it are
             // surfaces of their own, straight on the map's picture.
             if !self.covered {
-                let (top, bottom) = (row - 6.0, self.frame_top() - 4.0);
+                let pad = if self.classic { 6.0 } else { SEARCH_STRIP_PAD };
+                let (top, bottom) = (row - pad, self.frame_top() - 4.0);
                 let rect = [20.0, top, lw + 8.0, bottom - top];
                 crate::style::surface(
                     c,
@@ -2282,16 +2311,22 @@ impl Select {
                 left += crate::style::icon_button_width(back, None, 8.0) + 6.0;
             } else {
                 let at = [left, row + 12.0];
-                let bw = crate::style::icon_button(
-                    c,
-                    at,
-                    &crate::style::BACK,
-                    back,
-                    None,
-                    8.0,
-                    false,
-                    Hit::ToMenu,
-                );
+                let (icon, hit) = (&crate::style::BACK, Hit::ToMenu);
+                let bw = if blocks {
+                    crate::style::block_button(
+                        c,
+                        at,
+                        icon,
+                        back,
+                        None,
+                        8.0,
+                        false,
+                        hit,
+                        crate::style::BLOCK_H,
+                    )
+                } else {
+                    crate::style::icon_button(c, at, icon, back, None, 8.0, false, hit)
+                };
                 left += bw + 6.0;
             }
             // On a small chip beside the search row, over the panel's side, where there is one.
@@ -2429,7 +2464,31 @@ impl Select {
                 let label = Canvas::fit(7.0, room, label);
                 let caption = Canvas::fit(5.0, room, caption);
                 let at = [bx + 6.0, row + 12.0];
-                crate::style::icon_button(c, at, icon, &label, Some(&caption), 7.0, *accent, *hit);
+                if blocks {
+                    let h = crate::style::BLOCK_H;
+                    crate::style::block_button(
+                        c,
+                        at,
+                        icon,
+                        &label,
+                        Some(&caption),
+                        7.0,
+                        *accent,
+                        *hit,
+                        h,
+                    );
+                } else {
+                    crate::style::icon_button(
+                        c,
+                        at,
+                        icon,
+                        &label,
+                        Some(&caption),
+                        7.0,
+                        *accent,
+                        *hit,
+                    );
+                }
             }
             bx -= 6.0;
         }
@@ -3174,11 +3233,17 @@ impl Select {
                     let title_bottom = 11.0 + Canvas::text_height(10.0) / 2.0;
                     let room = 2.0 * (23.5 - title_bottom - 1.5).min(rh - 4.0 - 1.5 - 23.5);
                     let sub_size = Canvas::fit_height(7.0, room);
+                    // On the plate the secondary ink, for it to read on a bright picture too.
+                    let sub_ink = if legacy {
+                        0x9a9ab0
+                    } else {
+                        crate::style::ink::SECONDARY
+                    };
                     c.text(
                         tx,
                         y + 20.0 + (7.0 - sub_size) / 2.0,
                         sub_size,
-                        rgba(0x9a9ab0, 1.0),
+                        rgba(sub_ink, 1.0),
                         &fit(sub, sub_size, rw - 110.0),
                     );
                     // A newer version on osu!: click (or Ctrl+Shift+U) to get it. Under the
@@ -3276,30 +3341,40 @@ impl Select {
                     // The main menu's look: a slimmer card, a bar of its rating's colour at its
                     // left (full on the selected one).
                     if !legacy {
+                        use crate::style::tone;
                         let [r, g, b, fa] =
                             crate::style::surface_fill(crate::style::Surface::Raised);
                         let card = [44.0, y, lw - 20.0, rh - 3.0];
-                        let clear = rgba(0, 0.0);
                         c.round_rect(
                             [card[0], card[1]],
                             [card[2], card[3]],
                             DIFF_ROUND,
                             [r, g, b, fa * a],
-                            clear,
-                            0.0,
+                            rgba(tone::EDGE, a),
+                            tone::LINE,
                         );
+                        // Joined to its set's card by a line down the indent, a step into each
+                        // row (the last one's step its corner).
+                        let last = self
+                            .group_of
+                            .get(*i)
+                            .is_some_and(|&g| groups.get(g).is_some_and(|g| g.end == *i + 1));
+                        let mid = (y + (rh - 3.0) / 2.0).round();
+                        let link = rgba(tone::EDGE, a);
+                        let end = if last { mid + 1.0 } else { y + rh };
+                        c.rect(DIFF_LINK_X, y - 4.0, 1.0, end - (y - 4.0), link);
+                        c.rect(DIFF_LINK_X, mid, card[0] - DIFF_LINK_X, 1.0, link);
                     }
                     if selected {
+                        let col = crate::style::selector_colour();
+                        let edge = if legacy { 0.0 } else { OPEN_EDGE * a };
                         c.round_rect(
                             [44.0, y],
                             [lw - 20.0, rh - 3.0],
                             DIFF_ROUND,
-                            rgba(
-                                crate::style::selector_colour(),
-                                (0.12 + 0.05 * crate::style::pulse()) * a,
-                            ),
-                            rgba(0, 0.0),
-                            0.0,
+                            rgba(col, (0.12 + 0.05 * crate::style::pulse()) * a),
+                            rgba(col, edge),
+                            1.0,
                         );
                     } else if c.hovered(44.0, y, lw - 20.0, rh - 3.0) {
                         c.round_rect(
@@ -3690,10 +3765,21 @@ impl Select {
                     left,
                     right,
                 );
+                // The plate under the title and artist: clear at its right end, so its corners
+                // there don't show.
+                c.shade_across(
+                    [inner[0], inner[1]],
+                    [inner[2] * COVER_PLATE.1, inner[3]],
+                    round,
+                    shade(COVER_PLATE.0),
+                    shade(0.0),
+                );
             }
         }
         if open {
-            // On the beat its edge and tone light a little; in a kiai the edge turns gold.
+            // The selection's mark, as on the difficulty in it: a light of its colour, a muted
+            // edge of it and the selector's brackets. On the beat they light a little; in a kiai
+            // they turn gold.
             let kiai = style::kiai();
             let col = crate::menu::tint(style::selector_colour(), style::KIAI_GOLD, kiai);
             let beat = style::pulse();
@@ -3701,10 +3787,11 @@ impl Select {
                 [x, y],
                 [w, h],
                 CARD_RADIUS,
-                rgba(col, 0.1 + 0.03 * beat),
-                rgba(col, 0.8 + 0.2 * beat),
+                rgba(col, 0.08 + 0.03 * beat),
+                rgba(col, OPEN_EDGE + 0.2 * beat),
                 1.0,
             );
+            style::brackets(c, [x - 3.0, y - 3.0, w + 6.0, h + 6.0], OPEN_BRACKETS);
         } else {
             // A faint edge round every card, so neighbouring pictures of like colours don't run
             // into each other; brighter under the pointer.

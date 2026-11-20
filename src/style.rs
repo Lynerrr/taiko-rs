@@ -688,6 +688,25 @@ pub const SPARK: Icon = [
     ".......##.......",
     "................",
 ];
+/// Mods: three sliders, as on a mixing desk.
+pub const SLIDERS: Icon = [
+    "................",
+    "...####.........",
+    ".##############.",
+    ".##############.",
+    "...####.........",
+    "................",
+    "..........####..",
+    ".##############.",
+    ".##############.",
+    "..........####..",
+    "................",
+    "......####......",
+    ".##############.",
+    ".##############.",
+    "......####......",
+    "................",
+];
 /// Random: a die.
 pub const DICE: Icon = [
     "................",
@@ -929,7 +948,7 @@ pub fn icon_button_width(label: &str, caption: Option<&str>, size: f32) -> f32 {
 #[allow(clippy::too_many_arguments)]
 pub fn icon_button(
     c: &mut Canvas,
-    [x, y]: [f32; 2],
+    at: [f32; 2],
     icon_art: &'static Icon,
     label: &str,
     caption: Option<&str>,
@@ -937,13 +956,73 @@ pub fn icon_button(
     lit: bool,
     hit: crate::hit::Hit,
 ) -> f32 {
+    labelled_button(c, at, icon_art, label, caption, size, lit, hit, None)
+}
+
+/// How tall a block button is in a row of its own (the search row's).
+pub const BLOCK_H: f32 = 24.0;
+
+/// `icon_button` on a block as the main menu's music buttons are: the button tone with the
+/// neutral edge, lighter (no brackets) under the pointer, the accent's button while what it sets
+/// is on (`lit`). As wide as `icon_button_width` says, `h` tall, its middle at `y`.
+#[allow(clippy::too_many_arguments)]
+pub fn block_button(
+    c: &mut Canvas,
+    at: [f32; 2],
+    icon_art: &'static Icon,
+    label: &str,
+    caption: Option<&str>,
+    size: f32,
+    lit: bool,
+    hit: crate::hit::Hit,
+    h: f32,
+) -> f32 {
+    labelled_button(c, at, icon_art, label, caption, size, lit, hit, Some(h))
+}
+
+/// A block button's fill and edge: at rest, under the pointer, or on.
+pub fn block_tones(hover: bool, lit: bool) -> (u32, u32) {
+    match (lit, hover) {
+        (true, false) => (tone::ACCENT_FILL, render::accent()),
+        (true, true) => (tone::ACCENT_FILL_HOVER, tone::ACCENT_EDGE_HOVER),
+        (false, false) => (tone::CONTROL, tone::EDGE),
+        (false, true) => (tone::CONTROL_HOVER, tone::EDGE_HOVER),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn labelled_button(
+    c: &mut Canvas,
+    [x, y]: [f32; 2],
+    icon_art: &'static Icon,
+    label: &str,
+    caption: Option<&str>,
+    size: f32,
+    lit: bool,
+    hit: crate::hit::Hit,
+    block: Option<f32>,
+) -> f32 {
     let w = icon_button_width(label, caption, size);
-    let rect = [x - 6.0, y - 12.0, w, 24.0];
+    let h = block.unwrap_or(24.0);
+    let rect = [x - 6.0, y - h / 2.0, w, h];
     let hover = c.hovered(rect[0], rect[1], rect[2], rect[3]);
-    let col = match (lit, hover) {
-        (true, _) => GOLD,
-        (false, true) => 0xffffff,
-        (false, false) => 0xc8c8d8,
+    if block.is_some() {
+        let (fill, edge) = block_tones(hover, lit);
+        c.round_rect(
+            [rect[0], rect[1]],
+            [rect[2], rect[3]],
+            radius::CONTROL,
+            rgba(fill, 1.0),
+            rgba(edge, 1.0),
+            tone::LINE,
+        );
+    }
+    let col = match (lit, hover, block.is_some()) {
+        // On a block, what's on says so by the block; its label stays white.
+        (true, _, true) => 0xffffff,
+        (true, _, false) => GOLD,
+        (false, true, _) => 0xffffff,
+        (false, false, _) => 0xc8c8d8,
     };
     let ink = if hover || lit { col } else { 0xe8e8f2 };
     icon(
@@ -963,7 +1042,7 @@ pub fn icon_button(
         }
         None => glitch_text(c, lx, y - size / 2.0, size, col, label, split),
     }
-    if hover {
+    if hover && block.is_none() {
         brackets(c, rect, 0.9);
     }
     c.hit(rect[0], rect[1], rect[2], rect[3], hit);
@@ -992,10 +1071,11 @@ pub fn lane_end_disc([x, y, h]: [f32; 3]) -> ([f32; 2], f32) {
 pub const LANE_END_BEAT_GROW: f32 = 0.06;
 pub const LANE_END_HOVER_GROW: f32 = 0.12;
 
-/// The main action as the end of a lane: a bar of the accent colour over `[x, y, w, h]` (rounded
-/// as the cards), the main menu's Play note and `label` on it in white. The note swells a little on
-/// the beat; under the pointer it grows and the bar lights up and glows (no frame round it),
-/// easing in and out. `disc_shown`: the note is in its place (not on its way).
+/// The main action as the end of a lane: a block in the accent over `[x, y, w, h]` (a button's
+/// corners, a crisp edge of the accent, as the main menu's accent button and its PLAY badge),
+/// the main menu's Play note and `label` on it in white. The note swells a little on the beat;
+/// under the pointer it grows and the block lights up, easing in and out (no glow round it).
+/// `disc_shown`: the note is in its place (not on its way).
 pub fn lane_end_button(
     c: &mut Canvas,
     key: &'static str,
@@ -1014,28 +1094,9 @@ pub fn lane_end_button(
         *g
     });
     let col = role::primary();
-    for k in 1..=3 {
-        let by = k as f32 * 2.5 * g;
-        c.round_rect(
-            [x - by, y - by],
-            [w + by * 2.0, h + by * 2.0],
-            by,
-            rgba(col, 0.12 * g),
-            rgba(0, 0.0),
-            0.0,
-        );
-    }
-    let fill = tint(col, 0x000000, 0.5 - 0.5 * g);
-    // Rounded as the lane it ends (its right end is off the screen).
-    let r = radius::CARD;
-    let fill = rgba(fill, 0.9 + 0.1 * pulse());
-    c.round_rect([x, y], [w, h], r, fill, fill, 0.0);
-    // Its edge only lights under the pointer: at rest the fill alone tells it apart.
-    let edge = rgba(tint(col, 0xffffff, 0.35 * g), g);
-    c.round_rect([x, y], [w, h], r, rgba(0, 0.0), edge, 1.5);
-    let line = rgba(tint(col, 0xffffff, 0.3), 0.6 * g);
-    c.rect(x + r, y + 4.0, w - 2.0 * r, 1.0, line);
-    c.rect(x + r, y + h - 5.0, w - 2.0 * r, 1.0, line);
+    let fill = rgba(tint(col, 0x000000, 0.45 - 0.2 * g), 1.0);
+    let edge = rgba(tint(col, 0xffffff, 0.35 * g), 1.0);
+    c.round_rect([x, y], [w, h], radius::CONTROL, fill, edge, tone::LINE);
     let size = (h * 0.42).clamp(8.0, 11.0);
     let (at, r) = lane_end_disc([x, y, h]);
     if disc_shown {
@@ -1273,7 +1334,7 @@ mod tests {
     }
 
     #[test]
-    fn the_lane_of_actions_and_its_play_end_are_as_round_as_the_cards() {
+    fn the_lane_is_a_panel_and_its_play_end_a_button_in_the_accent_without_a_glow() {
         let mut c = Canvas {
             width: 853.3,
             ..Canvas::default()
@@ -1295,7 +1356,16 @@ mod tests {
             .filter(|s| (s.center[0] - s.half[0] - 700.0).abs() < 0.01)
             .max_by(|a, b| a.half[0].total_cmp(&b.half[0]))
             .expect("the Play bar");
-        assert_eq!(bar.params[0], radius::CARD, "Play");
+        assert_eq!(bar.params[0], radius::CONTROL, "Play: a button's corners");
+        assert_eq!(bar.params[1], tone::LINE, "a crisp edge");
+        assert_eq!(bar.fill[3], 1.0, "solid");
+        // Nothing round it wider than the block: no glow rings.
+        assert!(
+            c.shapes[strip..]
+                .iter()
+                .all(|s| s.half[0] <= bar.half[0] + 0.01),
+            "no glow past the block"
+        );
     }
 
     use super::*;

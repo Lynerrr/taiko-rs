@@ -2384,21 +2384,19 @@ fn fit_size(value: &str, room: f32) -> f32 {
         .unwrap_or(text::CAPTION)
 }
 
-/// The pp row's button: the lifted surface, lighter under the pointer.
+/// The pp row's button: a block as the way to the board beside it is, lighter under the pointer.
 fn pp_chip(c: &mut Canvas, rect: [f32; 4], lit: bool) {
-    use crate::style::{Surface, radius, surface};
-    surface(c, rect, radius::SMALL, Surface::Lifted);
-    if lit {
-        let [x, y, w, h] = rect;
-        c.round_rect(
-            [x, y],
-            [w, h],
-            radius::SMALL,
-            rgba(0xffffff, 0.06),
-            rgba(0xffffff, 0.0),
-            0.0,
-        );
-    }
+    use crate::style::{block_tones, radius, tone};
+    let [x, y, w, h] = rect;
+    let (fill, edge) = block_tones(lit, false);
+    c.round_rect(
+        [x, y],
+        [w, h],
+        radius::CONTROL,
+        rgba(fill, 1.0),
+        rgba(edge, 1.0),
+        tone::LINE,
+    );
 }
 
 const BARE_GRAPH_H: f32 = 28.0;
