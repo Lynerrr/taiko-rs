@@ -1,6 +1,6 @@
 screen song-select: Select, 16 areas
 Tab(0) @217,31 -> Select
-Tab(1) @295,31 -> Settings +"<  none found, Enter to pick  >" +"AUDIO" +"Card colour fade" +"Drum in the preview" +"Enter to move" +"Enter to open" +35 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more
+Tab(1) @295,31 -> Settings +"<  none found, Enter to pick  >" +"AUDIO" +"Card colour fade" +"Enter to move" +"Enter to open" +"GAMEPLAY" +35 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more
 Tab(2) @396,31 -> MpMenu +"127.0.0.1:9   no connection" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +"Name or email" +4 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more
 Tab(3) @498,31 -> Download +"Has leaderboard" +"Relevance" +"SORT" +"STATUS" +"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" +"maps from catboy.best / osu.direct" +5 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more
 ModsButton @446,66 -> Select +"* FAVOURITES" +"+ Save" +"AC" +"AL" +"AS" +"AT" +162 more
