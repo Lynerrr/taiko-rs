@@ -289,6 +289,8 @@ pub struct Preview {
     song_since: Option<Instant>,
     /// Passed on to the autoplay preview (the kiai effects setting, how autoplay hits).
     pub kiai_effects: bool,
+    /// Bare, the lane without its drum (`Config::preview_drum` off).
+    pub hide_drum: bool,
     pub autoplay: crate::autoplay::Settings,
     /// The selected map's own offset, shown with its details.
     pub map_offset: f64,
@@ -2121,10 +2123,11 @@ impl Preview {
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
         // As wide as the lane at that scale (all of the panel at full size), centred.
         let bw = lane_w * k;
-        // Bare, the drum and its panel aren't shown (grey clutter left of the lane): the lane
-        // starts at the details' left edge, the drum off it to the left.
+        // Bare, the lane's tile starts at the details' left edge: the drum at its start, or (the
+        // drum off in the settings) off it to the left, cut off.
+        let drum_w = crate::game::PANEL_W * k;
         let bx = if self.bare {
-            x + 14.0 - crate::game::PANEL_W * k
+            x + 14.0 - if self.hide_drum { drum_w } else { 0.0 }
         } else {
             x + 10.0 + (w - 20.0 - bw) / 2.0
         };
@@ -2136,12 +2139,8 @@ impl Preview {
         } else {
             bx + bw
         };
-        // Bare, the tile starts where the lane does, right of the drum.
-        let lane_x = if self.bare {
-            bx + crate::game::PANEL_W * k
-        } else {
-            bx
-        };
+        // Bare, the tile's left edge: the drum's, or where the lane starts without it.
+        let lane_x = if self.bare { x + 14.0 } else { bx };
         // Bare: no lines round it, its corners as round as the tiles', the tile out past the
         // lane's end (the lane is cut square to its box, so a tile ending with it would lose its
         // right corners).
@@ -2240,7 +2239,8 @@ impl Preview {
             } else {
                 bx + bw - 6.0
             };
-            let room = right - lane_x - 6.0;
+            // Right of the drum (the hit target's where it starts).
+            let room = right - (bx + drum_w) - 6.0;
             let size = crate::style::text::CAPTION;
             let hint = if crate::mobile::active() {
                 &["tap: fullscreen"][..]
@@ -2309,12 +2309,13 @@ pub(crate) fn bare_notes_end(lane_end: f32) -> f32 {
 }
 
 /// Bare, the lane's shapes as drawn from `start` (its drum's panel from `lane_x`, the lane on
-/// to `notes_end`, `band_h` tall) fitted to its tile, which starts at `tile_left`, right of the
-/// drum: its own bands (as tall as the tile, running its length) start at the tile's edges and
-/// are as round (square, it made the lane read as a square box on a dark picture), the drum's
-/// panel isn't drawn, and nor are the lines along it.
+/// to `notes_end`, `band_h` tall) fitted to its tile, which starts at `tile_left`: at the drum
+/// (`lane_x`), or right of it with the drum off. Its own bands (as tall as the tile, running its
+/// length) start at the tile's edges and are as round (square, it made the lane read as a square
+/// box on a dark picture); the drum's panel is round at the tile's edge and square against the
+/// lane, or not drawn at all left of the tile; the lines along it aren't drawn.
 pub(crate) fn bare_lane_end(
-    shapes: &mut [crate::render::Shape],
+    shapes: &mut Vec<crate::render::Shape>,
     start: usize,
     lane_x: f32,
     tile_left: f32,
@@ -2322,7 +2323,8 @@ pub(crate) fn bare_lane_end(
     band_h: f32,
 ) {
     let round = crate::style::radius::SMALL;
-    for sh in shapes.iter_mut().skip(start) {
+    let mut panels = Vec::new();
+    for (i, sh) in shapes.iter_mut().enumerate().skip(start) {
         if sh.params != [0.0; 4] || sh.angle != 0.0 {
             continue;
         }
@@ -2335,16 +2337,29 @@ pub(crate) fn bare_lane_end(
                 sh.half[0] = (right - tile_left) / 2.0;
             }
             sh.params[0] = round;
-        } else if tall && (left - lane_x).abs() < 0.5 && right <= tile_left + 0.5 {
-            // The drum's panel: cut off with the drum, none of it shows.
-            sh.fill[3] = 0.0;
-            sh.border[3] = 0.0;
+        } else if tall && (left - lane_x).abs() < 0.5 && right - left < (notes_end - lane_x) / 2.0 {
+            if right <= tile_left + 0.5 {
+                // Left of the tile, cut off with the drum: none of it shows.
+                sh.fill[3] = 0.0;
+                sh.border[3] = 0.0;
+            } else {
+                panels.push(i);
+            }
         } else if !tall && left <= lane_x + 0.5 && right >= notes_end - 0.5 {
             // The lines along it: none (the tile is its frame). Cut by the tile's edge, what was
             // left of them flickered as a hairline as the panel followed the pointer.
             sh.fill[3] = 0.0;
             sh.border[3] = 0.0;
         }
+    }
+    // The drum's panel round at the tile's edge; a square copy over its right half keeps it
+    // square against the lane.
+    for i in panels.into_iter().rev() {
+        let mut square = shapes[i];
+        shapes[i].params[0] = round;
+        square.half[0] /= 2.0;
+        square.center[0] += square.half[0];
+        shapes.insert(i + 1, square);
     }
 }
 
@@ -3046,6 +3061,79 @@ mod beat_tests {
             "the timeline {gx}..{} under the tile {left}..{right}",
             gx + gw
         );
+    }
+
+    #[test]
+    fn bare_the_drum_starts_the_lanes_tile_unless_its_off() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.osu"),
+            map.meta.clone(),
+        )];
+        let panel_ink = crate::render::rgba(0x191921, 1.0);
+        for hide_drum in [false, true] {
+            let mut p = Preview {
+                seen: Some(0),
+                ready_for: Some(0),
+                game: Some(new_preview_game(&map, 1.0)),
+                map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+                bare: true,
+                hide_drum,
+                ..Default::default()
+            };
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            let (_, clip) = p
+                .draw_panel(
+                    &mut c, &library, 500.0, 40.0, 340.0, 400.0, 1.0, None, None, None, None,
+                )
+                .expect("the lane drawn");
+            let [_, by, _, bh] = p.box_rect.expect("the lane");
+            let fill = crate::style::surface_fill(crate::style::Surface::Raised);
+            let tile = c
+                .shapes
+                .iter()
+                .find(|sh| {
+                    sh.fill == fill
+                        && sh.params[0] == crate::style::radius::SMALL
+                        && (sh.center[1] - (by + bh / 2.0)).abs() < 0.5
+                        && (sh.half[1] * 2.0 - bh).abs() < 0.5
+                })
+                .expect("the lane's tile");
+            let left = tile.center[0] - tile.half[0];
+            // The tile on the details' line either way, the lane cut at its edge.
+            assert!((left - 514.0).abs() < 0.01, "the tile from {left}");
+            assert!(
+                (clip.x * 853.3 - left).abs() < 0.01,
+                "cut from {}",
+                clip.x * 853.3
+            );
+            let panels: Vec<&crate::render::Shape> = c
+                .shapes
+                .iter()
+                .filter(|sh| {
+                    sh.fill[3] > 0.0
+                        && sh.fill[..3] == panel_ink[..3]
+                        && (sh.half[1] * 2.0 - bh).abs() < 1.0
+                })
+                .collect();
+            if hide_drum {
+                assert!(panels.is_empty(), "no drum panel: {}", panels.len());
+            } else {
+                // Round at the tile's edge, square against the lane.
+                assert!(
+                    panels
+                        .iter()
+                        .any(|sh| (sh.center[0] - sh.half[0] - left).abs() < 0.01
+                            && sh.params[0] == crate::style::radius::SMALL),
+                    "the drum's panel from the tile's edge, round"
+                );
+                assert!(
+                    panels.iter().any(|sh| sh.params[0] == 0.0),
+                    "its square half"
+                );
+            }
+        }
     }
 
     #[test]

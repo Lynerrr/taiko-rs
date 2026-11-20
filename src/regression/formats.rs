@@ -482,6 +482,7 @@ resume_delay_ms = 1500
 sort = title
 collection = own:Warm Up
 kiai_effects = false
+preview_drum = false
 hide_great = false
 fail_restart = true
 instant_restart = false

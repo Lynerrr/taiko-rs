@@ -346,6 +346,8 @@ pub struct Config {
     pub show_fps: bool,
     /// Kiai time effects on the lane (tint, pulsing glow).
     pub kiai_effects: bool,
+    /// Song select's preview (main menu look) shows the drum at the start of its lane.
+    pub preview_drum: bool,
     /// Hit notes on the main menu glitch as they spin, and the screen glitches with them and
     /// between menus.
     pub menu_glitch: bool,
@@ -632,6 +634,7 @@ impl Default for Config {
             lens_own: String::new(),
             collection: String::new(),
             kiai_effects: true,
+            preview_drum: true,
             menu_glitch: true,
             autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
@@ -1359,6 +1362,7 @@ impl Config {
                 "lens_own" => cfg.lens_own = v.to_string(),
                 "collection" => cfg.collection = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
+                "preview_drum" => cfg.preview_drum = v != "false",
                 "menu_glitch" => cfg.menu_glitch = v != "false",
                 "autoplay_style" => {
                     cfg.autoplay.style =
@@ -1785,6 +1789,8 @@ impl Config {
              # the collection song select shows (own:name or osu:name; empty: all songs)\n\
              collection = {}\n\
              kiai_effects = {}\n\
+             # song select's preview shows the drum at the start of its lane\n\
+             preview_drum = {}\n\
              # GREAT hits without their flash and label (only OKs and misses show)\n\
              hide_great = {}\n\
              # a play failed by Sudden Death or Perfect starts over at once\n\
@@ -1861,6 +1867,7 @@ impl Config {
             self.sort,
             self.collection,
             self.kiai_effects,
+            self.preview_drum,
             self.hide_great,
             self.fail_restart,
             self.instant_restart,

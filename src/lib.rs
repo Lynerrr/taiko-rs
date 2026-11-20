@@ -3027,6 +3027,7 @@ impl State {
             Item::WheelResize => on(c.wheel_resizes_playfield),
             Item::BackgroundDimBlack => on(c.bg_dim_black),
             Item::KiaiEffects => on(c.kiai_effects),
+            Item::PreviewDrum => on(c.preview_drum),
             Item::MenuGlitch => on(c.menu_glitch),
             Item::BlackLane => on(c.black_lane),
             Item::TrueNotes => on(c.true_notes),
@@ -3404,6 +3405,7 @@ impl State {
             }
             Item::BackgroundDimBlack => self.cfg.bg_dim_black = !self.cfg.bg_dim_black,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
+            Item::PreviewDrum => self.cfg.preview_drum = !self.cfg.preview_drum,
             Item::MenuGlitch => self.cfg.menu_glitch = !self.cfg.menu_glitch,
             Item::BlackLane => self.cfg.black_lane = !self.cfg.black_lane,
             Item::TrueNotes => self.cfg.true_notes = !self.cfg.true_notes,
@@ -12838,6 +12840,7 @@ impl State {
             };
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
+            self.preview.hide_drum = !self.cfg.preview_drum;
             self.preview.own_background =
                 shows_own_background(self.behind_settings().unwrap_or(&self.scene));
             self.preview.autoplay = self.cfg.autoplay;

@@ -50,6 +50,7 @@ pub enum Item {
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
+    PreviewDrum,
     MenuGlitch,
     BlackLane,
     TrueNotes,
@@ -139,7 +140,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 145] = [
+pub const ITEMS: [(&str, Item); 146] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::TjaFolder),
     ("LIBRARY", Item::ShowConverts),
@@ -176,6 +177,7 @@ pub const ITEMS: [(&str, Item); 145] = [
     ("VIEW", Item::BackgroundDim),
     ("VIEW", Item::BackgroundDimBlack),
     ("VIEW", Item::KiaiEffects),
+    ("VIEW", Item::PreviewDrum),
     ("VIEW", Item::MenuGlitch),
     ("VIEW", Item::BlackLane),
     ("INPUT", Item::Key(0)),
@@ -569,6 +571,11 @@ impl Item {
                 "Колесо меняет размер поля"
             ),
             Item::KiaiEffects => tr!("Kiai effects", "キアイの演出", "Эффекты киай"),
+            Item::PreviewDrum => tr!(
+                "Drum in the preview",
+                "プレビューの太鼓",
+                "Барабан в превью"
+            ),
             Item::MenuGlitch => tr!("Menu glitch", "メニューのグリッチ", "Глитч в меню"),
             Item::BlackLane => tr!("Black lane", "黒いレーン", "Чёрная дорожка"),
             Item::DrumMenus => tr!(
@@ -819,6 +826,7 @@ impl Item {
             | Item::BackgroundDimBlack
             | Item::Interface
             | Item::KiaiEffects
+            | Item::PreviewDrum
             | Item::MenuGlitch
             | Item::BlackLane
             | Item::DrumMenus
@@ -1074,6 +1082,11 @@ impl Item {
                 "Notes on the main menu glitch when hit, and the whole screen with them and between menus. Off: they still spin and jump.",
                 "メインメニューのノーツが叩くとグリッチし、画面全体もそのときとメニューの切り替えでグリッチします。オフでも回って跳ねます。",
                 "Ноты в главном меню глитчат от удара, а весь экран вместе с ними и при переходе между меню. Выкл.: они всё равно крутятся и подпрыгивают."
+            ),
+            Item::PreviewDrum => tr!(
+                "Song select's preview shows the drum at the start of its lane. Off: just the lane.",
+                "曲選択のプレビューでレーンの左端に太鼓を表示します。オフ: レーンだけ。",
+                "Превью в выборе песни показывает барабан в начале дорожки. Выкл.: только дорожка."
             ),
             Item::KiaiEffects => tr!(
                 "During kiai time, tint the lane and pulse the hit target with the beat. The main menu joins in too.",
