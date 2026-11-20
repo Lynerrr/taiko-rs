@@ -216,8 +216,6 @@ enum Scene {
 
 /// How slowly a new background comes in on the main menu, where it's the whole picture.
 const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
-/// How long song select's last frame takes to fade out over the map it started (ms).
-const SELECT_GHOST_MS: f32 = 250.0;
 
 /// How long "Reset map offsets" waits for its second press.
 const RESET_CONFIRM: Duration = Duration::from_secs(4);
@@ -437,14 +435,6 @@ struct State {
     play_icon_at: Option<([f32; 2], f32)>,
     /// When song select's Random was last pressed: its die rolls for a moment.
     dice_roll: Option<Instant>,
-    /// Play pressed on song select with animations on: the map started once this frame is drawn
-    /// (and kept, `ghost_keep`), to fade out over it.
-    play_leaving: Option<usize>,
-    /// The frame drawn now is kept to show over the next ones (`render::Renderer::ghost_keep`).
-    ghost_keep: bool,
-    /// Song select's last frame over the map it started: Some(None) while the map loads, then
-    /// since when it fades out (`SELECT_GHOST_MS`).
-    select_ghost: Option<Option<Instant>>,
     /// Its easter eggs, which outlast it (`eggs`).
     menu_eggs: eggs::MenuEggs,
     /// One map started again and again, for a secret medal (`ura::Again`).
@@ -10695,29 +10685,6 @@ impl State {
     /// select in the main menu's look, where the map's picture is a field of colour under the
     /// cards and the banner (they show it sharp). On the way between the menu and song select it
     /// blurs and clears with the camera. Legacy and the phone layout keep it sharp.
-    /// How opaque song select's last frame is over the map it started `now`: all of it while the
-    /// map loads, fading out over `SELECT_GHOST_MS` as the play starts; 0 once it's gone, or
-    /// anywhere else (the load failed, say).
-    pub(crate) fn select_ghost_alpha(&mut self, now: Instant) -> f32 {
-        let Some(since) = &mut self.select_ghost else {
-            return 0.0;
-        };
-        if self.scene.screen().is_some_and(|s| s.loads_song()) {
-            return 1.0;
-        }
-        if !self.scene.is_play() {
-            self.select_ghost = None;
-            return 0.0;
-        }
-        let at = *since.get_or_insert(now);
-        let k = now.saturating_duration_since(at).as_secs_f32() * 1000.0 / SELECT_GHOST_MS;
-        if k >= 1.0 {
-            self.select_ghost = None;
-            return 0.0;
-        }
-        1.0 - k * k * (3.0 - 2.0 * k)
-    }
-
     pub(crate) fn background_blur(&self) -> f32 {
         let look = !self.select.legacy && !mobile::active() && self.scene.is_select();
         let select = match &self.menu_shift {
