@@ -228,6 +228,11 @@ const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
 
 /// How often the open song list asks again which of its custom sets the website approved.
 const CUSTOM_REFRESH: Duration = Duration::from_secs(2 * 60);
+/// How often the logged-in player's own pp and rank are fetched again.
+const ME_REFRESH: Duration = Duration::from_secs(60);
+/// How long after a play is taken they are fetched again: the server plays its replay back
+/// and settles its pp within about a second.
+const ME_AFTER_SUBMIT: Duration = Duration::from_secs(2);
 
 /// How far behind a watched friend the view plays (room for the network).
 const WATCH_DELAY_MS: f64 = 2000.0;
@@ -533,6 +538,9 @@ struct State {
     me_relax: Option<(f64, Option<u32>)>,
     me_for: String,
     me_fetch: Job<Result<online::Profile, String>>,
+    /// When they are fetched again: the server works pp out again after a play is taken (its
+    /// replay is played back), and recalculations and plays elsewhere change it too.
+    me_due: Option<Instant>,
     /// The song select leaderboard shows the server's scores, not the local ones.
     board_online: bool,
     /// A player's profile, over everything else.
@@ -14185,6 +14193,10 @@ impl State {
                     // + 0.0: servers before the fix sent a new player's pp as -0.0 ("-0 pp").
                     let pp = pp + 0.0;
                     *mine = Some((pp, rank));
+                    // The server settles the play's pp off this answer: ask again shortly, and
+                    // drop a fetch already on its way, which may hold the total before the play.
+                    self.me_fetch.cancel();
+                    self.me_due = Some(Instant::now() + ME_AFTER_SUBMIT);
                     if !again
                         && let Some(results) = self
                             .scene
@@ -14277,7 +14289,8 @@ impl State {
         self.online_boards.get(&key).map(|(_, rows)| rows)
     }
 
-    /// The logged-in player's own pp and rank, fetched once per login.
+    /// The logged-in player's own pp and rank: fetched on login, again shortly after each play
+    /// the server takes and every `ME_REFRESH` (outside songs), so they match the website's.
     fn poll_me(&mut self) {
         let account = self.mp_menu.account.clone().unwrap_or_default();
         if account != self.me_for {
@@ -14285,17 +14298,21 @@ impl State {
             self.me = None;
             self.me_relax = None;
             self.me_fetch.cancel();
-            if !account.is_empty() {
-                let server = self.cfg.online_server.clone();
-                self.me_fetch = Job::spawn(move || {
-                    online::call(&server, online::Request::Profile { name: account }).and_then(
-                        |r| match r {
-                            online::Reply::Profile(p) => Ok(*p),
-                            _ => Err(crate::lang::odd_reply()),
-                        },
-                    )
-                });
-            }
+            self.me_due = (!account.is_empty()).then(Instant::now);
+        }
+        if self.me_fetch.is_idle()
+            && !self.me_for.is_empty()
+            && self.me_due.is_some_and(|due| Instant::now() >= due)
+            && !self.in_song()
+        {
+            self.me_due = Some(Instant::now() + ME_REFRESH);
+            let (server, name) = (self.cfg.online_server.clone(), self.me_for.clone());
+            self.me_fetch = Job::spawn(move || {
+                online::call(&server, online::Request::Profile { name }).and_then(|r| match r {
+                    online::Reply::Profile(p) => Ok(*p),
+                    _ => Err(crate::lang::odd_reply()),
+                })
+            });
         }
         if let Some(Ok(p)) = self.me_fetch.poll() {
             self.me = Some((p.pp + 0.0, p.rank));

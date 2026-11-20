@@ -844,6 +844,9 @@ struct Updating {
     pps: Vec<Option<f64>>,
     stored: std::collections::HashSet<String>,
     links: usize,
+    /// The pp total its profile of the player says, and how many times it was asked for it.
+    profile_pp: f64,
+    profiles: usize,
 }
 
 /// What `score_server` does with the first play sent to it.
@@ -916,10 +919,27 @@ fn score_server(first_play: FirstPlay) -> (String, std::sync::Arc<std::sync::Mut
                     Request::WhoAmI { .. } => {
                         let _ = online::write_line(&mut out, &account);
                     }
+                    Request::Profile { name } => {
+                        let pp = {
+                            let mut seen = seen.lock().unwrap();
+                            seen.profiles += 1;
+                            seen.profile_pp
+                        };
+                        let profile = online::Profile {
+                            name,
+                            pp,
+                            rank: Some(7),
+                            ..Default::default()
+                        };
+                        let _ = online::write_line(&mut out, &Reply::Profile(Box::new(profile)));
+                    }
                     Request::SubmitScore { play, .. } => {
                         let key = play.operation_key.clone();
                         let first = {
                             let mut seen = seen.lock().unwrap();
+                            // Answered with 100 pp, settled at 140 once its replay is played
+                            // back (the real server does that just after answering).
+                            seen.profile_pp = 140.0;
                             seen.sent.push(key.clone());
                             seen.pps.push(play.pp);
                             let first = seen.sent.len() == 1;
@@ -1126,6 +1146,84 @@ fn a_score_the_server_could_not_take_just_now_goes_again_and_counts_once() {
             .iter()
             .any(|t| t == "online: an earlier score #1 on this map  |  100 pp, #7 overall"),
         "and that it counted: {toasts:?}"
+    );
+}
+
+/// Polls what keeps the player's own pp (the social link, the scores' answers and the profile
+/// fetches) until `done`, `secs` at most.
+fn poll_own_pp(s: &mut State, secs: u64, done: &dyn Fn(&State) -> bool) -> bool {
+    let until = Instant::now() + Duration::from_secs(secs);
+    while !done(s) && Instant::now() < until {
+        s.poll_social();
+        s.poll_online_scores();
+        s.poll_me();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    done(s)
+}
+
+/// The server answers a play with the player's pp total at once and settles the play's pp a
+/// moment later (its replay is played back): the game asks again shortly after, so the total
+/// it shows is the website's without logging in again.
+#[test]
+fn the_own_pp_total_follows_the_server_after_a_play_settles() {
+    let (server, seen) = score_server(FirstPlay::Kept);
+    seen.lock().unwrap().profile_pp = 50.0;
+    let songs = Songs::new("own-pp-settles", &[maps::basics()]);
+    let mut s = play_to_server(server, &songs);
+    let answered = |s: &State| !seen.lock().unwrap().sent.is_empty() && s.submits.is_empty();
+    assert!(
+        poll_own_pp(&mut s, 30, &answered),
+        "the play is sent and answered"
+    );
+    // Without asking again it would stay at the answer's 100 until the next login.
+    assert!(
+        poll_own_pp(&mut s, 10, &|s| s.me == Some((140.0, Some(7)))),
+        "the settled total comes in after the play: {:?}",
+        s.me
+    );
+    assert!(
+        seen.lock().unwrap().profiles >= 2,
+        "asked on login and after the play"
+    );
+}
+
+/// The total changes on the server with no play from this game (a recalculation, an admin, a
+/// play on another device): the game asks again every `ME_REFRESH`.
+#[test]
+fn the_own_pp_total_is_fetched_again_every_minute() {
+    let (server, seen) = score_server(FirstPlay::Kept);
+    seen.lock().unwrap().profile_pp = 50.0;
+    let mut cfg = harness::config();
+    cfg.online_server = server;
+    cfg.online_user = "me".into();
+    cfg.online_token = "t".into();
+    cfg.terms_version = terms::VERSION;
+    let songs = Songs::new("own-pp-refresh", &[maps::basics()]);
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    assert!(
+        poll_own_pp(&mut s, 30, &|s| s.me == Some((50.0, Some(7)))),
+        "the total on login: {:?}",
+        s.me
+    );
+    let due = s.me_due.expect("asked for again later");
+    let wait = due.saturating_duration_since(Instant::now());
+    assert!(
+        wait > ME_REFRESH - Duration::from_secs(10) && wait <= ME_REFRESH,
+        "in about a minute: {wait:?}"
+    );
+    seen.lock().unwrap().profile_pp = 75.0;
+    // Not before then.
+    poll_own_pp(&mut s, 1, &|_| false);
+    assert_eq!(s.me, Some((50.0, Some(7))), "kept until it is due");
+    // A minute on.
+    s.me_due = Some(Instant::now());
+    assert!(
+        poll_own_pp(&mut s, 10, &|s| s.me == Some((75.0, Some(7)))),
+        "the new total comes in: {:?}",
+        s.me
     );
 }
 
