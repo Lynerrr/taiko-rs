@@ -705,6 +705,52 @@ fn dragging_or_wheeling_the_list_draws_every_card_on_screen_with_its_picture() {
 }
 
 #[test]
+fn rebuilding_the_list_keeps_the_cards_pictures_shown_without_fading_them_in_again() {
+    let (mut s, _songs, mut now) =
+        menu_look_cfg("select-look-covers-kept", &many_sets_charts(), true);
+    let groups: Vec<usize> = s.select.song_groups().iter().map(|g| g.start).collect();
+    for &row in &groups {
+        let key = set_key(&s, row);
+        s.card_pictures.pretend_loaded(&key, [0.3, 0.4, 0.5]);
+    }
+    // How strong each card's picture is drawn.
+    let pictures = |s: &State, c: &Canvas| -> Vec<(usize, f32)> {
+        cards_in_view(c, s)
+            .into_iter()
+            .map(|(row, r)| {
+                let a = c
+                    .shapes
+                    .iter()
+                    .filter(|sh| card_picture(sh) && inside(sh.center, r, 0.5))
+                    .map(|sh| sh.fill[3])
+                    .fold(0.0, f32::max);
+                (row, a)
+            })
+            .collect()
+    };
+    let c = settled(&mut s, &mut now);
+    let before = pictures(&s, &c);
+    assert!(before.len() >= 5, "cards on screen");
+    assert!(
+        before.iter().all(|&(_, a)| a > 0.3),
+        "pictures in: {before:?}"
+    );
+    // The list rebuilt (a library update, the search, a sort): the pictures on screen stay.
+    s.select.refilter(&s.library);
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    let after = pictures(&s, &c);
+    // As strong as before (give or take the beat's pulse), not faded out to come in again.
+    assert_eq!(after.len(), before.len());
+    for ((row, a), (_, b)) in after.iter().zip(&before) {
+        assert!(
+            (a - b).abs() < 0.02,
+            "the card of row {row} keeps its picture: {b} then {a}"
+        );
+    }
+}
+
+#[test]
 fn dragging_or_wheeling_the_list_reads_the_cards_ahead_of_it() {
     let (mut s, _songs, mut now) = many_sets("select-look-fly-ahead");
     settled(&mut s, &mut now);
