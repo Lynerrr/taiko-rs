@@ -72,6 +72,8 @@ sort = title
 # the collection song select shows (own:name or osu:name; empty: all songs)
 collection = own:Warm Up
 kiai_effects = false
+# song select's preview shows the drum at the start of its lane
+preview_drum = false
 # GREAT hits without their flash and label (only OKs and misses show)
 hide_great = false
 # a play failed by Sudden Death or Perfect starts over at once

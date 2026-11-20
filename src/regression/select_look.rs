@@ -2120,9 +2120,24 @@ fn the_preview_lane_fits_its_round_tile_and_its_notes_slide_in_from_under_its_ed
         plain([end - 14.0, 20.0], [12.0, 12.0], [12.0, 0.0, 0.0, 0.0]),
         plain([end - 120.0, 20.0], [12.0, 12.0], [12.0, 0.0, 0.0, 0.0]),
     ];
+    // The drum shown: the tile starts with it.
+    let mut drum = shapes.clone();
+    preview::bare_lane_end(&mut drum, 1, x, x, end, h);
+    let round = style::radius::SMALL;
+    assert_eq!(
+        drum[3].params[0], round,
+        "the drum's panel round at the tile's edge"
+    );
+    assert_eq!(drum[3].fill[3], 1.0, "and drawn");
+    assert_eq!(drum[4].params[0], 0.0, "its square half");
+    assert!(
+        (drum[4].center[0] - drum[4].half[0] - (x + 25.0)).abs() < 0.01
+            && (drum[4].center[0] + drum[4].half[0] - (x + 50.0)).abs() < 0.01,
+        "over its right half"
+    );
+    // The drum off: the tile starts right of it.
     let tile_left = x + 50.0;
     preview::bare_lane_end(&mut shapes, 1, x, tile_left, end, h);
-    let round = style::radius::SMALL;
     let span = |sh: &Shape| [sh.center[0] - sh.half[0], sh.center[0] + sh.half[0]];
     assert_eq!(
         shapes[0].params[0], 0.0,
@@ -2272,8 +2287,12 @@ fn the_details_page_is_as_tall_as_what_is_on_it_and_grows_to_the_simulator() {
 fn everything_on_the_details_page_is_within_the_preview_tiles_edges_at_any_list_width() {
     let (mut s, _songs, mut now) = menu_look("select-look-page-edges");
     let (min, max) = ui::Select::share_range(853.3333).expect("room for both");
-    for share in [min, crate::config::LIST_SHARE.2, max] {
+    for (share, drum) in [min, crate::config::LIST_SHARE.2, max]
+        .into_iter()
+        .flat_map(|share| [(share, true), (share, false)])
+    {
         s.cfg.song_list_share = share;
+        s.cfg.preview_drum = drum;
         let c = settled(&mut s, &mut now);
         let page = details_page(&c);
         let lane_hit = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
