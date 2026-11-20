@@ -2212,3 +2212,63 @@ fn a_difficulty_rows_rating_bar_is_drawn_over_its_light_and_the_light_is_as_roun
         "the bar over the light, not under its corners"
     );
 }
+
+/// Song select's details page (bare): its box.
+fn details_page(c: &Canvas) -> [f32; 4] {
+    let fill = style::surface_fill(style::Surface::Raised);
+    c.shapes
+        .iter()
+        .filter(|sh| {
+            sh.params[0] == style::radius::CARD
+                && same_rgb(sh.fill, fill)
+                && sh.center[0] > c.width / 2.0
+                && sh.half[0] * 2.0 > 150.0
+        })
+        .map(rect)
+        .max_by(|a, b| (a[2] * a[3]).total_cmp(&(b[2] * b[3])))
+        .expect("the details page")
+}
+
+#[test]
+fn the_details_page_is_as_tall_as_what_is_on_it_and_grows_to_the_simulator() {
+    let (mut s, _songs, mut now) = menu_look_cfg("select-look-page-fit", &maps::all(), true);
+    let c = settled(&mut s, &mut now);
+    let page = details_page(&c);
+    let bottom = page[1] + page[3];
+    assert!(
+        (bottom - s.preview.panel_bottom).abs() < 0.5,
+        "the page ends under what's on it: {bottom} vs {}",
+        s.preview.panel_bottom
+    );
+    // Not the whole column down to the actions: the room under the details is left open.
+    let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
+    assert!(
+        bottom < play[1] - 30.0,
+        "the page ends at {bottom}, Play at {}",
+        play[1]
+    );
+    // The simulator makes the details taller: the page grows to them, smoothly.
+    s.click(Hit::PpSim, None);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    let growing = details_page(&c);
+    settled(&mut s, &mut now);
+    for _ in 0..20 {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    let grown = details_page(&c);
+    let (h0, h1, h2) = (page[3], growing[3], grown[3]);
+    assert!(h2 > h0 + 10.0, "taller with the simulator: {h0} -> {h2}");
+    assert!(h1 > h0 && h1 < h2, "on its way: {h0} -> {h1} -> {h2}");
+    assert!(
+        (grown[1] + grown[3] - s.preview.panel_bottom).abs() < 0.5,
+        "and as tall as its contents: {} vs {}",
+        grown[1] + grown[3],
+        s.preview.panel_bottom
+    );
+}

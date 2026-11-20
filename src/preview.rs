@@ -299,6 +299,8 @@ pub struct Preview {
     pub mods: crate::mods::Mods,
     /// Bottom of the song select panel as last drawn (virtual units).
     pub panel_bottom: f32,
+    /// How tall song select draws the details' page, following `panel_bottom` (0: not yet).
+    pub page_h: f32,
     /// Room kept free at the right of the title line, for a button over the panel's corner
     /// (song select's way to the leaderboard); 0 elsewhere.
     pub title_room: f32,
@@ -1959,7 +1961,14 @@ impl Preview {
         let band_h = band_h + (bottom - top - band_h) * fit;
         let preview_h = band_h * k;
         let h = head + preview_h + after_box;
-        self.panel_bottom = y + h;
+        // Bare, the panel ends under what's on it: the room for "Play from" under the timeline
+        // only once a start point is picked (it grows into it).
+        let tail = if self.bare && self.marker(e).is_none() {
+            PLAY_FROM_ROOM
+        } else {
+            0.0
+        };
+        self.panel_bottom = y + h - tail;
         // Bare, it's on a panel of its own that song select draws under the whole page.
         if !self.bare {
             c.round_rect(
@@ -2142,16 +2151,16 @@ impl Preview {
         }
         self.box_rect = Some([bx, by, bw, bh]);
         c.hit(bx, by, lane_end.min(c.width) - bx, bh, Hit::Preview);
-        // Bare, the timeline is as wide as the lane over it, short of its fading end.
-        let gw = if self.bare {
-            lane_end - LANE_FADE[1] / 2.0 - bx
+        // Bare, the timeline is as wide as the lane's tile over it, edge to edge.
+        let (gx, gw) = if self.bare {
+            (strip[0], strip[2])
         } else {
-            bw
+            (bx, bw)
         };
         let loaded = is_loaded;
         if loaded {
             let graph_start = c.shapes.len();
-            self.draw_timeline(c, e, [bx, by + bh + 8.0, gw, graph_h], button);
+            self.draw_timeline(c, e, [gx, by + bh + 8.0, gw, graph_h], button);
             // Seeking goes by the music: until this map's plays, a click would move the last one.
             if !playing {
                 self.graph_rect = None;
@@ -2375,6 +2384,8 @@ fn pp_chip(c: &mut Canvas, rect: [f32; 4], lit: bool) {
 }
 
 const BARE_GRAPH_H: f32 = 28.0;
+/// The room under the timeline for its "Play from" button, past its times' line.
+const PLAY_FROM_ROOM: f32 = 22.0;
 /// Bare: the timeline's bars, a neutral ink (the accent is Play's and the selection's), kiai's in
 /// gold; how strong they are ahead of the playhead and behind it.
 const KIAI_GOLD: u32 = 0xFFD34D;
@@ -2978,6 +2989,47 @@ mod beat_tests {
         for (x, y) in spots {
             assert!(matches!(top(&c, x, y), Some(Hit::SocialPanel)));
         }
+    }
+
+    #[test]
+    fn bare_the_timeline_is_as_wide_as_the_lanes_tile() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.osu"),
+            map.meta.clone(),
+        )];
+        let mut p = Preview {
+            seen: Some(0),
+            ready_for: Some(0),
+            game: Some(new_preview_game(&map, 1.0)),
+            map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+            bare: true,
+            ..Default::default()
+        };
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        p.draw_panel(
+            &mut c, &library, 500.0, 40.0, 340.0, 400.0, 1.0, None, None, None, None,
+        );
+        let [_, by, _, bh] = p.box_rect.expect("the lane");
+        let fill = crate::style::surface_fill(crate::style::Surface::Raised);
+        let tile = c
+            .shapes
+            .iter()
+            .find(|sh| {
+                sh.fill == fill
+                    && sh.params[0] == crate::style::radius::SMALL
+                    && (sh.center[1] - (by + bh / 2.0)).abs() < 0.5
+                    && (sh.half[1] * 2.0 - bh).abs() < 0.5
+            })
+            .expect("the lane's tile");
+        let (left, right) = (tile.center[0] - tile.half[0], tile.center[0] + tile.half[0]);
+        let [gx, _, gw, _] = p.graph_rect.expect("the timeline");
+        assert!(
+            (gx - left).abs() < 0.01 && (gx + gw - right).abs() < 0.01,
+            "the timeline {gx}..{} under the tile {left}..{right}",
+            gx + gw
+        );
     }
 
     #[test]
