@@ -3539,6 +3539,94 @@ thread_local! {
 
 /// Animations in the frame being built use this time instead of each reading the clock (which
 /// can cost microseconds a read). Per thread: the render thread sets it before each frame.
+/// The text caret's width, how long it's on (and then off) as it blinks, how long after a move it
+/// stops blinking, how long its trail's leading and trailing edges take to get to it, how
+/// strong the trail is at the caret, and how long a caret not drawn is forgotten after (the
+/// next one shows where it is, no trail).
+const CARET_W: f32 = 1.0;
+const CARET_BLINK_MS: f32 = 500.0;
+const CARET_BLINK_STOP_MS: f32 = 15_000.0;
+const CARET_TRAIL_MS: (f32, f32) = (100.0, 400.0);
+const CARET_TRAIL_ALPHA: f32 = 0.6;
+const CARET_GONE_MS: f32 = 200.0;
+
+/// The text caret as last drawn: its trail's left and right edges chasing it, its line, and
+/// when it last moved.
+struct CaretTrail {
+    x: f32,
+    top: f32,
+    edges: [f32; 2],
+    moved: std::time::Instant,
+    drawn: std::time::Instant,
+}
+
+impl CaretTrail {
+    fn new(x: f32, top: f32, now: std::time::Instant) -> CaretTrail {
+        CaretTrail {
+            x,
+            top,
+            edges: [x, x + CARET_W],
+            moved: now,
+            drawn: now,
+        }
+    }
+}
+
+/// The caret's state between frames; one caret is shown at a time.
+#[derive(Default)]
+struct Caret(Option<CaretTrail>);
+
+impl Caret {
+    /// The caret drawn at `x` on the line from `top` at `now`: its trail's edges, and when it
+    /// last moved. A caret on another line, or one not drawn for a while, starts afresh.
+    fn step(
+        &mut self,
+        x: f32,
+        top: f32,
+        now: std::time::Instant,
+    ) -> ([f32; 2], std::time::Instant) {
+        let ms = |a: std::time::Instant, b: std::time::Instant| {
+            a.saturating_duration_since(b).as_secs_f32() * 1000.0
+        };
+        let fresh = self
+            .0
+            .as_ref()
+            .is_none_or(|t| (t.top - top).abs() > 0.5 || ms(now, t.drawn) > CARET_GONE_MS);
+        if fresh {
+            self.0 = Some(CaretTrail::new(x, top, now));
+        }
+        let t = self.0.as_mut().expect("just set");
+        if (t.x - x).abs() > 0.01 {
+            t.x = x;
+            t.moved = now;
+        }
+        let dt = ms(now, t.drawn).min(100.0);
+        t.drawn = now;
+        // The edge on the side it went is the leading one, fast; the other trails, slow.
+        let right = x > (t.edges[0] + t.edges[1]) / 2.0 - CARET_W / 2.0;
+        let targets = [x, x + CARET_W];
+        for (k, edge) in t.edges.iter_mut().enumerate() {
+            let leading = (k == 1) == right;
+            let ms = if leading {
+                CARET_TRAIL_MS.0
+            } else {
+                CARET_TRAIL_MS.1
+            };
+            // 1% of the way left when its time is up.
+            let step = 1.0 - (-dt * std::f32::consts::LN_10 * 2.0 / ms).exp();
+            *edge += (targets[k] - *edge) * step;
+            if (targets[k] - *edge).abs() < 0.05 {
+                *edge = targets[k];
+            }
+        }
+        (t.edges, t.moved)
+    }
+}
+
+thread_local! {
+    static CARET: std::cell::RefCell<Caret> = std::cell::RefCell::new(Caret::default());
+}
+
 pub fn set_frame_time(now: Option<std::time::Instant>) {
     FRAME_TIME.with(|t| t.set(now));
 }
@@ -4637,9 +4725,36 @@ impl<H> Canvas<H> {
         });
     }
 
-    /// A visible insertion point, including an empty focused field.
+    /// A visible insertion point, including an empty focused field: a thin beam. With animations
+    /// on it blinks (`CARET_BLINK_MS` on, as long off) once it rests, steady again on every move
+    /// and after `CARET_BLINK_STOP_MS`, and a move leaves a trail behind it (`CaretTrail`): its
+    /// leading edge gets there in `CARET_TRAIL_MS.0`, its trailing one in `CARET_TRAIL_MS.1`.
     pub fn caret(&mut self, x: f32, y: f32, size: f32, color: [f32; 4]) {
-        self.rect(x, y - 1.0, 1.0, Self::text_height(size) + 2.0, color);
+        let (top, h) = (y - 1.0, Self::text_height(size) + 2.0);
+        if !animations() {
+            self.rect(x, top, CARET_W, h, color);
+            return;
+        }
+        let now = frame_now();
+        let (edges, moved) = CARET.with(|c| c.borrow_mut().step(x, top, now));
+        let [left, right] = edges;
+        if right - left > CARET_W + 0.5 {
+            // The trail: from clear at its far end to the caret's colour at the caret.
+            let [r, g, b, a] = color;
+            let fade = [r, g, b, 0.0];
+            let near = [r, g, b, a * CARET_TRAIL_ALPHA];
+            let (from, to) = if x > (left + right) / 2.0 - CARET_W / 2.0 {
+                (fade, near)
+            } else {
+                (near, fade)
+            };
+            self.shade_across([left, top], [right - left, h], 0.0, from, to);
+        }
+        let rest = now.saturating_duration_since(moved).as_secs_f32() * 1000.0;
+        let on = rest >= CARET_BLINK_STOP_MS || rest % (2.0 * CARET_BLINK_MS) < CARET_BLINK_MS;
+        if on {
+            self.rect(x, top, CARET_W, h, color);
+        }
     }
 
     /// Draws text with the built-in fonts; `size` is the glyph height. Returns the advance width.
