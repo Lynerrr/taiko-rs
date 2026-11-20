@@ -88,6 +88,60 @@ impl TouchLayout {
     }
 }
 
+/// Song select's cards (the main menu's look): their picture's colour fading to grey across them,
+/// towards one side, or not at all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CardFade {
+    Off,
+    ToRight,
+    ToLeft,
+}
+
+/// How grey a card's picture gets at its faded side (1: no colour left).
+const CARD_FADE_GREY: f32 = 0.9;
+
+impl CardFade {
+    pub const ALL: [CardFade; 3] = [CardFade::Off, CardFade::ToRight, CardFade::ToLeft];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CardFade::Off => tr!("Off", "オフ", "Выкл"),
+            CardFade::ToRight => tr!("Grey to the right", "右へグレー", "Серее вправо"),
+            CardFade::ToLeft => tr!("Grey to the left", "左へグレー", "Серее влево"),
+        }
+    }
+
+    /// Its name in the config file.
+    fn key(self) -> &'static str {
+        match self {
+            CardFade::Off => "off",
+            CardFade::ToRight => "right",
+            CardFade::ToLeft => "left",
+        }
+    }
+
+    fn parse(s: &str) -> Option<CardFade> {
+        CardFade::ALL
+            .into_iter()
+            .find(|t| t.key().eq_ignore_ascii_case(s))
+    }
+
+    /// The choice `dir` steps away (wrapping).
+    pub fn step(self, dir: i32) -> CardFade {
+        let i = CardFade::ALL.iter().position(|&t| t == self).unwrap_or(0) as i32;
+        CardFade::ALL[(i + dir).rem_euclid(CardFade::ALL.len() as i32) as usize]
+    }
+
+    /// How grey a card's picture is at its left edge and at its right (0: all its colour).
+    pub fn greys(self) -> [f32; 2] {
+        match self {
+            CardFade::Off => [0.0, 0.0],
+            CardFade::ToRight => [0.0, CARD_FADE_GREY],
+            CardFade::ToLeft => [CARD_FADE_GREY, 0.0],
+        }
+    }
+}
+
 /// Where an F12 screenshot goes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScreenshotTo {
@@ -236,6 +290,8 @@ pub struct Config {
     /// Song select in the main menu's look shows the library's counts by the search row and the
     /// device line at the bottom (as the classic look always does).
     pub select_info: bool,
+    /// Song select's cards: their picture's colour fading to grey towards a side.
+    pub card_fade: CardFade,
     /// Whether moving taiko.rs's maps out of osu!'s Songs folder was offered already (it's
     /// offered once; Settings > Library does it any time).
     pub custom_move_asked: bool,
@@ -520,6 +576,7 @@ impl Default for Config {
             show_converts: false,
             song_headings: false,
             select_info: false,
+            card_fade: CardFade::Off,
             custom_move_asked: false,
             bg_dim_black: true,
             interface_hidden: false,
@@ -1399,6 +1456,7 @@ impl Config {
                 "show_converts" => cfg.show_converts = v == "true",
                 "song_headings" => cfg.song_headings = v == "true",
                 "select_info" => cfg.select_info = v == "true",
+                "card_fade" => cfg.card_fade = CardFade::parse(v).unwrap_or(cfg.card_fade),
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
                 "interface_hidden" => cfg.interface_hidden = v == "true",
                 "interface_hides" => cfg.interface_hides = crate::hud::Parts::parse_saved(v),
@@ -1929,6 +1987,10 @@ impl Config {
         ));
         out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
         out.push_str(&format!("# song select (main menu look) shows the library's counts and the device line\nselect_info = {}\n", self.select_info));
+        out.push_str(&format!(
+            "# song select's cards: their picture's colour fades to grey: off, right (towards the right) or left\ncard_fade = {}\n",
+            self.card_fade.key()
+        ));
         out.push_str(&format!(
             "# song select's order under each heading (sort, title, artist, stars, length, bpm, added, played; desc after it: the other way round)\nsong_order = {}\n# the source song select lists: all, osu, tja or own (taiko.rs's maps)\nsong_source = {}\n# each source's sort, order, direction and headings (empty: the one it starts with)\nlens_osu = {}\nlens_tja = {}\nlens_own = {}\n",
             self.song_order, self.song_source, self.lens_osu, self.lens_tja, self.lens_own
@@ -2488,6 +2550,26 @@ mod tests {
 
     #[test]
     fn screenshot_choices_read_back_and_go_to_the_clipboard_first() {
+        assert_eq!(Config::default().card_fade, CardFade::Off);
+        for f in CardFade::ALL {
+            assert_eq!(CardFade::parse(f.key()), Some(f));
+            let cfg = Config {
+                card_fade: f,
+                ..Config::default()
+            };
+            assert_eq!(
+                Config::parse_text(&cfg.to_text()).card_fade,
+                f,
+                "kept in the file"
+            );
+        }
+        assert_eq!(
+            CardFade::ToRight.greys()[0],
+            0.0,
+            "all its colour on the left"
+        );
+        assert!(CardFade::ToRight.greys()[1] > 0.5, "grey on the right");
+        assert_eq!(CardFade::Off.step(-1), CardFade::ToLeft);
         assert_eq!(Config::default().screenshot_to, ScreenshotTo::Clipboard);
         for to in ScreenshotTo::ALL {
             assert_eq!(ScreenshotTo::parse(to.key()), Some(to));

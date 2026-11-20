@@ -1218,7 +1218,12 @@ fn shade(in: VOut) -> vec4<f32> {
         let part = select(vec2<f32>(1.0, -k), vec2<f32>(k, 1.0), k > 0.0);
         let uv = clamp(in.local / (2.0 * in.half) * part + 0.5, edge, vec2<f32>(1.0) - edge);
         let side = vec2<f32>(f32(CARD_SIDE_X), f32(CARD_SIDE_Y));
-        let t = textureSampleLevel(cards, samp, (cell + uv) * size / side, 0.0);
+        var t = textureSampleLevel(cards, samp, (cell + uv) * size / side, 0.0);
+        // Its colour going to grey across it (`border`: how grey at the left and right edges).
+        let across = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
+        let grey = mix(in.border.x, in.border.y, across);
+        let luma = dot(t.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+        t = vec4<f32>(mix(t.rgb, vec3<f32>(luma), grey), t.a);
         let r = min(in.params.x, min(in.half.x, in.half.y));
         let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
         return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover;
@@ -4507,14 +4512,16 @@ impl<H> Canvas<H> {
     }
 
     /// Song select's card picture of the map picture at `path` over all of `[x, y, w, h]`: the
-    /// picture's middle strip, cut to it, tinted by `tint`. Asks for it; false while it isn't in
-    /// (nothing drawn).
+    /// picture's middle strip, cut to it, tinted by `tint`, its colour going to grey across it from
+    /// `greys`' first at its left edge to the second at its right (0: all its colour). Asks for
+    /// it; false while it isn't in (nothing drawn).
     pub fn card_picture(
         &mut self,
         path: &std::path::Path,
         [x, y, w, h]: [f32; 4],
         tint: [f32; 4],
         radius: f32,
+        greys: [f32; 2],
     ) -> bool {
         let key = path_picture_key(path);
         let slot = self.card_slots.get(&key).copied();
@@ -4540,7 +4547,7 @@ impl<H> Canvas<H> {
             center: [x + w / 2.0, y + h / 2.0],
             half: [w / 2.0, h / 2.0],
             fill: tint,
-            border: CLEAR,
+            border: [greys[0], greys[1], 0.0, 0.0],
             params: [radius, 1.0, k, -CARD_BASE - slot as f32],
             angle: 0.0,
         });

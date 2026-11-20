@@ -513,6 +513,7 @@ fn draw_songs(
         state.draw_mobile_select(canvas);
     } else {
         state.select.show_info = state.cfg.select_info;
+        state.select.card_greys = state.cfg.card_fade.greys();
         state.select.draw(
             canvas,
             &state.library,

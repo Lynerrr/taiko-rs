@@ -390,6 +390,8 @@ pub struct Select {
     /// The main menu's look shows the library's counts and the status line (`Config::select_info`);
     /// the classic look always does.
     pub show_info: bool,
+    /// How grey the cards' pictures are at their left and right edges (`config::CardFade`).
+    pub card_greys: [f32; 2],
     /// On the way from the main menu (`menu_shift`): how far the list has come in
     /// (`Phases::cascade`), its cards dropping out of the search row one after another.
     pub arriving: Option<f32>,
@@ -589,6 +591,7 @@ impl Select {
             to_menu: true,
             covered: false,
             show_info: false,
+            card_greys: [0.0; 2],
             arriving: None,
             list_shapes: [0, 0],
             filter: String::new(),
@@ -3635,7 +3638,8 @@ impl Select {
                     0.0,
                 );
             }
-            let drawn = c.card_picture(&bg, inner, [1.0, 1.0, 1.0, a], round);
+            let tint = [1.0, 1.0, 1.0, a];
+            let drawn = c.card_picture(&bg, inner, tint, round, self.card_greys);
             if drawn && since.is_none() {
                 covers.insert(key, crate::render::frame_now());
             }

@@ -597,6 +597,38 @@ fn set_key(s: &State, row: usize) -> String {
     render::path_picture_key(&preview::background_path(e).expect("it names a picture"))
 }
 
+#[test]
+fn the_card_colour_fade_greys_each_cards_picture_towards_its_side() {
+    let (mut s, _songs, mut now) = menu_look("select-look-card-fade");
+    let i = s.select.selected().expect("a map is selected");
+    let bg = preview::background_path(&s.library[i]).expect("it names a picture");
+    s.card_pictures
+        .pretend_loaded(&render::path_picture_key(&bg), [0.5, 0.5, 0.5]);
+    let greys = |s: &mut State, now: &mut Instant| {
+        let c = settled(s, now);
+        let open = open_card(&c, s);
+        let picture = c
+            .shapes
+            .iter()
+            .find(|sh| card_picture(sh) && inside(sh.center, open, 0.0))
+            .expect("the card's picture");
+        [picture.border[0], picture.border[1]]
+    };
+    assert_eq!(greys(&mut s, &mut now), [0.0, 0.0], "off: all its colour");
+    s.cfg.card_fade = config::CardFade::ToRight;
+    let [left, right] = greys(&mut s, &mut now);
+    assert!(
+        left == 0.0 && right > 0.5,
+        "grey to the right: {left} {right}"
+    );
+    s.cfg.card_fade = config::CardFade::ToLeft;
+    let [left, right] = greys(&mut s, &mut now);
+    assert!(
+        right == 0.0 && left > 0.5,
+        "grey to the left: {left} {right}"
+    );
+}
+
 /// A card's picture drawn (`render::Canvas::card_picture`): its slot in `params[3]` below
 /// -100000.
 fn card_picture(s: &Shape) -> bool {

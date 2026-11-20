@@ -3023,6 +3023,7 @@ impl State {
             Item::AutoplayBinding => autoplay::BINDINGS[c.autoplay.binding].into(),
             Item::AutoplayLeftHanded => on(c.autoplay.left_handed),
             Item::Screenshots => c.screenshot_to.name().into(),
+            Item::CardFade => c.card_fade.name().into(),
             Item::IdleScreen => idle::minutes_name(c.idle_minutes),
             Item::UiFont => {
                 if c.ui_font.is_empty() {
@@ -3370,6 +3371,7 @@ impl State {
                 self.cfg.autoplay.left_handed = !self.cfg.autoplay.left_handed
             }
             Item::Screenshots => self.cfg.screenshot_to = self.cfg.screenshot_to.step(dir),
+            Item::CardFade => self.cfg.card_fade = self.cfg.card_fade.step(dir),
             Item::IdleScreen => {
                 let i = idle::MINUTES
                     .iter()
@@ -3745,6 +3747,14 @@ impl State {
                     String::new(),
                 )
             }
+            Item::CardFade => {
+                let all = config::CardFade::ALL;
+                (
+                    strings(&mut all.iter().map(|t| t.name())),
+                    all.iter().position(|&t| t == c.card_fade),
+                    String::new(),
+                )
+            }
             Item::AutoplayStyle => {
                 let all = autoplay::Style::ALL;
                 (
@@ -4067,6 +4077,7 @@ impl State {
         match list.item {
             Item::TouchLayout => self.cfg.touch_layout = config::TouchLayout::ALL[i],
             Item::Screenshots => self.cfg.screenshot_to = config::ScreenshotTo::ALL[i],
+            Item::CardFade => self.cfg.card_fade = config::CardFade::ALL[i],
             Item::IdleScreen => self.cfg.idle_minutes = idle::MINUTES[i],
             Item::AutoplayStyle => self.cfg.autoplay.style = autoplay::Style::ALL[i],
             Item::AutoplayBinding => self.cfg.autoplay.binding = i,
