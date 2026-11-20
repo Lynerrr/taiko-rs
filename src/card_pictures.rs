@@ -71,6 +71,8 @@ pub struct CardPictures {
     dir: Option<PathBuf>,
     /// Calls off the copies being made ahead.
     prewarm: Option<Arc<AtomicBool>>,
+    /// Holds them while a song is played (`hold`).
+    paused: Arc<AtomicBool>,
     tx: Sender<Read>,
     rx: Receiver<Read>,
 }
@@ -97,6 +99,7 @@ impl Default for CardPictures {
                     .map(|d| d.join("thumbs").join(format!("cards-v{CARD_VERSION}")))
             },
             prewarm: None,
+            paused: Arc::default(),
             tx,
             rx,
         }
@@ -131,40 +134,58 @@ impl CardPictures {
         let stop = Arc::new(AtomicBool::new(false));
         self.prewarm = Some(stop.clone());
         let found = self.found.clone();
-        std::thread::spawn(move || {
-            // Copies of an older kind aren't read any more.
-            if let Some(parent) = dir.parent() {
-                for old in std::fs::read_dir(parent).into_iter().flatten().flatten() {
-                    let name = old.file_name().to_string_lossy().into_owned();
-                    if name.starts_with("cards-v") && old.path() != dir {
-                        let _ = std::fs::remove_dir_all(old.path());
+        let paused = self.paused.clone();
+        let spawned = std::thread::Builder::new()
+            .name("card copies".into())
+            .spawn(move || {
+                crate::pictures::lower_priority();
+                // Copies of an older kind aren't read any more.
+                if let Some(parent) = dir.parent() {
+                    for old in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+                        let name = old.file_name().to_string_lossy().into_owned();
+                        if name.starts_with("cards-v") && old.path() != dir {
+                            let _ = std::fs::remove_dir_all(old.path());
+                        }
                     }
                 }
-            }
-            let made: HashMap<String, [f32; 3]> = std::fs::read_dir(&dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .filter_map(|f| parse_name(&f.file_name().to_string_lossy()))
-                .collect();
-            let mut missing = Vec::new();
-            for path in paths {
-                let Some(stem) = copy_stem(&path) else {
-                    continue;
-                };
-                match made.get(&stem) {
-                    Some(&colour) => found.put(path_picture_key(&path), colour),
-                    None => missing.push(path),
+                let made: HashMap<String, [f32; 3]> = std::fs::read_dir(&dir)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter_map(|f| parse_name(&f.file_name().to_string_lossy()))
+                    .collect();
+                let mut missing = Vec::new();
+                for path in paths {
+                    let Some(stem) = copy_stem(&path) else {
+                        continue;
+                    };
+                    match made.get(&stem) {
+                        Some(&colour) => found.put(path_picture_key(&path), colour),
+                        None => missing.push(path),
+                    }
                 }
-            }
-            for path in missing {
-                if stop.load(Ordering::Relaxed) {
-                    return;
+                for path in missing {
+                    if !crate::pictures::wait_turn(&stop, &paused) {
+                        return;
+                    }
+                    let _ = read(&path, Some(&dir), &found);
+                    std::thread::sleep(Duration::from_millis(20));
                 }
-                let _ = read(&path, Some(&dir), &found);
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        });
+            });
+        if let Err(e) = spawned {
+            eprintln!("card copies: {e}");
+        }
+    }
+
+    /// Holds the copies being made ahead while a song is played (`on`), or lets them go on.
+    pub fn hold(&self, on: bool) {
+        self.paused.store(on, Ordering::Relaxed);
+    }
+
+    /// Tests: the copies made ahead are held.
+    #[cfg(test)]
+    pub fn held(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
     }
 
     /// Reads and keeps in the strips `wanted` (picture key, file, whether a card draws it now):
