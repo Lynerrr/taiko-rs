@@ -1312,6 +1312,7 @@ impl State {
             me_relax: None,
             me_for: String::new(),
             me_fetch: Job::idle(),
+            me_due: None,
             board_online: false,
             profile: None,
             online_boards: std::collections::HashMap::new(),
