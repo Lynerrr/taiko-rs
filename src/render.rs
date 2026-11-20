@@ -445,6 +445,8 @@ pub struct Renderer {
     /// so it holds at half resolution). The interface stays inside it; the background, and the
     /// bars reaching the interface's edges (`Canvas::bleed`), still fill the screen.
     pub safe: Option<[u32; 4]>,
+    /// Frames are coming very fast: see `frame_latency`.
+    fast_frames: bool,
     /// The last image came Suboptimal: configure the surface again before the next.
     reconfigure: bool,
     /// The half-resolution image and its bind group for the upscale, sized for the screen.
@@ -1937,6 +1939,7 @@ impl Renderer {
             pixel_scale: 1,
             letterbox: None,
             safe: None,
+            fast_frames: false,
             reconfigure: false,
             low: None,
             upscale_layout,
@@ -2380,10 +2383,29 @@ impl Renderer {
             .unwrap_or(PresentChoice::Fifo);
         self.present = chosen;
         self.config.present_mode = to_wgpu(chosen);
-        // One frame in flight for the uncapped modes keeps input-to-photon latency minimal.
-        self.config.desired_maximum_frame_latency =
-            if chosen == PresentChoice::Fifo { 2 } else { 1 };
+        self.config.desired_maximum_frame_latency = self.frame_latency();
         self.configure();
+    }
+
+    /// Whether frames come fast enough to queue more of them (see `clock::FrameRate`).
+    pub fn set_fast_frames(&mut self, fast: bool) {
+        if self.fast_frames != fast {
+            self.fast_frames = fast;
+            self.config.desired_maximum_frame_latency = self.frame_latency();
+            self.configure();
+        }
+    }
+
+    /// One frame in flight for the uncapped modes keeps input-to-photon latency minimal. Very fast
+    /// frames get more: a fullscreen window's images go straight to the screen and come back late,
+    /// so with few of them each frame waits for one (8,500 fps instead of 14,000 on a 7900 XT),
+    /// while a queued frame that fast costs a fraction of a millisecond.
+    fn frame_latency(&self) -> u32 {
+        match self.present {
+            PresentChoice::Fifo => 2,
+            _ if self.fast_frames => 4,
+            _ => 1,
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
