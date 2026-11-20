@@ -2121,7 +2121,14 @@ impl Preview {
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
         // As wide as the lane at that scale (all of the panel at full size), centred.
         let bw = lane_w * k;
-        let (bx, by, bh) = (x + 10.0 + (w - 20.0 - bw) / 2.0, cy, preview_h);
+        // Bare, the drum and its panel aren't shown (grey clutter left of the lane): the lane
+        // starts at the details' left edge, the drum off it to the left.
+        let bx = if self.bare {
+            x + 14.0 - crate::game::PANEL_W * k
+        } else {
+            x + 10.0 + (w - 20.0 - bw) / 2.0
+        };
+        let (by, bh) = (cy, preview_h);
         // Bare, the autoplay is a lane like the menu's, its drum at the left, running on to the
         // tiles' right edge; the notes come in from its end.
         let lane_end = if self.bare {
@@ -2129,15 +2136,16 @@ impl Preview {
         } else {
             bx + bw
         };
-        // Bare: no lines round it, its corners as round as the tiles', the tile as far out from
-        // the lane at its end as at the drum's side (the lane is cut square to its box, so a
-        // tile ending with it would lose its right corners).
-        let strip = [
-            bx - LANE_FADE[0],
-            by,
-            lane_end - bx + 2.0 * LANE_FADE[0],
-            bh,
-        ];
+        // Bare, the tile starts where the lane does, right of the drum.
+        let lane_x = if self.bare {
+            bx + crate::game::PANEL_W * k
+        } else {
+            bx
+        };
+        // Bare: no lines round it, its corners as round as the tiles', the tile out past the
+        // lane's end (the lane is cut square to its box, so a tile ending with it would lose its
+        // right corners).
+        let strip = [lane_x, by, lane_end - lane_x + LANE_FADE[0], bh];
         // A tile as the stats' are, not a dark box: on a bright picture that read as black.
         if self.bare {
             let r = crate::style::radius::SMALL;
@@ -2153,11 +2161,10 @@ impl Preview {
             );
         }
         self.box_rect = Some([bx, by, bw, bh]);
-        c.hit(bx, by, lane_end.min(c.width) - bx, bh, Hit::Preview);
-        // Bare, the timeline starts under the lane's start, in from the tile's edge, and runs on
-        // to the tile's right edge (short of it, it looked narrower than the playfield).
+        c.hit(lane_x, by, lane_end.min(c.width) - lane_x, bh, Hit::Preview);
+        // Bare, the timeline is as wide as the lane's tile, edge to edge.
         let (gx, gw) = if self.bare {
-            (bx, strip[0] + strip[2] - bx)
+            (strip[0], strip[2])
         } else {
             (bx, bw)
         };
@@ -2223,25 +2230,28 @@ impl Preview {
         // Bare, the lane fits its round tile; its notes slide in from under the tile's edge (the
         // lane is clipped to it: faded in short of it, they seemed to appear in plain view).
         if self.bare {
-            bare_lane_end(&mut c.shapes, start, bx, notes_end, bh);
+            bare_lane_end(&mut c.shapes, start, bx, lane_x, notes_end, bh);
         }
         if button.is_some() {
-            // Song select only (download previews have no fullscreen view).
-            c.text_right(
-                if self.bare {
-                    lane_end - LANE_FADE[1] - 4.0
-                } else {
-                    bx + bw - 6.0
-                },
-                by + bh - 10.0,
-                crate::style::text::CAPTION,
-                rgba(0x6f6f86, 1.0),
-                if crate::mobile::active() {
-                    "tap: fullscreen"
-                } else {
-                    "click: fullscreen (Ctrl+Enter)"
-                },
-            );
+            // Song select only (download previews have no fullscreen view). Only where it fits
+            // the lane (narrow, it ran out past its left edge), shorter first.
+            let right = if self.bare {
+                lane_end - LANE_FADE[1] - 4.0
+            } else {
+                bx + bw - 6.0
+            };
+            let room = right - lane_x - 6.0;
+            let size = crate::style::text::CAPTION;
+            let hint = if crate::mobile::active() {
+                &["tap: fullscreen"][..]
+            } else {
+                &["click: fullscreen (Ctrl+Enter)", "click: fullscreen"][..]
+            }
+            .iter()
+            .find(|s| Canvas::text_width(size, s) <= room);
+            if let Some(hint) = hint {
+                c.text_right(right, by + bh - 10.0, size, rgba(0x6f6f86, 1.0), hint);
+            }
         }
         if fade < 1.0 {
             if self.bare {
@@ -2258,8 +2268,8 @@ impl Preview {
                 );
             }
         }
-        // Bare, from the tile's left edge: the drum's panel runs out to it.
-        let clip_x = if self.bare { bx - LANE_FADE[0] } else { bx };
+        // Bare, from the tile's left edge: the drum and its panel left of it are cut off.
+        let clip_x = if self.bare { lane_x } else { bx };
         let clip = crate::layout::Area {
             x: clip_x / full_w,
             y: by / VIRTUAL_HEIGHT,
@@ -2293,61 +2303,48 @@ pub(crate) fn preview_look(play: crate::game::Look) -> crate::game::Look {
 }
 
 /// Bare, where the lane's notes end, its tile's right edge (the lane ending at `lane_end`, the
-/// tile as far past it as it starts before the drum): they come in out of it, not out of the
-/// middle of the tile.
+/// tile running on past it): they come in out of it, not out of the middle of the tile.
 pub(crate) fn bare_notes_end(lane_end: f32) -> f32 {
     lane_end + LANE_FADE[0]
 }
 
-/// Bare, the lane's shapes as drawn from `start` (from `lane_x` to `notes_end`, `band_h` tall)
-/// fitted to its tile: its own bands (as tall as the tile, running its length) run out to its
-/// edges and are as round, the drum's dark panel runs out to the tile's left edge and is as round
-/// there (square, it made the lane read as a square box on a dark picture), and the lines along
-/// it are left out.
+/// Bare, the lane's shapes as drawn from `start` (its drum's panel from `lane_x`, the lane on
+/// to `notes_end`, `band_h` tall) fitted to its tile, which starts at `tile_left`, right of the
+/// drum: its own bands (as tall as the tile, running its length) start at the tile's edges and
+/// are as round (square, it made the lane read as a square box on a dark picture), the drum's
+/// panel isn't drawn, and nor are the lines along it.
 pub(crate) fn bare_lane_end(
-    shapes: &mut Vec<crate::render::Shape>,
+    shapes: &mut [crate::render::Shape],
     start: usize,
     lane_x: f32,
+    tile_left: f32,
     notes_end: f32,
     band_h: f32,
 ) {
     let round = crate::style::radius::SMALL;
-    let tile_left = lane_x - LANE_FADE[0];
-    let mut panels = Vec::new();
-    for (i, sh) in shapes.iter_mut().enumerate().skip(start) {
+    for sh in shapes.iter_mut().skip(start) {
         if sh.params != [0.0; 4] || sh.angle != 0.0 {
             continue;
         }
         let (left, right) = (sh.center[0] - sh.half[0], sh.center[0] + sh.half[0]);
         let tall = sh.half[1] * 2.0 >= band_h * 0.5;
         if tall && right >= notes_end - 0.5 {
-            // Out to the tile's left edge too, so it's round at both ends.
+            // From the tile's left edge, so it's round at both ends.
             if (left - lane_x).abs() < 0.5 {
                 sh.center[0] = (tile_left + right) / 2.0;
                 sh.half[0] = (right - tile_left) / 2.0;
             }
             sh.params[0] = round;
-        } else if tall && (left - lane_x).abs() < 0.5 && right - left < (notes_end - lane_x) / 2.0 {
-            panels.push(i);
+        } else if tall && (left - lane_x).abs() < 0.5 && right <= tile_left + 0.5 {
+            // The drum's panel: cut off with the drum, none of it shows.
+            sh.fill[3] = 0.0;
+            sh.border[3] = 0.0;
         } else if !tall && left <= lane_x + 0.5 && right >= notes_end - 0.5 {
             // The lines along it: none (the tile is its frame). Cut by the tile's edge, what was
             // left of them flickered as a hairline as the panel followed the pointer.
             sh.fill[3] = 0.0;
             sh.border[3] = 0.0;
         }
-    }
-    // The panel out to the tile's edge, round; a square copy over its right half keeps it square
-    // against the lane.
-    for i in panels.into_iter().rev() {
-        let right = shapes[i].center[0] + shapes[i].half[0];
-        let mut square = shapes[i];
-        let sh = &mut shapes[i];
-        sh.center[0] = (tile_left + right) / 2.0;
-        sh.half[0] = (right - tile_left) / 2.0;
-        sh.params[0] = round;
-        square.center[0] = (sh.center[0] + right) / 2.0;
-        square.half[0] = (right - sh.center[0]) / 2.0;
-        shapes.insert(i + 1, square);
     }
 }
 
@@ -2531,6 +2528,9 @@ fn draw_graph(
     let (t0, t1) = (g.start.min(0.0).max(g.start - 2000.0), g.end);
     let span = (t1 - t0).max(1.0);
     let x_of = |t: f64| x + (((t - t0) / span).clamp(0.0, 1.0) as f32) * w;
+    // A line `lw` wide at `at`: its left edge, kept on the timeline (at its very ends, centred on
+    // them, half of it stuck out past the playfield's edge).
+    let line = |at: f32, lw: f32| (at - lw / 2.0).clamp(x, x + w - lw);
     if boxed {
         c.round_rect(
             [x, y],
@@ -2587,41 +2587,53 @@ fn draw_graph(
     }
     if preview_at >= 0.0 {
         let px = x_of(preview_at);
-        c.rect(px - 0.5, y + 1.0, 1.0, 5.0, rgba(0x86E05A, 1.0));
+        c.rect(line(px, 1.0), y + 1.0, 1.0, 5.0, rgba(0x86E05A, 1.0));
     }
     if let Some(m) = marker {
         // The picked start point: a blue line with a little flag.
-        let mx = x_of(m);
-        c.rect(mx - 0.75, y - 3.0, 1.5, h + 6.0, rgba(MARKER, 1.0));
-        c.rect(mx + 0.75, y - 3.0, 6.0, 4.5, rgba(MARKER, 1.0));
+        // The flag points right, or left where there's no room for it before the end.
+        let mx = line(x_of(m), 1.5);
+        c.rect(mx, y - 3.0, 1.5, h + 6.0, rgba(MARKER, 1.0));
+        let flag = if mx + 1.5 + 6.0 <= x + w {
+            mx + 1.5
+        } else {
+            mx - 6.0
+        };
+        c.rect(flag, y - 3.0, 6.0, 4.5, rgba(MARKER, 1.0));
     }
     let hx = x_of(now);
     // Bare, the playhead is a plain line of the bars' ink, as tall as they are: no glow round
     // it and no white past their ends, so it reads as part of the timeline beside the marker.
     if boxed {
-        c.rect(hx - 0.75, y - 2.0, 1.5, h + 4.0, rgba(0xffffff, 0.95));
+        c.rect(line(hx, 1.5), y - 2.0, 1.5, h + 4.0, rgba(0xffffff, 0.95));
     } else {
         c.rect(
-            hx - 0.5,
+            line(hx, 1.0),
             y + 1.0,
             1.0,
             h - 4.0,
             rgba(crate::style::ink::PRIMARY, 0.9),
         );
     }
-    c.text(
-        x,
-        y + h + 5.0,
-        7.0,
-        rgba(0xc8c8d8, 1.0),
-        &format!("{} / {}", fmt_time(now - t0.min(0.0)), fmt_time(t1)),
-    );
-    let peak = format!(
-        "peak {:.1} notes/s at {}",
-        g.peak_nps,
-        fmt_time(g.peak_nps_at)
-    );
-    c.text_right(x + w, y + h + 5.0, 7.0, rgba(0x8a8aa0, 1.0), &peak);
+    let times = format!("{} / {}", fmt_time(now - t0.min(0.0)), fmt_time(t1));
+    c.text(x, y + h + 5.0, 7.0, rgba(0xc8c8d8, 1.0), &times);
+    // The peak at the right, shorter where the timeline is narrow, none where even that would
+    // run into the times.
+    let room = w - Canvas::text_width(7.0, &times) - 8.0;
+    let peak = [
+        format!(
+            "peak {:.1} notes/s at {}",
+            g.peak_nps,
+            fmt_time(g.peak_nps_at)
+        ),
+        format!("peak {:.1} notes/s", g.peak_nps),
+        format!("{:.1}/s", g.peak_nps),
+    ]
+    .into_iter()
+    .find(|s| Canvas::text_width(7.0, s) <= room);
+    if let Some(peak) = peak {
+        c.text_right(x + w, y + h + 5.0, 7.0, rgba(0x8a8aa0, 1.0), &peak);
+    }
     (t0, t1)
 }
 
@@ -2996,7 +3008,7 @@ mod beat_tests {
     }
 
     #[test]
-    fn bare_the_timeline_starts_under_the_lane_and_runs_to_the_tiles_edge() {
+    fn bare_the_timeline_is_as_wide_as_the_lanes_tile() {
         let map = beatmap::calibration_map(500.0, 4, 16);
         let library = [Entry::new(
             PathBuf::from("/nonexistent/a.osu"),
@@ -3015,7 +3027,7 @@ mod beat_tests {
         p.draw_panel(
             &mut c, &library, 500.0, 40.0, 340.0, 400.0, 1.0, None, None, None, None,
         );
-        let [bx, by, _, bh] = p.box_rect.expect("the lane");
+        let [_, by, _, bh] = p.box_rect.expect("the lane");
         let fill = crate::style::surface_fill(crate::style::Surface::Raised);
         let tile = c
             .shapes
@@ -3029,16 +3041,42 @@ mod beat_tests {
             .expect("the lane's tile");
         let (left, right) = (tile.center[0] - tile.half[0], tile.center[0] + tile.half[0]);
         let [gx, _, gw, _] = p.graph_rect.expect("the timeline");
-        // In from the tile's left edge, under the lane's start, as it was; on to its right edge.
         assert!(
-            (gx - bx).abs() < 0.01 && gx > left + 5.0,
-            "it starts at {gx}, the lane at {bx}, the tile at {left}"
-        );
-        assert!(
-            (gx + gw - right).abs() < 0.01,
-            "it ends at {}, the tile at {right}",
+            (gx - left).abs() < 0.01 && (gx + gw - right).abs() < 0.01,
+            "the timeline {gx}..{} under the tile {left}..{right}",
             gx + gw
         );
+    }
+
+    #[test]
+    fn the_timelines_lines_stay_on_it_at_its_very_ends() {
+        let g = difficulty::Graph {
+            start: 0.0,
+            end: 10_000.0,
+            peaks: vec![0.5; 10],
+            peaks_start: 0.0,
+            section: 1000.0,
+            peak_nps: 7.0,
+            peak_nps_at: 1000.0,
+            kiai: vec![(9000.0, 10_000.0)],
+        };
+        let rect = [100.0, 50.0, 300.0, 32.0];
+        for boxed in [false, true] {
+            // The playhead, the preview point and the start point at the start, then at the end.
+            for (now, at) in [(0.0, 0.0), (10_000.0, 10_000.0)] {
+                let mut c = Canvas::default();
+                draw_graph(&mut c, &g, rect, now, at, Some(at), boxed);
+                for sh in &c.shapes {
+                    let (l, r) = (sh.center[0] - sh.half[0], sh.center[0] + sh.half[0]);
+                    assert!(
+                        l >= rect[0] - 1e-3 && r <= rect[0] + rect[2] + 1e-3,
+                        "boxed {boxed}, at {at}: {l}..{r} out of {}..{}",
+                        rect[0],
+                        rect[0] + rect[2]
+                    );
+                }
+            }
+        }
     }
 
     #[test]

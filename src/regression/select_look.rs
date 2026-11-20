@@ -1016,11 +1016,11 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
     assert_eq!(strip.params[1], 0.0, "no edge round it");
     let [left, y, w, h] = rect(strip);
     let right = left + w;
-    // As far out past the lane's end as before its drum, so it's round at both ends (the lane
-    // itself is cut square to its box).
+    // From the lane's start (no drum left of it, out past the details' edge), on past the lane's
+    // end, so it's round there too (the lane itself is cut square to its box).
     let (before, after) = (lane_hit[0] - left, right - (lane_hit[0] + lane_hit[2]));
     assert!(
-        before > 4.0 && (before - after).abs() < 0.5,
+        before.abs() < 0.01 && after > 4.0,
         "{before} before the lane, {after} after it"
     );
     // Its notes run on to the tile's end and come in out of it, not out of its middle.
@@ -2120,7 +2120,8 @@ fn the_preview_lane_fits_its_round_tile_and_its_notes_slide_in_from_under_its_ed
         plain([end - 14.0, 20.0], [12.0, 12.0], [12.0, 0.0, 0.0, 0.0]),
         plain([end - 120.0, 20.0], [12.0, 12.0], [12.0, 0.0, 0.0, 0.0]),
     ];
-    preview::bare_lane_end(&mut shapes, 1, x, end, h);
+    let tile_left = x + 50.0;
+    preview::bare_lane_end(&mut shapes, 1, x, tile_left, end, h);
     let round = style::radius::SMALL;
     let span = |sh: &Shape| [sh.center[0] - sh.half[0], sh.center[0] + sh.half[0]];
     assert_eq!(
@@ -2129,29 +2130,23 @@ fn the_preview_lane_fits_its_round_tile_and_its_notes_slide_in_from_under_its_ed
     );
     assert_eq!(shapes[1].params[0], round, "the band round");
     assert!(
-        (span(&shapes[1])[0] - (x - 10.0)).abs() < 0.01 && (span(&shapes[1])[1] - end).abs() < 0.01,
-        "the band from the tile's left edge to its right one: {:?}",
+        (span(&shapes[1])[0] - tile_left).abs() < 0.01 && (span(&shapes[1])[1] - end).abs() < 0.01,
+        "the band from the tile's left edge (right of the drum) to its right one: {:?}",
         span(&shapes[1])
     );
     assert!(
         shapes[2].fill[3] == 0.0 && shapes[2].border[3] == 0.0,
         "no line along it: the tile is its frame"
     );
-    // The panel runs out to the tile's left edge, round there, square against the lane.
-    let tile_left = x - 10.0;
-    assert_eq!(shapes[3].params[0], round, "the drum's panel round");
+    // The drum's panel, left of the tile: not drawn.
     assert!(
-        (span(&shapes[3])[0] - tile_left).abs() < 0.01,
-        "from the tile's edge: {:?}",
-        span(&shapes[3])
+        shapes[3].fill[3] == 0.0 && shapes[3].border[3] == 0.0,
+        "no drum panel"
     );
-    assert_eq!(shapes[4].params[0], 0.0, "its square half");
-    assert!((span(&shapes[4])[1] - (x + 50.0)).abs() < 0.01);
-    assert!(span(&shapes[4])[0] > tile_left + round);
     let a = |i: usize| shapes[i].fill[3];
     // The notes aren't faded near the end: they slide in from under the tile's edge, cut by it
     // (faded in short of it, they seemed to appear in plain view).
-    for i in [5, 6, 7] {
+    for i in [4, 5, 6] {
         assert_eq!(a(i), 1.0, "note {i} drawn as it is");
     }
     assert_eq!(a(1), 1.0, "the band drawn as it is");
@@ -2271,4 +2266,83 @@ fn the_details_page_is_as_tall_as_what_is_on_it_and_grows_to_the_simulator() {
         grown[1] + grown[3],
         s.preview.panel_bottom
     );
+}
+
+#[test]
+fn everything_on_the_details_page_is_within_the_preview_tiles_edges_at_any_list_width() {
+    let (mut s, _songs, mut now) = menu_look("select-look-page-edges");
+    let (min, max) = ui::Select::share_range(853.3333).expect("room for both");
+    for share in [min, crate::config::LIST_SHARE.2, max] {
+        s.cfg.song_list_share = share;
+        let c = settled(&mut s, &mut now);
+        let page = details_page(&c);
+        let lane_hit = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
+        let fill = style::surface_fill(style::Surface::Raised);
+        let tile = c
+            .shapes
+            .iter()
+            .filter(|sh| {
+                same_rgb(sh.fill, fill)
+                    && sh.params[0] == style::radius::SMALL
+                    && sh.half[0] * 2.0 > 100.0
+                    && inside(sh.center, lane_hit, 1.0)
+            })
+            .map(rect)
+            .next()
+            .expect("the lane's tile");
+        let (left, right) = (tile[0], tile[0] + tile[2]);
+        // Everything drawn on the page (not the page itself or the picture across its top)
+        // keeps within the lane tile's edges: nothing sticks out, not by part of a pixel.
+        let out: Vec<[f32; 4]> = c
+            .shapes
+            .iter()
+            .filter(|sh| inside(sh.center, page, 0.0) && sh.half[0] * 2.0 < page[2] - 1.0)
+            .filter(|sh| sh.fill[3] > 0.0 || sh.border[3] > 0.0)
+            .map(rect)
+            .filter(|r| r[0] < left - 0.01 || r[0] + r[2] > right + 0.01)
+            .collect();
+        assert!(
+            out.is_empty(),
+            "share {share}: out of {left}..{right}: {out:?}"
+        );
+        // No text runs into another.
+        let texts: Vec<(String, [f32; 4])> = c
+            .texts
+            .iter()
+            .filter(|(r, _)| r.start < r.end)
+            .filter(|(r, _)| inside(c.shapes[r.start].center, page, 0.0))
+            .map(|(r, t)| {
+                let rs: Vec<[f32; 4]> = c.shapes[r.clone()].iter().map(rect).collect();
+                let x0 = rs.iter().map(|r| r[0]).fold(f32::MAX, f32::min);
+                let x1 = rs.iter().map(|r| r[0] + r[2]).fold(f32::MIN, f32::max);
+                let y0 = rs.iter().map(|r| r[1]).fold(f32::MAX, f32::min);
+                let y1 = rs.iter().map(|r| r[1] + r[3]).fold(f32::MIN, f32::max);
+                (t.clone(), [x0, y0, x1, y1])
+            })
+            .collect();
+        for (i, (a, ra)) in texts.iter().enumerate() {
+            for (b, rb) in &texts[i + 1..] {
+                let apart = ra[2] <= rb[0] || rb[2] <= ra[0] || ra[3] <= rb[1] || rb[3] <= ra[1];
+                assert!(apart, "share {share}: {a:?} {ra:?} runs into {b:?} {rb:?}");
+            }
+        }
+        // And the details start on the same line as the lane: the title, the stats, the
+        // timeline's times.
+        for t in ["Regression", "OD", "0:00 / 0:10"] {
+            let at = c
+                .texts
+                .iter()
+                .filter(|(_, s)| s.starts_with(t))
+                .filter_map(|(r, _)| c.shapes.get(r.start))
+                .filter(|sh| inside(sh.center, page, 0.0))
+                .map(rect)
+                .next()
+                .expect(t);
+            assert!(
+                at[0] >= left - 0.01 && at[0] < left + 7.0,
+                "share {share}: {t} at {}, the lane from {left}",
+                at[0]
+            );
+        }
+    }
 }
