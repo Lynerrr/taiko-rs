@@ -147,6 +147,11 @@ pub fn set_pixel_scale(scale: f32) {
     });
 }
 
+/// Physical pixels per UI unit (`set_pixel_scale`).
+pub fn pixel_scale() -> f32 {
+    PIXEL_SCALE.get()
+}
+
 pub fn snap(value: f32) -> f32 {
     let scale = PIXEL_SCALE.get();
     (value * scale).round() / scale
