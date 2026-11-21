@@ -475,9 +475,35 @@ fn fit_page(preview: &mut crate::preview::Preview, panel_top: f32, panel_h: f32,
 /// The time constant the details' page grows or shrinks to its contents with.
 const PAGE_FIT_TAU_MS: f32 = 60.0;
 
-/// How tall song select lays itself out (`render::Canvas::begin_space`): the screen's 480.
-fn space_height(_state: &State) -> f32 {
-    render::VIRTUAL_HEIGHT
+/// How tall song select lays itself out (`render::Canvas::begin_space`): on a computer in the
+/// main menu's look, the interface's own space (720 at scale 1: a unit a pixel at 720p, 1.5 at
+/// 1080p); the Legacy layout and a phone keep the screen's 480.
+fn space_height(state: &State) -> f32 {
+    if state.select.legacy || mobile::active() {
+        render::VIRTUAL_HEIGHT
+    } else {
+        render::ui_space_height(1.0)
+    }
+}
+
+/// The widest song select gets in its space: in the interface's own, a screen wider than 2:1
+/// (21:9) has it in its middle, the list and the panel no further apart than on 16:9's.
+fn space_width(state: &State) -> f32 {
+    if space_height(state) == render::VIRTUAL_HEIGHT {
+        f32::INFINITY
+    } else {
+        2.0 * space_height(state)
+    }
+}
+
+/// How song select's text comes out in its space (`render::TextSizes`): bigger than the rest
+/// in the interface's own, so a caption stays as many pixels as it was.
+fn space_text(state: &State) -> render::TextSizes {
+    if space_height(state) == render::VIRTUAL_HEIGHT {
+        render::TextSizes::SAME
+    } else {
+        render::TextSizes::UI
+    }
 }
 
 /// Play pressed (Enter, or a click on it): the map starts at once, in every layout.
@@ -495,9 +521,10 @@ fn draw_songs(
     // Song select lays itself out in a space of its own height, then maps it onto the screen.
     // What it hands to others (where the Play note is, the mixer's floor, the leaderboard's rows)
     // goes in the screen's units.
-    let space = canvas.begin_space(space_height(state));
+    let space = canvas.begin_space_in(space_height(state), space_text(state), space_width(state));
     let k = space.scale();
     state.select_scale = k;
+    state.select_left = canvas.left;
     // DT / HT show on the Mods button instead.
     state.select.rate_label =
         if (state.cfg.rate - 1.0).abs() > 1e-6 && state.cfg.mods.rate_override().is_none() {
@@ -545,7 +572,7 @@ fn draw_songs(
             &|e| scores::best_grade(plays, e.hash()),
         );
     }
-    let lw = Select::list_width(canvas.width, state.cfg.song_list_share);
+    let lw = state.select.list_w(canvas.width);
     state.select.arriving = None;
     // On the way from the menu: the search row comes on over the lane that folded into it,
     // and the list's cards drop out of it one by one (`Select::draw`). On the way back the list
@@ -767,7 +794,7 @@ fn draw_songs(
                     state.board_scroll = 0;
                 }
                 let rows = [x, top + BOARD_HEAD, pw + 18.0, fits as f32 * BOARD_ROW];
-                state.board_rect = Some(rows.map(|v| v * k));
+                state.board_rect = Some(space.rect_to_screen(rows));
                 // TJA charts have online boards only on a server with TJA boards.
                 if state.board_online && state.has_online_board(&state.library[i]) {
                     let board = state.online_board(hash, relax).cloned();
@@ -826,7 +853,7 @@ fn draw_songs(
             if lx != 0.0 || ly != 0.0 {
                 canvas.transform_since(pages, [0.0, 0.0], 1.0, lx, ly);
                 if let Some((_, area)) = state.frame_clip.as_mut() {
-                    area.x += lx / canvas.width.max(1.0);
+                    area.x += lx / (canvas.width + 2.0 * canvas.left).max(1.0);
                     area.y += ly / canvas.height;
                 }
             }
@@ -850,7 +877,7 @@ fn draw_songs(
             // Mods and Random bare icons on it, and Play its end, filled with the accent.
             let w = canvas.width;
             let right = panel_x + panel_w;
-            style::lane_surface(canvas, [panel_x, by, right - panel_x, bh]);
+            // No strip round them: the buttons stand on their own.
             // The volume mixer comes up above the lane, not over its buttons.
             state.volume.keep_above(by * k);
             // Mods, Random and Play: blocks of one height inside the lane, on one middle line,
@@ -920,8 +947,8 @@ fn draw_songs(
                 right - ACTIONS_INSET - play_x,
                 inner_h,
             ];
-            let ([px, py], r) = style::lane_end_disc([bar[0], bar[1], bar[3]]);
-            state.play_icon_at = Some(([px * k, py * k], r * k));
+            let (at, r) = style::lane_end_disc([bar[0], bar[1], bar[3]]);
+            state.play_icon_at = Some((space.to_screen(at), r * k));
             style::lane_end_button(canvas, "select-play", bar, play, hit, !play_away);
         }
         // The song list's right edge: the gap between the list's box (`ui`, ending
@@ -947,7 +974,7 @@ fn draw_songs(
     } else if state.pick_to_edit && !phone {
         let w = canvas.width;
         canvas.round_rect(
-            [24.0, 438.0],
+            [24.0, canvas.height - 42.0],
             [w - 48.0, 34.0],
             8.0,
             rgba(0x1d1630, 1.0),
@@ -956,7 +983,7 @@ fn draw_songs(
         );
         canvas.text_centered(
             w / 2.0,
-            450.0,
+            canvas.height - 30.0,
             10.0,
             rgba(0xffffff, 1.0),
             &Canvas::fit(
@@ -968,7 +995,7 @@ fn draw_songs(
     } else if state.picking_lobby_map && !phone {
         let w = canvas.width;
         canvas.round_rect(
-            [24.0, 438.0],
+            [24.0, canvas.height - 42.0],
             [w - 48.0, 34.0],
             8.0,
             rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0),
@@ -977,7 +1004,7 @@ fn draw_songs(
         );
         canvas.text_centered(
             w / 2.0,
-            450.0,
+            canvas.height - 30.0,
             10.0,
             rgba(0xffffff, 1.0),
             &Canvas::fit(
@@ -1158,12 +1185,17 @@ fn draw_shift(
     let shown = if into { (t * 2.0).min(1.0) } else { 1.0 };
     draw_crowd(state, canvas, frame.now, false, shown, ph.cam);
     if ph.landed < 1.0 {
-        // The search row where song select lays it out, on the screen.
-        let k = render::VIRTUAL_HEIGHT / space_height(state);
-        let lw = Select::list_width(w / k, state.cfg.song_list_share);
+        // The search row where song select lays it out (`draw_songs`), on the screen.
+        let h = space_height(state);
+        state.select.height = h;
+        state.select.list_share = state.cfg.song_list_share;
+        let k = render::VIRTUAL_HEIGHT / h;
+        let left = ((w / k - space_width(state)) / 2.0).max(0.0);
+        let lw = state.select.list_w(w / k - 2.0 * left);
         let top = state.select.frame_span()[0];
-        let strip_top = ui::SEARCH_ROW - ui::SEARCH_STRIP_PAD;
-        let row = [20.0, strip_top, lw + 8.0, top - strip_top].map(|v| v * k);
+        let strip_top = state.select.search_row() - ui::SEARCH_STRIP_PAD;
+        let [x, y, rw, rh] = [20.0 + left, strip_top, lw + 8.0, top - strip_top];
+        let row = [x * k, y * k, rw * k, rh * k];
         // A kiai on the menu stays on its lane as the camera carries it off, going out as the
         // lane folds into the search row.
         let (edge, fill) = state

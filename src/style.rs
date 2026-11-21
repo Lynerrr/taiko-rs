@@ -935,11 +935,24 @@ const ICON_BUTTON_GAP: f32 = 6.0;
 
 /// The width of `icon_button` with this label (and caption).
 pub fn icon_button_width(label: &str, caption: Option<&str>, size: f32) -> f32 {
-    let text = caption
-        .map_or(0.0, |c| Canvas::text_width(5.0, c))
-        .max(Canvas::text_width(size, label));
+    let text = match caption {
+        Some(cap) if caption_inline(size) => {
+            Canvas::text_width(5.0, cap) + CAPTION_INLINE_GAP + Canvas::text_width(size, label)
+        }
+        Some(cap) => Canvas::text_width(5.0, cap).max(Canvas::text_width(size, label)),
+        None => Canvas::text_width(size, label),
+    };
     ICON_BUTTON_ICON + ICON_BUTTON_GAP + text + 12.0
 }
+
+/// Whether a button's caption goes before its label on one line rather than over it: where
+/// text comes out taller than asked (`render::TextSizes`), two lines no longer fit the button.
+fn caption_inline(size: f32) -> bool {
+    crate::render::shown_text_size(5.0) + crate::render::shown_text_size(size) > 5.0 + size + 0.5
+}
+
+/// Between a caption and its label on one line (`caption_inline`).
+const CAPTION_INLINE_GAP: f32 = 4.0;
 
 /// A button as the main menu draws its notes' icons: `icon` bare and its `label` beside it,
 /// no box round them; under the pointer the label lights white and the selector's brackets close
@@ -1036,6 +1049,11 @@ fn labelled_button(
     let lx = x + ICON_BUTTON_ICON + ICON_BUTTON_GAP;
     let split = if lit { pulse() * 1.2 } else { 0.0 };
     match caption {
+        Some(cap) if caption_inline(size) => {
+            let cw = c.text(lx, y - 2.5, 5.0, rgba(0x6a6a88, 1.0), cap);
+            let lx = lx + cw + CAPTION_INLINE_GAP;
+            glitch_text(c, lx, y - size / 2.0, size, col, label, split);
+        }
         Some(cap) => {
             c.text(lx, y - 8.0, 5.0, rgba(0x6a6a88, 1.0), cap);
             glitch_text(c, lx, y - 1.0, size, col, label, split);
@@ -1052,12 +1070,6 @@ fn labelled_button(
 thread_local! {
     /// How lit each lane-end button is (0 to 1), easing towards whether the pointer is on it.
     static LIGHTS: RefCell<HashMap<&'static str, f32>> = RefCell::new(HashMap::new());
-}
-
-/// A strip in the menu lane's place as a surface: the raised tone alone, no lines round it, its
-/// corners as round as the cards' (song select's lane of actions in the main menu's look).
-pub fn lane_surface(c: &mut Canvas, rect: [f32; 4]) {
-    surface(c, rect, radius::CARD, Surface::Raised);
 }
 
 /// The middle and radius at rest of the main menu's Play note at the end of a lane `[x, y, h]`
@@ -1233,29 +1245,83 @@ pub fn star_chip(
         Some(level) => level_text(level),
         None => stars.map_or_else(|| "...".into(), |s| format!("{s:.2}")),
     };
+    // A badge as the mods' are; without a rating yet, the quiet chip.
+    if level.or(stars).is_some() {
+        return rated_badge(c, right, y, size, role::rating(level, stars), &text);
+    }
     let tw = Canvas::text_width(size, &text);
     let (w, h) = (tw + size * 1.6 + 6.0, size + 6.0);
     let x = right - w;
     surface(c, [x, y - 3.0, w, h], radius::SMALL, Surface::Lifted);
-    let col = role::rating(level, stars);
-    let d = size * 0.32;
-    let (dx, dy) = (x + size * 0.6 + 2.0, y - 3.0 + h / 2.0);
-    let fill = rgba(col, 1.0);
-    c.round_rect(
-        [dx - d, dy - d],
-        [d * 2.0, d * 2.0],
-        d * 0.4,
-        fill,
-        fill,
-        0.0,
-    );
     c.text(
         x + size * 1.3 + 4.0,
         y,
         size,
-        rgba(ink::PRIMARY, 1.0),
+        rgba(ink::CAPTION, 1.0),
         &text,
     );
+    w
+}
+
+/// A colour as a badge's ink on its dark tint: as it is, or lifted towards white where it's too
+/// dark to read there (the top of the star spectrum).
+pub fn badge_ink(col: u32) -> u32 {
+    let luma = 0.299 * (col >> 16 & 0xff) as f32
+        + 0.587 * (col >> 8 & 0xff) as f32
+        + 0.114 * (col & 0xff) as f32;
+    if luma < 110.0 {
+        crate::menu::tint(col, 0xffffff, 0.45)
+    } else {
+        col
+    }
+}
+
+/// A badge as the mods' (`HR`, `HD`) are, over `[x, y, w, h]`: a dark tint of `col`, a line
+/// of it round, for text in it (`badge_ink`).
+pub fn badge(c: &mut Canvas, [x, y, w, h]: [f32; 4], col: u32) {
+    c.round_rect(
+        [x, y],
+        [w, h],
+        radius::SMALL,
+        rgba(crate::menu::tint(col, 0x000000, 0.78), 0.92),
+        rgba(col, 0.9),
+        1.0,
+    );
+}
+
+/// `map_pill_lit` in the main menu's look: lit, a badge (`badge`) of its rating's colour with
+/// the value in it, rather than a block filled with it.
+pub fn map_badge(
+    c: &mut Canvas,
+    right: f32,
+    y: f32,
+    size: f32,
+    level: Option<f32>,
+    stars: Option<f32>,
+    lit: bool,
+) -> f32 {
+    let rated = level.or(stars);
+    if !lit || rated.is_none() {
+        return map_pill_lit(c, right, y, size, level, stars, lit);
+    }
+    let text = match level {
+        Some(level) => level_text(level),
+        None => stars.map_or_else(|| "...".into(), |s| format!("{s:.2}")),
+    };
+    rated_badge(c, right, y, size, role::rating(level, stars), &text)
+}
+
+/// A rating as a badge ending at `right`: the diamond and `text` in `col`; as tall as a pill.
+fn rated_badge(c: &mut Canvas, right: f32, y: f32, size: f32, col: u32, text: &str) -> f32 {
+    let tw = Canvas::text_width(size, text);
+    let (w, h) = (tw + size * 1.6 + 6.0, size + 6.0);
+    let x = right - w;
+    badge(c, [x, y - 3.0, w, h], col);
+    let ink = rgba(badge_ink(col), 1.0);
+    let d = size * 0.32;
+    let (dx, dy) = (x + size * 0.6 + 2.0, y - 3.0 + h / 2.0);
+    c.round_rect([dx - d, dy - d], [d * 2.0, d * 2.0], d * 0.4, ink, ink, 0.0);
+    c.text(x + size * 1.3 + 4.0, y, size, ink, text);
     w
 }
 
@@ -1317,7 +1383,7 @@ fn rating_pill(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_details_rating_is_a_quiet_chip_with_its_colour_on_a_diamond_only() {
+    fn the_details_rating_is_a_badge_as_the_mods_are_dark_with_its_colour_on_the_edge_and_ink() {
         let mut c = Canvas::default();
         let w = star_chip(&mut c, 400.0, 100.0, 10.0, None, Some(5.36));
         let mut pill = Canvas::default();
@@ -1326,20 +1392,35 @@ mod tests {
             map_pill(&mut pill, 400.0, 100.0, 10.0, None, Some(5.36)),
             "as wide"
         );
-        let col = rgba(role::rating(None, Some(5.36)), 1.0);
-        assert_eq!(c.shapes[0].fill, surface_fill(Surface::Lifted), "the chip");
-        let coloured: Vec<_> = c.shapes.iter().filter(|s| s.fill == col).collect();
-        assert_eq!(coloured.len(), 1, "only the diamond");
-        assert!(coloured[0].half[0] < 5.0);
+        let col = role::rating(None, Some(5.36));
+        // The badge: a dark fill of the rating's colour under a one-unit edge of it.
+        let chip = &c.shapes[0];
+        assert_eq!(
+            chip.fill,
+            rgba(crate::menu::tint(col, 0x000000, 0.78), 0.92)
+        );
+        assert_eq!(chip.border, rgba(col, 0.9));
+        assert_eq!(chip.params[1], 1.0, "a one-unit edge");
+        assert_eq!(chip.half[0] * 2.0, w);
+        // Not a block of the colour: the diamond and the value are in its ink, nothing is
+        // filled with the rating's colour itself.
+        let ink = rgba(badge_ink(col), 1.0);
+        assert!(
+            !c.shapes
+                .iter()
+                .any(|s| s.fill == rgba(col, 1.0) && s.half[0] > 5.0),
+            "no block of the colour"
+        );
+        let inked = c.shapes.iter().filter(|s| s.fill == ink).count();
+        assert!(inked > 1, "the diamond and the value in its ink: {inked}");
     }
 
     #[test]
-    fn the_lane_is_a_panel_and_its_play_end_a_button_in_the_accent_without_a_glow() {
+    fn the_lanes_play_end_is_a_button_in_the_accent_without_a_glow() {
         let mut c = Canvas {
             width: 853.3,
             ..Canvas::default()
         };
-        lane_surface(&mut c, [480.0, 400.0, 375.0, 50.0]);
         let strip = c.shapes.len();
         lane_end_button(
             &mut c,
@@ -1349,7 +1430,6 @@ mod tests {
             crate::hit::Hit::Key(winit::keyboard::KeyCode::Enter),
             true,
         );
-        assert_eq!(c.shapes[0].params[0], radius::CARD, "the lane");
         // The Play bar: the widest shape from its left edge.
         let bar = c.shapes[strip..]
             .iter()

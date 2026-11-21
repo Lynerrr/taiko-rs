@@ -14,17 +14,9 @@ pub const VIRTUAL_HEIGHT: f32 = 480.0;
 /// How tall the interface's own space is on a desktop at `ui_scale` 1 (`Canvas::begin_space`):
 /// a unit is a pixel at 720p, 1.5 at 1080p and 2 at 1440p, where the screen's 480 units are
 /// 1.5, 2.25 and 3.
-#[allow(
-    dead_code,
-    reason = "song select lays itself out in it next; until then only the tests use it"
-)]
 pub const UI_SPACE_HEIGHT: f32 = 720.0;
 
 /// How tall the interface's space is at `ui_scale` (bigger `ui_scale`, fewer units, all bigger).
-#[allow(
-    dead_code,
-    reason = "song select lays itself out in it next; until then only the tests use it"
-)]
 pub fn ui_space_height(ui_scale: f32) -> f32 {
     let scale = if ui_scale.is_finite() {
         ui_scale.clamp(0.5, 2.0)
@@ -40,14 +32,19 @@ pub fn ui_space_height(ui_scale: f32) -> f32 {
 pub struct Space {
     /// Screen units per unit of the space (480 / its height).
     scale: f32,
+    /// How far in from the screen's left edge it starts (its units): a space narrower than the
+    /// screen sits in its middle.
+    left: f32,
     start: usize,
     hits: usize,
     regions: usize,
     width: f32,
     height: f32,
+    left_before: f32,
     mouse: (f32, f32),
     grid: f32,
     font_scale: f32,
+    text: TextSizes,
     disc: Option<[f32; 4]>,
 }
 
@@ -60,12 +57,18 @@ impl Space {
     /// A point of the space on the screen (virtual units, 480 tall): for what other screens
     /// take from this one, as the place a note flies to.
     pub fn to_screen(&self, [x, y]: [f32; 2]) -> [f32; 2] {
-        [x * self.scale, y * self.scale]
+        [(x + self.left) * self.scale, y * self.scale]
+    }
+
+    /// A rect `[x, y, w, h]` of the space on the screen.
+    pub fn rect_to_screen(&self, [x, y, w, h]: [f32; 4]) -> [f32; 4] {
+        let [x, y] = self.to_screen([x, y]);
+        [x, y, w * self.scale, h * self.scale]
     }
 
     /// A point of the screen in the space.
     pub fn to_space(&self, [x, y]: [f32; 2]) -> [f32; 2] {
-        [x / self.scale, y / self.scale]
+        [x / self.scale - self.left, y / self.scale]
     }
 }
 
@@ -3478,6 +3481,54 @@ thread_local! {
     /// Render pixels per virtual unit when text snaps to whole pixels, else 0 (`set_text_grid`).
     static TEXT_GRID: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
     static TEXT_BIAS: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+    /// How text sizes come out in the space being drawn (`Canvas::begin_space_sized`).
+    static TEXT_SIZES: std::cell::Cell<TextSizes> = const { std::cell::Cell::new(TextSizes::SAME) };
+}
+
+/// How a space draws text (`Canvas::begin_space_sized`): text asked for at `size` comes out
+/// `k * size + b` tall, centred on the line `size` takes; widths are measured as it comes out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextSizes {
+    pub k: f32,
+    pub b: f32,
+}
+
+impl TextSizes {
+    /// Text as asked for.
+    pub const SAME: Self = Self { k: 1.0, b: 0.0 };
+    /// The interface's own space (720 tall at scale 1) for what was drawn for the screen's 480:
+    /// the rest is two thirds the size there, text less so. A caption (`style::text::CAPTION`,
+    /// 6) is 9 units, as many pixels as before; body text (8) 10.5, a heading (12) 13.5 and the
+    /// title (18) 18.
+    pub const UI: Self = Self { k: 0.75, b: 4.5 };
+
+    /// How tall text asked for at `size` comes out.
+    pub fn shown(self, size: f32) -> f32 {
+        if size > 0.0 {
+            self.k * size + self.b
+        } else {
+            size
+        }
+    }
+
+    /// The size to ask for so text comes out `shown` tall.
+    pub fn asked(self, shown: f32) -> f32 {
+        if shown > 0.0 {
+            ((shown - self.b) / self.k).max(0.0)
+        } else {
+            shown
+        }
+    }
+}
+
+/// How tall text asked for at `size` comes out where it's drawn now (`TextSizes`).
+pub fn shown_text_size(size: f32) -> f32 {
+    TEXT_SIZES.with(std::cell::Cell::get).shown(size)
+}
+
+/// The size to ask for so text comes out `shown` tall where it's drawn now.
+fn asked_text_size(shown: f32) -> f32 {
+    TEXT_SIZES.with(std::cell::Cell::get).asked(shown)
 }
 
 /// Half resolution: text is laid on a grid of `px_per_unit` render pixels per virtual unit, each
@@ -3508,8 +3559,9 @@ fn font_script() -> font::Script {
     }
 }
 
-/// One font pixel (in virtual units) of text `size` units tall.
+/// One font pixel (in virtual units) of text asked for at `size` (`shown_text_size`).
 fn font_px(size: f32) -> f32 {
+    let size = shown_text_size(size);
     let grid = TEXT_GRID.with(std::cell::Cell::get);
     if grid > 0.0 {
         let bias = TEXT_BIAS.with(std::cell::Cell::get);
@@ -3805,6 +3857,9 @@ pub struct Canvas<H> {
     pub width: f32,
     /// How tall it is in its units: the screen's 480, or a space's (`begin_space`).
     pub height: f32,
+    /// How far in from the screen's left edge it starts, in its units: 0, or a space narrower
+    /// than the screen's (`begin_space_in`), which sits in its middle.
+    pub left: f32,
     /// Clickable areas, in drawing order (later ones are on top).
     pub hits: Vec<HitBox<H>>,
     /// Pointer position (virtual units), for hover highlights.
@@ -3860,6 +3915,7 @@ impl<H> Default for Canvas<H> {
             glitch: Default::default(),
             width: Default::default(),
             height: VIRTUAL_HEIGHT,
+            left: 0.0,
             hits: Default::default(),
             mouse: Default::default(),
             dt_ms: Default::default(),
@@ -4708,24 +4764,42 @@ impl<H> Canvas<H> {
     /// until `end_space` maps it onto the screen. The pointer is in its units meanwhile, and text
     /// snaps to whole screen pixels of them: `h` 480 is the screen itself.
     pub fn begin_space(&mut self, h: f32) -> Space {
+        self.begin_space_sized(h, TextSizes::SAME)
+    }
+
+    /// `begin_space`, its text coming out as `text` says (`TextSizes`).
+    pub fn begin_space_sized(&mut self, h: f32, text: TextSizes) -> Space {
+        self.begin_space_in(h, text, f32::INFINITY)
+    }
+
+    /// `begin_space_sized`, at most `max_w` of its units wide: narrower than the screen, it
+    /// sits in the screen's middle (`left` in from its left edge).
+    pub fn begin_space_in(&mut self, h: f32, text: TextSizes, max_w: f32) -> Space {
         let scale = self.height / h.max(1.0);
+        let full = self.width / scale;
+        let left = ((full - max_w) / 2.0).max(0.0);
         let grid = TEXT_GRID.with(std::cell::Cell::get);
         let font_scale = crate::system_font::pixel_scale();
         let space = Space {
             scale,
+            left,
             start: self.shapes.len(),
             hits: self.hits.len(),
             regions: self.input_regions.len(),
             width: self.width,
             height: self.height,
+            left_before: self.left,
             mouse: self.mouse,
             grid,
             font_scale,
+            text: TEXT_SIZES.with(std::cell::Cell::get),
             disc: self.disc,
         };
-        self.width /= scale;
+        TEXT_SIZES.with(|t| t.set(text));
+        self.width = full - 2.0 * left;
         self.height = h.max(1.0);
-        self.mouse = (self.mouse.0 / scale, self.mouse.1 / scale);
+        self.left = left;
+        self.mouse = (self.mouse.0 / scale - left, self.mouse.1 / scale);
         // Render pixels per unit: a unit of the space is `scale` of the screen's.
         if grid > 0.0 {
             TEXT_GRID.with(|g| g.set(grid * scale));
@@ -4738,33 +4812,45 @@ impl<H> Canvas<H> {
     /// fields' places) and puts the canvas back as it was.
     pub fn end_space(&mut self, space: Space) {
         let k = space.scale;
-        self.rescale_since(space.start, space.hits, space.regions, k);
+        let dx = space.left * k;
+        self.rescale_since(space.start, space.hits, space.regions, k, dx);
         if self.disc != space.disc
             && let Some(d) = self.disc.as_mut()
         {
-            d[0] *= k;
+            d[0] = d[0] * k + dx;
             d[1] *= k;
             d[2] *= k;
         }
         self.width = space.width;
         self.height = space.height;
+        self.left = space.left_before;
         self.mouse = space.mouse;
         TEXT_GRID.with(|g| g.set(space.grid));
         crate::system_font::set_pixel_scale(space.font_scale);
+        TEXT_SIZES.with(|t| t.set(space.text));
     }
 
     /// Scales what was drawn since shape `start` (and click `hits`, text field `regions`) `k`
-    /// times about the top left corner: shapes, clicks, clips and the text fields' places.
-    pub(crate) fn rescale_since(&mut self, start: usize, hits: usize, regions: usize, k: f32) {
-        self.transform_since(start, [0.0, 0.0], k, 0.0, 0.0);
+    /// times about the top left corner, then moves it `dx` right: shapes, clicks, clips and the
+    /// text fields' places.
+    pub(crate) fn rescale_since(
+        &mut self,
+        start: usize,
+        hits: usize,
+        regions: usize,
+        k: f32,
+        dx: f32,
+    ) {
+        self.transform_since(start, [0.0, 0.0], k, dx, 0.0);
+        let map = |[x, y, w, h]: [f32; 4]| [x * k + dx, y * k, w * k, h * k];
         // A click made before the first of those shapes isn't moved with the shapes.
         for h in self.hits[hits..].iter_mut().filter(|h| h.shape <= start) {
-            h.rect = h.rect.map(|v| v * k);
+            h.rect = map(h.rect);
         }
         for r in &mut self.input_regions[regions..] {
-            r.rect = r.rect.map(|v| v * k);
+            r.rect = map(r.rect);
             for (_, x) in &mut r.stops {
-                *x *= k;
+                *x = *x * k + dx;
             }
         }
     }
@@ -4962,9 +5048,12 @@ impl<H> Canvas<H> {
         let first = self.shapes.len();
         let texts = self.texts.len();
         let mut cx = x;
-        let scale = custom::scale(size);
+        // As tall as it comes out in this space, centred on the line `size` takes.
+        let shown = shown_text_size(size);
+        let y = y + (size - shown) / 2.0;
+        let scale = custom::scale(shown);
         for ch in s.chars() {
-            if let Some(glyph) = custom::glyph_at(ch, size) {
+            if let Some(glyph) = custom::glyph_at(ch, shown) {
                 let m = glyph.metrics;
                 let raster_scale = scale * glyph.design_scale;
                 let gx = custom::snap(cx + m.xmin as f32 * raster_scale);
@@ -5130,7 +5219,7 @@ impl<H> Canvas<H> {
     fn custom_advance(size: f32, ch: char) -> f32 {
         crate::system_font::advance(ch).map_or_else(
             || (font::columns(font::index_for(ch, font_script())) + 1) as f32 * font_px(size),
-            |advance| advance * crate::system_font::scale(size),
+            |advance| advance * crate::system_font::scale(shown_text_size(size)),
         )
     }
 
@@ -5199,10 +5288,23 @@ impl<H> Canvas<H> {
         out
     }
 
+    /// The `y` to draw text of `size` at for its ink to start at `top`: text that comes out
+    /// taller than asked (`TextSizes`, a text grid) is centred on the line `size` takes, so it
+    /// starts higher than `y` by half of what it grew.
+    pub fn text_y_at(top: f32, size: f32) -> f32 {
+        top - (size - Self::text_height(size)) / 2.0
+    }
+
+    /// The `y` to draw text of `size` at for it to be centred on `mid`: `text` centres what
+    /// comes out on the line `size` takes, so that line's middle goes there.
+    pub fn text_y_mid(mid: f32, size: f32) -> f32 {
+        mid - size / 2.0
+    }
+
     /// How tall text `size` comes out (`size`, or more on a text grid).
     pub fn text_height(size: f32) -> f32 {
         if crate::system_font::active() {
-            size
+            shown_text_size(size)
         } else {
             font_px(size) * 7.0
         }
@@ -5216,11 +5318,12 @@ impl<H> Canvas<H> {
             return size;
         }
         let grid = TEXT_GRID.with(std::cell::Cell::get);
-        if grid > 0.0 {
+        let shown = if grid > 0.0 {
             (max_h / 7.0 * grid).floor().max(1.0) / grid * 7.0
         } else {
             max_h
-        }
+        };
+        asked_text_size(shown)
     }
 
     pub fn text_centered(&mut self, cx: f32, y: f32, size: f32, color: [f32; 4], s: &str) {
@@ -5306,7 +5409,7 @@ impl<H> Canvas<H> {
         if grid > 0.0 && !crate::system_font::active() {
             // Font pixels come in whole render pixels: the biggest that fits.
             let per_px = max_w / text_units(s, font_script()).max(1) as f32;
-            return ((per_px * grid).floor().max(1.0) / grid * 7.0).max(min);
+            return asked_text_size((per_px * grid).floor().max(1.0) / grid * 7.0).max(min);
         }
         (size * max_w / w).max(min)
     }

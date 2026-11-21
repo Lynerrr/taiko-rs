@@ -259,6 +259,8 @@ pub struct Preview {
     /// Screen units to one of those the rects above were drawn in: song select draws the
     /// panel in a space of its own (`render::Canvas::begin_space`). 0 (none yet) is 1.
     drawn_scale: f32,
+    /// And how far in from the screen's left edge that space started (its units).
+    drawn_left: f32,
     /// When the shown map's details could first be shown (they fade in), and for which entry.
     ready_at: Option<Instant>,
     shown_for: Option<usize>,
@@ -1079,12 +1081,13 @@ impl Preview {
         } else {
             1.0
         };
-        (x / k, y / k)
+        (x / k - self.drawn_left, y / k)
     }
 
     /// Notes the units of the canvas the panel's rects are drawn in.
     fn drawn_in(&mut self, c: &Canvas) {
         self.drawn_scale = VIRTUAL_HEIGHT / c.height.max(1.0);
+        self.drawn_left = c.left;
     }
 
     pub fn play_button_at(&self, x: f32, y: f32) -> bool {
@@ -1251,10 +1254,13 @@ impl Preview {
             right -= 6.0;
         }
         let ty = cy + (MAPPER_H - Canvas::text_height(text::BODY)) / 2.0;
-        let by = tr!("mapped by ", "譜面: ", "маппер: ");
-        let bw = c.text(lx, ty, text::BODY, rgba(ink::CAPTION, 1.0), by);
-        let name = Canvas::fit(text::BODY, (right - lx - bw).max(0.0), &e.meta.creator);
-        c.text(lx + bw, ty, text::BODY, rgba(ink::PRIMARY, 1.0), &name);
+        // No mapper given (a TJA chart without MAKER): no empty "mapped by".
+        if !e.meta.creator.trim().is_empty() {
+            let by = tr!("mapped by ", "譜面: ", "маппер: ");
+            let bw = c.text(lx, ty, text::BODY, rgba(ink::CAPTION, 1.0), by);
+            let name = Canvas::fit(text::BODY, (right - lx - bw).max(0.0), &e.meta.creator);
+            c.text(lx + bw, ty, text::BODY, rgba(ink::PRIMARY, 1.0), &name);
+        }
         cy += MAPPER_H + BLOCK_GAP;
         self.enter(c, part, 70.0);
 
@@ -2145,11 +2151,16 @@ impl Preview {
                 }
                 None => 0.0,
             };
-            let mapper = Canvas::fit(
-                8.0,
-                iw - status_w - heart_w,
-                &format!("mapped by {}", e.meta.creator),
-            );
+            // No mapper given (a TJA chart without MAKER): no empty "mapped by".
+            let mapper = if e.meta.creator.trim().is_empty() {
+                String::new()
+            } else {
+                Canvas::fit(
+                    8.0,
+                    iw - status_w - heart_w,
+                    &format!("mapped by {}", e.meta.creator),
+                )
+            };
             c.text(
                 lx,
                 cy + (13.0 - th_small) / 2.0,
@@ -2348,12 +2359,14 @@ impl Preview {
         // Bare, from the tile's left edge: the drum and its panel left of it are cut off.
         let clip_x = if self.bare { lane_x } else { bx };
         let clip = crate::layout::Area {
-            x: clip_x / full_w,
+            x: (clip_x + c.left) / (full_w + 2.0 * c.left),
             y: by / c.height,
-            w: (notes_end - clip_x) / full_w,
+            w: (notes_end - clip_x) / (full_w + 2.0 * c.left),
             h: bh / c.height,
         };
-        // Only the lane is clipped to the box.
+        // Only the lane is clipped to the box, hard: notes with a clip of their own (a TJA
+        // chart's #NOTESPAWN brings them in from above or below the lane) are cut to it too.
+        c.clip_since(start, clip_x, by, notes_end - clip_x, bh);
         let end = c.shapes.len();
         if let Some((at, windows)) = tip {
             draw_hit_windows(c, at, windows);
@@ -3110,6 +3123,81 @@ mod beat_tests {
         for (x, y) in spots {
             assert!(matches!(top(&c, x, y), Some(Hit::SocialPanel)));
         }
+    }
+
+    /// Notes a TJA chart brings in from above or below the lane (#SCROLL with an imaginary
+    /// part) are cut to the lane's box, hard: none of them shows over what's above or under it.
+    #[test]
+    fn notes_from_above_or_below_are_cut_to_the_lane() {
+        // Without the interface's animations: the lane all there at once.
+        crate::render::set_frame_theme(Some(crate::render::Theme {
+            animations: false,
+            ..crate::render::Theme::default()
+        }));
+        let text = format!(
+            "TITLE:Sideways\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n#SCROLL 0.5+2i\n{}#END\n",
+            "1111,\n".repeat(8)
+        );
+        let map = taiko_logic::tja::parse(&text)
+            .unwrap()
+            .courses
+            .remove(0)
+            .map;
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.tja"),
+            map.meta.clone(),
+        )];
+        let mut game = new_preview_game(&map, 1.0);
+        game.game.set_time(3000.0);
+        let mut p = Preview {
+            seen: Some(0),
+            ready_for: Some(0),
+            game: Some(game),
+            map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+            bare: true,
+            ..Default::default()
+        };
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        p.draw_panel(
+            &mut c, &library, 500.0, 40.0, 340.0, 400.0, 1.0, None, None, None, None,
+        );
+        let [bx, by, bw, bh] = p.box_rect.expect("the lane");
+        let (mut seen, mut outside) = (0, 0);
+        for (k, sh) in c.shapes.iter().enumerate() {
+            let red = sh.fill[3] > 0.5 && sh.fill[0] > 0.8 && sh.fill[1] < 0.4 && sh.fill[2] < 0.4;
+            let round = sh.half[0] > 1.5 && (sh.half[0] - sh.half[1]).abs() < 0.01;
+            if !red || !round || sh.center[0] < bx || sh.center[0] > bx + bw {
+                continue;
+            }
+            let drawn = [
+                sh.center[0] - sh.half[0],
+                sh.center[1] - sh.half[1],
+                sh.center[0] + sh.half[0],
+                sh.center[1] + sh.half[1],
+            ];
+            if drawn[1] < by - 0.5 || drawn[3] > by + bh + 0.5 {
+                outside += 1;
+            }
+            // Where it shows: cut by every clip it's under.
+            let mut r = drawn;
+            for (range, [x, y, w, h]) in &c.clips {
+                if range.contains(&k) {
+                    r = [r[0].max(*x), r[1].max(*y), r[2].min(x + w), r[3].min(y + h)];
+                }
+            }
+            if r[0] >= r[2] || r[1] >= r[3] {
+                continue;
+            }
+            seen += 1;
+            assert!(
+                r[1] >= by - 0.5 && r[3] <= by + bh + 0.5,
+                "a note shows at {r:?}, outside the lane {by}..{}",
+                by + bh
+            );
+        }
+        assert!(seen > 0, "notes in the lane");
+        assert!(outside > 0, "notes drawn from outside the lane, to be cut");
     }
 
     #[test]

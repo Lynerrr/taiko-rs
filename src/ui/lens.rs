@@ -1136,11 +1136,12 @@ impl Select {
     pub(crate) fn draw_source_tabs(&self, c: &mut Canvas, x: f32, y: f32, w: f32, tabs: &[Source]) {
         use crate::style::{Surface, ink, radius, surface};
         let tw = w / tabs.len() as f32;
+        let tab_h = self.source_tab_h();
         let shown = self.shown_source();
         for (k, &s) in tabs.iter().enumerate() {
             let tx = x + k as f32 * tw;
             let on = s == shown;
-            let hover = c.hovered(tx, y, tw, SOURCE_TAB_H);
+            let hover = c.hovered(tx, y, tw, tab_h);
             // Each tab a chip of its own, as the search row's buttons are: the raised surface,
             // lifted under the pointer and while it's the one shown, which has a bar of the
             // accent along its bottom (no brackets: those are the list's selection).
@@ -1149,7 +1150,7 @@ impl Select {
             } else {
                 Surface::Raised
             };
-            let chip = [tx + 2.0, y + 1.0, tw - 4.0, SOURCE_TAB_H - 3.0];
+            let chip = [tx + 2.0, y + 1.0, tw - 4.0, tab_h - 3.0];
             surface(c, chip, radius::SMALL, level);
             if on {
                 let [cx, cy, cw, ch] = chip;
@@ -1174,20 +1175,31 @@ impl Select {
             } else {
                 ink::SECONDARY
             };
-            c.text(lx, y + 5.0, 7.0, rgba(col, 1.0), label);
+            // In the chip's middle (text comes out centred on the line its size takes).
+            let mid = y + 1.0 + (tab_h - 3.0) / 2.0;
+            c.text(lx, mid - 3.5, 7.0, rgba(col, 1.0), label);
             c.text(
                 lx + Canvas::text_width(7.0, label) + 6.0,
-                y + 6.0,
+                mid - 3.0,
                 6.0,
                 rgba(ink::CAPTION, 1.0),
                 &count,
             );
-            c.hit(tx, y, tw, SOURCE_TAB_H, Hit::SongSource(s.index()));
+            c.hit(tx, y, tw, tab_h, Hit::SongSource(s.index()));
         }
     }
 }
 
 impl Select {
+    /// How tall the source tabs over the list are.
+    pub(crate) fn source_tab_h(&self) -> f32 {
+        if self.in_ui_space() {
+            SOURCE_TAB_H_UI
+        } else {
+            SOURCE_TAB_H
+        }
+    }
+
     /// Takes the source and each source's lens from the config.
     pub fn read_lenses(&mut self, cfg: &crate::config::Config) {
         let mut words = cfg.song_order.split_whitespace();
@@ -1248,8 +1260,10 @@ fn same_height(row: usize, from: usize, to: usize) -> usize {
     ((row as f32 * (to - 1) as f32 / (from - 1) as f32).round() as usize).min(to - 1)
 }
 
-/// The height of the source tabs over the list.
+/// The height of the source tabs over the list; in the interface's own space, where their
+/// text is bigger beside them (`Select::source_tab_h`).
 pub(super) const SOURCE_TAB_H: f32 = 18.0;
+const SOURCE_TAB_H_UI: f32 = 22.0;
 /// The bar of the accent along the bottom of the source tab shown.
 const SOURCE_TAB_BAR: f32 = 2.0;
 

@@ -2024,7 +2024,7 @@ fn set_cards_carry_no_difficulty_count_over_their_pictures() {
 fn the_pp_button_leaves_values_out_rather_than_spill_out_of_a_narrow_panel() {
     let (mut s, _songs, mut now) = menu_look("select-look-pp-narrow");
     let c = settled(&mut s, &mut now);
-    let (_, widest) = ui::Select::share_range(c.width).expect("a range");
+    let (_, widest) = s.select.share_range_here(c.width).expect("a range");
     let mut fewest = 3;
     for k in 0..=8 {
         // From the list's default share to its widest (the panel's narrowest).
@@ -2542,7 +2542,9 @@ fn the_details_page_is_as_tall_as_what_is_on_it_and_grows_to_the_simulator() {
 #[test]
 fn everything_on_the_details_page_is_within_the_preview_tiles_edges_at_any_list_width() {
     let (mut s, _songs, mut now) = menu_look("select-look-page-edges");
-    let (min, max) = ui::Select::share_range(853.3333).expect("room for both");
+    // The screen's width in song select's own units.
+    let own = harness::WIDTH / s.select_scale - 2.0 * s.select_left;
+    let (min, max) = s.select.share_range_here(own).expect("room for both");
     for (share, drum) in [min, crate::config::LIST_SHARE.2, max]
         .into_iter()
         .flat_map(|share| [(share, true), (share, false)])

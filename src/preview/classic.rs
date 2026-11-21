@@ -318,6 +318,7 @@ impl Preview {
         );
         self.box_rect = Some([bx, by, bw, bh]);
         self.drawn_scale = VIRTUAL_HEIGHT / c.height.max(1.0);
+        self.drawn_left = c.left;
         c.hit(bx, by, bw, bh, Hit::Preview);
         let loaded = loaded.is_some();
         if loaded {

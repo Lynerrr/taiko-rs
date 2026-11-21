@@ -592,6 +592,9 @@ struct State {
     /// Screen units to one of song select's own (it lays itself out in a space of its own
     /// height, `render::Canvas::begin_space`), as last drawn: 1 where it uses the screen's.
     select_scale: f32,
+    /// How far in from the screen's left edge song select's space starts (its units): it sits
+    /// in the middle of a screen wider than it.
+    select_left: f32,
     /// A song select divider being dragged: which, where the pointer started (virtual units)
     /// and the size it had then; and the last press on one (a second soon after resets it).
     split_drag: Option<(hit::Hit, f32, f32)>,
@@ -6731,7 +6734,7 @@ impl State {
     fn mouse_select(&self) -> (f32, f32) {
         let (x, y) = self.mouse_virtual();
         let k = self.select_scale.max(1e-3);
-        (x / k, y / k)
+        (x / k - self.select_left, y / k)
     }
 
     /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
@@ -7122,8 +7125,10 @@ impl State {
                 }
                 // Kept where the list's width still follows it.
                 // The list's share of song select's own width, in its units.
-                if let Some((min, max)) = Select::share_range(width / self.select_scale.max(1e-3)) {
-                    self.cfg.song_list_share = (start + (vx - from) / width).clamp(min, max);
+                let own = width / self.select_scale.max(1e-3) - 2.0 * self.select_left;
+                if let Some((min, max)) = self.select.share_range_here(own) {
+                    let moved = (vx - from) / self.select_scale.max(1e-3) / own.max(1.0);
+                    self.cfg.song_list_share = (start + moved).clamp(min, max);
                 }
                 return CursorIcon::EwResize;
             }

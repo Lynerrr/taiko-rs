@@ -16,6 +16,8 @@ impl Select {
         grade: &dyn Fn(&Entry) -> Option<&'static str>,
     ) {
         self.open_cursor_section();
+        // In the screen's units, as ever.
+        self.height = c.height;
         let w = c.width;
         let mode = if self.show_converts {
             "taiko + converts"
