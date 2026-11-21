@@ -21,6 +21,9 @@ pub(super) fn draw_songs_classic(state: &mut State, canvas: &mut Canvas, frame: 
             String::new()
         };
     let (stars, rate, plays) = (&state.stars, state.play_speed().0, &state.scores);
+    // 1.0's song select is laid out in the screen's units.
+    state.select_scale = 1.0;
+    state.select_left = 0.0;
     state.select.scrubbing =
         (state.right_scroll || state.scrollbar_drag).then(|| state.mouse_virtual().1);
     state.select.list_share = state.cfg.song_list_share;

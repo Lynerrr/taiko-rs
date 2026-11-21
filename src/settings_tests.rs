@@ -1975,60 +1975,81 @@ fn point(s: &mut State, x: f32, y: f32) {
     s.mouse_moved(x as f64 * 2.25, y as f64 * 2.25);
 }
 
+/// Where song select's point `x`, `y` (its own units: its space may be taller than the
+/// screen's 480, and narrower, in the middle) is on the screen.
+fn on_screen(s: &State, x: f32, y: f32) -> (f32, f32) {
+    ((x + s.select_left) * s.select_scale, y * s.select_scale)
+}
+
+/// How wide song select's space is (its units), on the 853.3 wide screen these tests draw.
+fn select_width(s: &State) -> f32 {
+    853.3 / s.select_scale - 2.0 * s.select_left
+}
+
+/// How tall song select's space is (its units).
+fn select_height(s: &State) -> f32 {
+    crate::render::VIRTUAL_HEIGHT / s.select_scale
+}
+
 #[test]
 fn song_select_dividers_drag_within_limits_and_reset() {
     let mut s = select_with_scores();
-    let w = 853.3333f32;
     let frame = |s: &mut State| s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    frame(&mut s);
+    // Song select is laid out in a space of its own (taller than the screen's 480): where its
+    // units are on the screen.
+    let w = select_width(&s);
+    let at = |s: &State, x: f32, y: f32| on_screen(s, x, y);
+    let mid_y = select_height(&s) / 2.0;
     // The song list's edge, dragged right, then far past its limit.
-    let lw = Select::list_width(w, s.cfg.song_list_share);
-    // Its grip sits in the middle of the gap between the list's box (to 28 + lw) and the panel
-    // (from 36 + lw).
-    point(&mut s, 24.0 + lw + 8.0, 240.0);
-    assert_eq!(
-        s.hit_at(24.0 + lw + 8.0, 240.0),
-        Some(crate::hit::Hit::SplitList)
-    );
+    let lw = s.select.list_w(w);
+    // Its grip sits in the middle of the gap between the list's cards (to 24 + lw) and the
+    // panel (from 36 + lw).
+    let (gx, gy) = at(&s, 24.0 + lw + 6.0, mid_y);
+    point(&mut s, gx, gy);
+    assert_eq!(s.hit_at(gx, gy), Some(crate::hit::Hit::SplitList));
+    let (bx, by) = at(&s, 24.0 + lw - 2.0, mid_y);
     assert_ne!(
-        s.hit_at(24.0 + lw + 3.0, 240.0),
+        s.hit_at(bx, by),
         Some(crate::hit::Hit::SplitList),
         "not on the list's box"
     );
     // Only its grip in the middle, not the whole edge.
-    assert_ne!(
-        s.hit_at(24.0 + lw + 8.0, 120.0),
-        Some(crate::hit::Hit::SplitList)
-    );
+    let (tx, ty) = at(&s, 24.0 + lw + 6.0, mid_y / 2.0);
+    assert_ne!(s.hit_at(tx, ty), Some(crate::hit::Hit::SplitList));
     s.mouse_button(true, None);
-    point(&mut s, 24.0 + lw + 8.0 + 40.0, 240.0);
+    let (dx, dy) = at(&s, 24.0 + lw + 6.0 + 40.0, mid_y);
+    point(&mut s, dx, dy);
     assert!(
         (s.cfg.song_list_share - (ui::LIST_SHARE.2 + 40.0 / w)).abs() < 0.002,
         "{}",
         s.cfg.song_list_share
     );
-    point(&mut s, w, 240.0);
+    point(&mut s, 853.3, gy);
     s.mouse_button(false, None);
     assert!(s.split_drag.is_none());
-    let widest = Select::list_width(w, s.cfg.song_list_share);
+    frame(&mut s);
+    let widest = s.select.list_w(w);
     assert!(
-        s.cfg.song_list_share <= ui::LIST_SHARE.1 && w - 24.0 - widest - 12.0 - 24.0 >= 219.9,
+        s.cfg.song_list_share <= ui::LIST_SHARE.1 && w - 24.0 - widest - 12.0 - 24.0 >= 419.9,
         "the panel keeps its room: {widest}"
     );
     // And far left: the list keeps its room too.
-    frame(&mut s);
-    point(&mut s, 24.0 + widest + 8.0, 240.0);
+    let (gx, gy) = at(&s, 24.0 + widest + 6.0, mid_y);
+    point(&mut s, gx, gy);
     s.mouse_button(true, None);
-    point(&mut s, 0.0, 240.0);
+    point(&mut s, 0.0, gy);
     s.mouse_button(false, None);
-    let narrowest = Select::list_width(w, s.cfg.song_list_share);
+    frame(&mut s);
+    let narrowest = s.select.list_w(w);
     assert!(
-        s.cfg.song_list_share >= ui::LIST_SHARE.0 && narrowest >= 259.9,
+        s.cfg.song_list_share >= ui::LIST_SHARE.0 && narrowest >= 359.9,
         "{narrowest}"
     );
 
     // A double click on it puts it back.
-    frame(&mut s);
-    point(&mut s, 24.0 + narrowest + 8.0, 240.0);
+    let (gx, gy) = at(&s, 24.0 + narrowest + 6.0, mid_y);
+    point(&mut s, gx, gy);
     for _ in 0..2 {
         s.mouse_button(true, None);
         s.mouse_button(false, None);
@@ -2039,10 +2060,9 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     // at full size whatever an older config says.
     s.cfg.song_preview_size = preview::PREVIEW_SIZE.0;
     frame(&mut s);
-    let edge = s.preview.panel_bottom + 4.0;
-    let left = 24.0 + Select::list_width(w, s.cfg.song_list_share) + 12.0;
-    let mid = (left + w - 24.0) / 2.0;
-    assert_eq!(s.hit_at(mid, edge), None);
+    let left = 24.0 + s.select.list_w(w) + 12.0;
+    let (ex, ey) = at(&s, (left + w - 24.0) / 2.0, s.preview.panel_bottom + 4.0);
+    assert_eq!(s.hit_at(ex, ey), None);
     assert_eq!(s.preview.size, preview::PREVIEW_SIZE.1);
 
     // Settings > Library puts the whole layout back.
@@ -2067,17 +2087,8 @@ fn song_select_dividers_drag_within_limits_and_reset() {
 #[test]
 fn the_leaderboard_scrolls_with_the_wheel() {
     let mut s = select_with_scores();
-    // Room for a few rows whatever the map's title (a long one wraps, making the panel taller).
-    s.cfg.song_preview_size = preview::PREVIEW_SIZE.0;
-    // The preview is up first: the leaderboard is a page the button slides to.
+    // The leaderboard is a section of the panel of its own, under the map's details.
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    assert_eq!(s.board_rect, None);
-    s.click(crate::hit::Hit::BoardPage, None);
-    let slid = || Canvas {
-        dt_ms: 1000.0,
-        ..Canvas::default()
-    };
-    s.build_frame(&mut slid(), Instant::now(), 853.3);
     let [bx, by, bw, bh] = s.board_rect.expect("a leaderboard");
     let shown = s.leaderboard.len();
     assert!(shown > 0 && shown < 40);
@@ -2089,9 +2100,11 @@ fn the_leaderboard_scrolls_with_the_wheel() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     // The rows shown start at the 3rd best: a click opens the one clicked.
     assert_eq!(s.leaderboard[0], PathBuf::from("/nonexistent/2.json"));
-    // No further than the last score.
+    // No further than the last score: the rows shown (the player's best pinned under them
+    // aside) end at the 40th.
     s.wheel(-1000);
-    assert_eq!(s.board_scroll, 40 - shown);
+    assert!(s.board_max > 0 && s.board_max < 40);
+    assert_eq!(s.board_scroll, s.board_max);
     s.wheel(1000);
     assert_eq!(s.board_scroll, 0);
     // The other tab starts at the top.

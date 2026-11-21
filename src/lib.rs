@@ -185,8 +185,8 @@ use screens::play::{FAIL_RESTART_LINGER, PlayScreen, draw_spectate_all, pause_la
 use screens::preview::Preview;
 use screens::results::{ResultsScreen, results_job, results_title};
 use screens::select::leaderboard::{
-    BOARD_HEAD, BOARD_ROW, draw_divider, draw_leaderboard, draw_online_leaderboard, fetch_board,
-    misses_and_age,
+    BOARD_HEAD, BOARD_ROW, BoardLine, BoardShown, draw_board_section, draw_divider,
+    draw_leaderboard, draw_online_leaderboard, fetch_board, misses_and_age, section_rows,
 };
 use screens::select::presets::{draw_preset_deleting, draw_preset_naming, preset_key};
 use screens::select::preview_chrome::{draw_analysis, draw_preview_chrome};
@@ -216,6 +216,10 @@ enum Scene {
 
 /// How slowly a new background comes in on the main menu, where it's the whole picture.
 const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
+/// How bright the map's picture behind song select in the main menu's look is, under its cold
+/// ground (`style::ground`): a white or yellow one washed the screen out round the list and the
+/// column.
+const SELECT_BG_BRIGHTNESS: f32 = 0.3;
 
 /// How long "Reset map offsets" waits for its second press.
 const RESET_CONFIRM: Duration = Duration::from_secs(4);
@@ -589,6 +593,12 @@ struct State {
     board_for: (u64, bool, bool),
     board_max: usize,
     board_rect: Option<[f32; 4]>,
+    /// Screen units to one of song select's own (it lays itself out in a space of its own
+    /// height, `render::Canvas::begin_space`), as last drawn: 1 where it uses the screen's.
+    select_scale: f32,
+    /// How far in from the screen's left edge song select's space starts (its units): it sits
+    /// in the middle of a screen wider than it.
+    select_left: f32,
     /// A song select divider being dragged: which, where the pointer started (virtual units)
     /// and the size it had then; and the last press on one (a second soon after resets it).
     split_drag: Option<(hit::Hit, f32, f32)>,
@@ -6723,6 +6733,14 @@ impl State {
         (self.mouse.0 as f32 * k, self.mouse.1 as f32 * k)
     }
 
+    /// The pointer in song select's units (`select_scale`), for what it lays out itself: the
+    /// list's drag and scroll bar, the divider beside it.
+    fn mouse_select(&self) -> (f32, f32) {
+        let (x, y) = self.mouse_virtual();
+        let k = self.select_scale.max(1e-3);
+        (x / k - self.select_left, y / k)
+    }
+
     /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
     /// Turns the volume picked on the volume overlay (Alt+wheel, Alt+Up/Down) `notches` up.
     fn turn_volume(&mut self, notches: i32) {
@@ -7070,7 +7088,7 @@ impl State {
                 self.right_scroll = true;
             }
         }
-        let (_, drag_y) = self.mouse_virtual();
+        let (_, drag_y) = self.mouse_select();
         if let Some(d) = &mut self.list_drag {
             let dy = drag_y - d.from_y;
             d.moved |= dy.abs() > DRAG_START;
@@ -7085,7 +7103,7 @@ impl State {
         }
         if self.scrollbar_drag {
             if self.scene.is_select() {
-                let (_, vy) = self.mouse_virtual();
+                let (_, vy) = self.mouse_select();
                 self.select.scroll_to(vy, &self.library);
                 return CursorIcon::NsResize;
             }
@@ -7093,7 +7111,7 @@ impl State {
         }
         if self.right_scroll {
             if self.scene.is_select() {
-                let (_, vy) = self.mouse_virtual();
+                let (_, vy) = self.mouse_select();
                 self.select.scroll_to(vy, &self.library);
                 return CursorIcon::NsResize;
             }
@@ -7110,8 +7128,11 @@ impl State {
                     self.split_click = None;
                 }
                 // Kept where the list's width still follows it.
-                if let Some((min, max)) = Select::share_range(width) {
-                    self.cfg.song_list_share = (start + (vx - from) / width).clamp(min, max);
+                // The list's share of song select's own width, in its units.
+                let own = width / self.select_scale.max(1e-3) - 2.0 * self.select_left;
+                if let Some((min, max)) = self.select.share_range_here(own) {
+                    let moved = (vx - from) / self.select_scale.max(1e-3) / own.max(1.0);
+                    self.cfg.song_list_share = (start + moved).clamp(min, max);
                 }
                 return CursorIcon::EwResize;
             }
@@ -7371,7 +7392,10 @@ impl State {
                     y,
                 })
             }
-            Some((_, y, Some(hit::Hit::SongScrollbar))) => self.select.scroll_to(y, &self.library),
+            Some((_, y, Some(hit::Hit::SongScrollbar))) => {
+                let y = y / self.select_scale.max(1e-3);
+                self.select.scroll_to(y, &self.library);
+            }
             _ => {}
         }
     }
@@ -7648,14 +7672,14 @@ impl State {
             // A row acts on release, unless the press turns into dragging the list.
             if let (true, Some(hit::Hit::SongScrollbar)) = (self.scene.is_select(), hit) {
                 self.scrollbar_drag = true;
-                self.select.scroll_to(vy, &self.library);
+                self.select.scroll_to(self.mouse_select().1, &self.library);
                 return;
             }
             if let (true, Some(h @ (hit::Hit::SongRow(_) | hit::Hit::SongHeader(_)))) =
                 (self.scene.is_select(), hit)
             {
                 self.list_drag = Some(ListDrag {
-                    from_y: vy,
+                    from_y: self.mouse_select().1,
                     hit: h,
                     moved: false,
                 });
@@ -12922,6 +12946,11 @@ impl State {
                     } else {
                         0.5
                     }
+                }
+                // Song select in the main menu's look: darker, so a bright picture doesn't wash
+                // the screen out round the list and the column.
+                _ if self.scene.is_select() && !self.select.legacy && !self.select.classic => {
+                    SELECT_BG_BRIGHTNESS
                 }
                 Scene::Other(ref s) => s.background_dim().unwrap_or(0.35),
             };

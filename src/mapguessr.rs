@@ -572,7 +572,9 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, g: &mut Guessr, scroll_speed: f64
 /// The strip over song select while picking a guess: the pattern to match, and the clock.
 pub fn draw_picking(c: &mut Canvas, g: &mut Guessr, scroll_speed: f64, now: Instant) {
     let w = c.width;
-    let (x, y, h) = (24.0, 380.0, 92.0);
+    // At the bottom of the space it's drawn in (song select's own may be taller than 480).
+    let (x, h) = (24.0, 92.0);
+    let y = c.height - 8.0 - h;
     let bw = w - 48.0;
     c.round_rect(
         [x, y],
