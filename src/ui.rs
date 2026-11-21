@@ -543,7 +543,10 @@ const DIFF_ROUND: f32 = 4.0;
 /// The curtain over a card's picture: a plain dark plate over the left part of it (its share of
 /// the card) under the title and artist, then the picture coming out of it to the right end,
 /// where as much of it shows as the second value on a card not open, the third on the open one.
-const CURTAIN: (f32, f32, f32) = (0.58, 0.5, 0.82);
+const CURTAIN: (f32, f32, f32) = (0.54, 0.45, 0.85);
+/// How far in from the list's right end a difficulty's rating badge ends in the main menu's look:
+/// well inside the selection's brackets.
+const DIFF_BADGE_INSET: f32 = 18.0;
 /// How far past the seam between the curtain's plate and its sweep each is clipped: a clip is
 /// rounded in to whole pixels, and a seam a float's error off a pixel's edge left a gap of one.
 const SEAM_SLACK: f32 = 0.1;
@@ -3422,15 +3425,20 @@ impl Select {
                         let [r, g, b, fa] =
                             crate::style::surface_fill(crate::style::Surface::Raised);
                         let card = [44.0, y, lw - 20.0, rh - 3.0];
-                        // The selected one has the brackets round it instead of the edge.
-                        let edge = if selected { 0.0 } else { a };
+                        // The selected one has the brackets round it instead of the edge (no
+                        // line at all: one of no colour still showed as a dark ring).
+                        let (edge, line) = if selected {
+                            (0.0, 0.0)
+                        } else {
+                            (a, tone::LINE)
+                        };
                         c.round_rect(
                             [card[0], card[1]],
                             [card[2], card[3]],
                             DIFF_ROUND,
                             [r, g, b, fa * a],
                             rgba(tone::EDGE, edge),
-                            tone::LINE,
+                            line,
                         );
                         // Joined to its set's card by a line down the indent, a step into each
                         // row (the last one's step its corner).
@@ -3493,10 +3501,11 @@ impl Select {
                         (false, false) => crate::style::ink::SECONDARY,
                     };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
+                    let inset = if legacy { 10.0 } else { DIFF_BADGE_INSET };
                     let pill = if a > 0.6 {
                         crate::style::map_badge(
                             c,
-                            24.0 + lw - 10.0,
+                            24.0 + lw - inset,
                             y + 6.0 * dk,
                             7.0,
                             e.meta.level,
@@ -3507,7 +3516,7 @@ impl Select {
                         40.0
                     };
                     if let Some(g) = grade(e) {
-                        let right = 24.0 + lw - 18.0 - pill;
+                        let right = 24.0 + lw - inset - 8.0 - pill;
                         // SS is split into don and kat colours, like on the website.
                         let gy = y + 5.0 * dk;
                         if g == "SS" {
@@ -3831,6 +3840,11 @@ impl Select {
             let colour = c.card_colour(&bg);
             // Everything on the card is as round as it, 1 in.
             let round = CARD_RADIUS - 1.0;
+            // Where the curtain's plate ends, on a whole pixel. The picture (and its colour before
+            // it) is drawn only from there on: a dimmed row is drawn see-through, and a picture
+            // under the plate showed through it under the title.
+            let seam = crate::render::snap_to_grid(inner[0] + inner[2] * CURTAIN.0);
+            let picture_start = c.shapes.len();
             if let Some([r, g, b]) = colour
                 && (!shown || a < 1.0)
             {
@@ -3846,6 +3860,13 @@ impl Select {
             }
             let tint = [1.0, 1.0, 1.0, a];
             let drawn = c.card_picture(&bg, inner, tint, round, self.card_greys);
+            c.clip_since(
+                picture_start,
+                seam - SEAM_SLACK,
+                inner[1],
+                inner[0] + inner[2] - seam + SEAM_SLACK,
+                inner[3],
+            );
             if drawn && since.is_none() {
                 covers.insert(key, crate::render::frame_now());
             }
@@ -3858,15 +3879,14 @@ impl Select {
                 // right, muted on the cards not open (less under the pointer).
                 let shade = |s: f32| rgba(style::SURFACE_1, s * base);
                 let [cx, cy, cw, ch] = inner;
-                let plate_w = cw * CURTAIN.0;
                 let reveal = if open {
                     CURTAIN.2
                 } else {
                     CURTAIN.1 + (CURTAIN.2 - CURTAIN.1) * light
                 };
-                // Each cut square where they meet, on a whole pixel (a clip is rounded in to whole
-                // pixels): laid over each other there, a row's dimming showed the seam as a line.
-                let seam = crate::render::snap_to_grid(cx + plate_w);
+                // Each cut square where they meet (the seam on a whole pixel, as a clip is rounded
+                // in to whole pixels): laid over each other there, a row's dimming showed the seam
+                // as a line.
                 let start = c.shapes.len();
                 c.round_rect(
                     [cx, cy],

@@ -720,7 +720,7 @@ fn a_cards_picture_is_behind_a_curtain_a_dark_plate_under_the_text_then_a_sweep_
     assert_eq!(sweeps.len(), 1, "one sweep");
     let plate = plates
         .into_iter()
-        .find(|&k| rect(&c.shapes[k])[0] == px)
+        .find(|&k| (rect(&c.shapes[k])[0] - px).abs() < 0.01)
         .expect("the plate from the picture's left");
     let sweep = sweeps[0];
     let (plate_clip, sweep_clip) = (clip_of(plate), clip_of(sweep));
@@ -731,8 +731,20 @@ fn a_cards_picture_is_behind_a_curtain_a_dark_plate_under_the_text_then_a_sweep_
     );
     let share = (seam - px) / pw;
     assert!(
-        (0.5..0.65).contains(&share),
+        (0.5..0.56).contains(&share),
         "the plate under the text, the picture shown past it: {share}"
+    );
+    // None of the picture under the plate: a dimmed row is drawn see-through, and it showed
+    // through the plate there.
+    let picture_k = c
+        .shapes
+        .iter()
+        .position(|sh| std::ptr::eq(sh, picture))
+        .expect("the picture's index");
+    let picture_clip = clip_of(picture_k);
+    assert!(
+        (picture_clip[0] - seam).abs() < 0.5,
+        "the picture from the seam on: {picture_clip:?} at {seam}"
     );
     let (p, sw) = (&c.shapes[plate], &c.shapes[sweep]);
     assert_eq!(p.fill, p.border, "the plate plain");
@@ -2783,4 +2795,116 @@ fn everything_in_the_right_column_is_within_the_preview_tiles_edges_at_any_list_
             );
         }
     }
+}
+
+#[test]
+fn the_selected_difficulty_has_no_line_round_it_and_its_badge_room_inside_the_brackets() {
+    let (mut s, _songs, mut now) = menu_look("select-look-diff-brackets");
+    let c = settled(&mut s, &mut now);
+    let cursor = s.select.cursor();
+    let row = hit_rect(&c, |h| matches!(h, Hit::SongRow(r) if *r == cursor)).expect("the row");
+    // Only the brackets and a light lift mark it: nothing the row's size has a line round it.
+    let lined: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && sh.params[1] > 0.0 && !badge(sh))
+        .map(rect)
+        .filter(|r| {
+            (r[0] - row[0]).abs() < 1.0
+                && (r[2] - row[2]).abs() < 1.0
+                && inside([r[0], r[1]], row, 1.0)
+        })
+        .collect();
+    assert!(
+        lined.is_empty(),
+        "no line round the selected difficulty: {lined:?}"
+    );
+    // Its rating's badge well inside the brackets' right side (3 out from the row).
+    let badge_right = c
+        .shapes
+        .iter()
+        .filter(|sh| badge(sh) && inside(sh.center, row, 0.0))
+        .map(|sh| sh.center[0] + sh.half[0])
+        .fold(f32::MIN, f32::max);
+    assert!(badge_right > row[0], "the badge is on the row");
+    let brackets = row[0] + row[2] + 3.0;
+    assert!(
+        brackets - badge_right >= 16.0,
+        "room between the badge and the brackets: {}",
+        brackets - badge_right
+    );
+}
+
+#[test]
+fn a_board_row_s_value_and_its_age_under_it_have_room_between_them() {
+    let (mut s, _songs, mut now) = menu_look("select-look-board-gap");
+    let play = local_play(&s, "Ann", 900_000, 0.99);
+    s.scores.push(play);
+    let c = settled(&mut s, &mut now);
+    let row = hit_rect(&c, |h| *h == Hit::ScoreRow(0)).expect("the row");
+    // The texts ending at the row's right end, by their ink: the value on top, its age under it.
+    let ink = |r: &std::ops::Range<usize>| {
+        c.shapes[r.clone()]
+            .iter()
+            .map(rect)
+            .fold([f32::MAX, f32::MIN, f32::MIN], |[t, b, e], g| {
+                [t.min(g[1]), b.max(g[1] + g[3]), e.max(g[0] + g[2])]
+            })
+    };
+    let mut right: Vec<([f32; 3], String)> = c
+        .texts
+        .iter()
+        .filter(|(r, _)| !r.is_empty())
+        .map(|(r, t)| (ink(r), t.clone()))
+        .filter(|([t, b, e], _)| {
+            *t >= row[1] - 0.5 && *b <= row[1] + row[3] + 0.5 && *e > row[0] + row[2] - 12.0
+        })
+        .collect();
+    right.sort_by(|a, b| a.0[0].total_cmp(&b.0[0]));
+    assert_eq!(right.len(), 2, "the value and the age: {right:?}");
+    let gap = right[1].0[0] - right[0].0[1];
+    assert!(
+        gap >= 4.0,
+        "room between {:?} and {:?}: {gap}",
+        right[0].1,
+        right[1].1
+    );
+}
+
+#[test]
+fn the_collection_button_is_on_the_search_row_once_there_are_collections() {
+    let (mut s, _songs, mut now) = menu_look("select-look-collection");
+    let c = settled(&mut s, &mut now);
+    assert!(
+        hit_rect(&c, |h| *h == Hit::CollectionPick).is_none(),
+        "none without collections"
+    );
+    s.select.collections = vec![ui::Shown {
+        name: "dans".into(),
+        own: true,
+        ..Default::default()
+    }];
+    let c = settled(&mut s, &mut now);
+    let menu = hit_rect(&c, |h| *h == Hit::ToMenu).expect("Menu");
+    let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
+    let sort = hit_rect(&c, |h| *h == Hit::SortList).expect("Sort");
+    let pick = hit_rect(&c, |h| *h == Hit::CollectionPick).expect("the collection button");
+    assert!(
+        (pick[1] + pick[3] / 2.0 - (menu[1] + menu[3] / 2.0)).abs() < 0.5,
+        "on the search row: {pick:?} {menu:?}"
+    );
+    let apart = |a: [f32; 4], b: [f32; 4]| a[0] + a[2] <= b[0] + 0.5 || b[0] + b[2] <= a[0] + 0.5;
+    assert!(
+        apart(pick, search) && apart(pick, sort),
+        "{pick:?} {search:?} {sort:?}"
+    );
+    assert!(
+        pick[0] + pick[2] <= 24.0 + s.select.list_w(c.width) + 0.5,
+        "over the list: {pick:?}"
+    );
+    let texts = texts_in(&c, pick);
+    assert!(
+        texts.iter().any(|t| t == "COLLECTION"),
+        "its caption: {texts:?}"
+    );
 }

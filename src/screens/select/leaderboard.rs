@@ -236,7 +236,7 @@ pub(crate) enum BoardShown<'a> {
 /// The embedded leaderboard's parts (in the interface's own units): its tabs' row, a row, and
 /// the pinned best's row; the room round them.
 pub(crate) const SECTION_HEAD: f32 = 26.0;
-pub(crate) const SECTION_ROW: f32 = 32.0;
+pub(crate) const SECTION_ROW: f32 = 34.0;
 const SECTION_PAD: f32 = 8.0;
 /// How far in from the section's sides its tabs and rows are: as far as the details and the
 /// preview's lane above and under it.
@@ -523,10 +523,11 @@ fn dense_row(
     }
     c.avatar(l.player, x + 36.0, mid, 8.0, accent(), 1.0);
     let tx = x + 50.0;
-    // The two lines' ink as far in from the row's top and bottom as from each other, at most 4
-    // (text on a phone's grid comes out taller).
+    // The two lines' ink a quarter of the room in from the row's top and bottom (at most 4) and
+    // the rest between them, so the age reads apart from the value over it (text on a phone's
+    // grid comes out taller).
     let (name_h, under_h) = (Canvas::text_height(8.0), Canvas::text_height(6.0));
-    let pad = ((h - name_h - under_h) / 3.0).clamp(0.0, 4.0);
+    let pad = ((h - name_h - under_h) / 4.0).clamp(0.0, 4.0);
     let top = Canvas::text_y_at(y + pad, 8.0);
     let under = Canvas::text_y_at(y + h - pad - under_h, 6.0);
     // Top line: the name and the mods, the pp (or the score without any) at the right.
