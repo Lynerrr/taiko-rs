@@ -529,8 +529,9 @@ const CARD_INSET: f32 = 12.0;
 const CARD_HOVER: f32 = 4.0;
 const CARD_DIM: f32 = 0.7;
 const CARD_RADIUS: f32 = crate::style::radius::CARD;
-/// How bright the faint edge round a card is (not the open one, which has the selection's).
-const CARD_EDGE: f32 = 0.1;
+/// How bright the faint edge round a card under the pointer is (none at rest: the cards are
+/// told apart by their tone and the room between them; the open one has the selection's).
+const CARD_EDGE: f32 = 0.18;
 /// A set opening: its difficulties drop in from this far above, this many ms apart, out from
 /// the selected one both ways, the last of them at most `DIFF_CASCADE_SPAN_MS` after it (a set
 /// of many difficulties drops them in closer together, its selected one first).
@@ -544,10 +545,7 @@ const DIFF_ROUND: f32 = 4.0;
 /// card's left to the first value's share of it, then an eased sweep out of it to the right end,
 /// where as much of the picture shows as the second value on a card not open, the third on the
 /// open one.
-const CURTAIN: (f32, f32, f32) = (0.30, 0.40, 0.75);
-/// How opaque the dark panel the song list runs down is: a bright picture behind it doesn't
-/// show between the rows.
-const LIST_PANEL_ALPHA: f32 = 0.9;
+const CURTAIN: (f32, f32, f32) = (0.30, 0.40, 0.6);
 /// How far in from the list's right end a difficulty's rating badge ends in the main menu's look:
 /// well inside the selection's brackets.
 const DIFF_BADGE_INSET: f32 = 18.0;
@@ -557,9 +555,9 @@ const OPEN_EDGE: f32 = 0.5;
 const OPEN_BRACKETS: f32 = 0.8;
 /// Where the line joining an open set's difficulties to its card runs down.
 const DIFF_LINK_X: f32 = 34.0;
-const BOTTOM_FADE: f32 = 20.0;
+const BOTTOM_FADE: f32 = 28.0;
 /// How much of a row's height going under the list's top edge takes it out entirely.
-const TOP_FADE: f32 = 0.5;
+const TOP_FADE: f32 = 0.3;
 const DIFF_BAR_DIM: f32 = 0.35;
 /// How long after the list has got to a new selection the banner's picture is read ahead.
 const PICTURE_SETTLE_MS: f32 = 60.0;
@@ -3060,10 +3058,8 @@ impl Select {
             // and a row scrolling up goes under a clear edge.
             let [px, py, pw, ph] = [20.0, top - 4.0, lw + 8.0, bottom - top + 8.0];
             let r = crate::style::radius::CARD;
-            let fill = rgba(crate::style::tone::PANEL, LIST_PANEL_ALPHA);
-            c.round_rect([px, py], [pw, ph], r, fill, rgba(0, 0.0), 0.0);
-            let line = rgba(crate::style::tone::EDGE, 1.0);
-            c.rect(px + r, py, pw - 2.0 * r, crate::style::tone::LINE, line);
+            crate::style::cold_panel(c, [px, py, pw, ph]);
+            crate::style::rule(c, px + r, py, pw - 2.0 * r);
         }
         let tabs = self.source_tabs();
         if !tabs.is_empty() {
@@ -3442,20 +3438,16 @@ impl Select {
                         let [r, g, b, fa] =
                             crate::style::surface_fill(crate::style::Surface::Raised);
                         let card = [44.0, y, lw - 20.0, rh - 3.0];
-                        // The selected one has the brackets round it instead of the edge (no
-                        // line at all: one of no colour still showed as a dark ring).
-                        let (edge, line) = if selected {
-                            (0.0, 0.0)
-                        } else {
-                            (a, tone::LINE)
-                        };
+                        // No line round it (the selected one has the brackets): a tone a step
+                        // lighter than the list's panel and the room between rows part them.
+                        let fill = [r, g, b, fa * a];
                         c.round_rect(
                             [card[0], card[1]],
                             [card[2], card[3]],
                             DIFF_ROUND,
-                            [r, g, b, fa * a],
-                            rgba(tone::EDGE, edge),
-                            line,
+                            fill,
+                            fill,
+                            0.0,
                         );
                         // Joined to its set's card by a line down the indent, a step into each
                         // row (the last one's step its corner).
@@ -3572,8 +3564,8 @@ impl Select {
                 if f < 1.0 {
                     c.fade_since(row_start, f * f * (3.0 - 2.0 * f), 1.0);
                 }
-                // And at the top, a row scrolled under the search row goes out as it goes: half
-                // under it, none of it is left (no half a card cut off by the edge).
+                // And at the top, a row scrolled under the search row goes out as it goes: a
+                // third under it, none of it is left (no half a card cut off by the edge).
                 let under = (top - y).max(0.0);
                 let f = (1.0 - under / (rh * TOP_FADE)).clamp(0.0, 1.0);
                 if f < 1.0 {
@@ -3841,7 +3833,7 @@ impl Select {
         } else {
             Surface::Raised
         };
-        style::surface(c, [x, y, w, h], CARD_RADIUS, level);
+        style::tile(c, [x, y, w, h], CARD_RADIUS, level);
         if let Some(bg) = crate::preview::background_path(e) {
             let key = crate::render::path_picture_key(&bg);
             let shown = c.card_slots.contains_key(&key);
@@ -3930,11 +3922,12 @@ impl Select {
             );
             style::brackets_in(c, [x - 3.0, y - 3.0, w + 6.0, h + 6.0], OPEN_BRACKETS, col);
         } else {
-            // A faint edge round every card, so neighbouring pictures of like colours don't run
-            // into each other; brighter under the pointer.
-            let lift = rgba(0xffffff, 0.06 * light);
-            let edge = rgba(0xffffff, CARD_EDGE + 0.08 * light);
-            c.round_rect([x, y], [w, h], CARD_RADIUS, lift, edge, 1.0);
+            // Under the pointer a little lighter, with a faint edge; at rest nothing round it.
+            if light > 0.0 {
+                let lift = rgba(0xffffff, 0.06 * light);
+                let edge = rgba(0xffffff, CARD_EDGE * light);
+                c.round_rect([x, y], [w, h], CARD_RADIUS, lift, edge, 1.0);
+            }
         }
     }
 

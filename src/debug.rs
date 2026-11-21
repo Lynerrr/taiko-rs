@@ -616,8 +616,11 @@ pub fn edge_tab_problems(
     for (i, sh) in c.shapes[..own].iter().enumerate() {
         let (hw, hh) = (sh.half[0].abs(), sh.half[1].abs());
         let visible = sh.fill[3] >= 0.1 || sh.border[3] >= 0.1;
-        let background =
-            hw * 2.0 >= c.width - 1.0 && hh * 2.0 >= crate::render::VIRTUAL_HEIGHT - 1.0;
+        // The screen's backdrop: all of it, or a shade the screen's height down one of its sides
+        // (song select's vignette).
+        let full_height = hh * 2.0 >= crate::render::VIRTUAL_HEIGHT - 1.0;
+        let at_side = sh.center[0] - hw <= 0.5 || sh.center[0] + hw >= c.width - 0.5;
+        let background = full_height && (hw * 2.0 >= c.width - 1.0 || at_side);
         let across = (sh.center[0] + hw).min(x + w) - (sh.center[0] - hw).max(x);
         let down = (sh.center[1] + hh).min(y + h) - (sh.center[1] - hh).max(y);
         if visible && !background && across > 0.5 && down > 0.5 {

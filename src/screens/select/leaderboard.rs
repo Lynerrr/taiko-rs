@@ -276,9 +276,8 @@ pub(crate) fn draw_board_section(
 ) {
     use crate::style::{Surface, ink, radius, surface};
     let [x, y, w, h] = rect;
-    surface(c, rect, radius::CARD, Surface::Raised);
-    // The tabs: chips as the source tabs over the list are, the one shown lifted with a bar
-    // of the accent under its word.
+    // On the right column's panel (no box of its own). The tabs: words, the one shown bright
+    // with a bar of the accent under it, the other muted (brighter under the pointer).
     let (ty, th) = (y + SECTION_PAD, SECTION_HEAD - 8.0);
     let mut tx = x + SECTION_INSET;
     for (label, on) in [
@@ -288,12 +287,6 @@ pub(crate) fn draw_board_section(
         let tw = Canvas::text_width(7.0, label) + 20.0;
         let lit = on == online;
         let hover = c.hovered(tx, ty, tw, th);
-        let level = if lit || hover {
-            Surface::Lifted
-        } else {
-            Surface::Raised
-        };
-        surface(c, [tx, ty, tw, th], radius::SMALL, level);
         if lit {
             c.rect(
                 tx + radius::SMALL,
@@ -303,7 +296,13 @@ pub(crate) fn draw_board_section(
                 rgba(accent(), 1.0),
             );
         }
-        let col = if lit { ink::PRIMARY } else { ink::SECONDARY };
+        let col = if lit {
+            ink::PRIMARY
+        } else if hover {
+            ink::SECONDARY
+        } else {
+            ink::CAPTION
+        };
         c.text_centered(
             tx + tw / 2.0,
             Canvas::text_y_mid(ty + th / 2.0, 7.0),
@@ -392,7 +391,7 @@ pub(crate) fn draw_board_section(
             // The player's best, pinned under a line at the bottom.
             if let Some(best) = best {
                 let by = y + h - SECTION_PAD - (SECTION_ROW - SECTION_ROW_GAP);
-                c.rect(rx, by - 4.0, rw, 1.0, rgba(crate::style::tone::EDGE, 1.0));
+                crate::style::rule(c, rx, by - 4.0, rw);
                 let hit = if online {
                     hit::Hit::OnlineScoreRow(rows.len())
                 } else {
@@ -481,14 +480,16 @@ fn dense_row(
     video: Option<hit::Hit>,
     pinned: bool,
 ) {
-    use crate::style::{Surface, ink, radius, surface};
+    use crate::style::{Surface, ink, radius, tile};
     let hover = c.hovered(x, y, w, h);
-    let level = if hover {
+    // A tile of a tone a step lighter than the panel's, no line round it; lifted under the
+    // pointer, and the pinned best on the lifted one.
+    let level = if hover || pinned {
         Surface::Lifted
     } else {
         Surface::Raised
     };
-    surface(c, [x, y, w, h], radius::SMALL, level);
+    tile(c, [x, y, w, h], radius::SMALL, level);
     // The player's own play: a bar of the accent down its left edge.
     if l.mine {
         c.rect(x, y + 3.0, 2.0, h - 6.0, rgba(accent(), 1.0));

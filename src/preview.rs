@@ -1363,10 +1363,13 @@ impl Preview {
                 crate::style::radius::SMALL,
                 Surface::Raised,
             );
+            // Caption and value in the tile's middle: the columns even across the row, no
+            // empty run right of a short value.
             let room = tw - 12.0;
+            let mid = tx + tw / 2.0;
             let caption = Canvas::fit(text::CAPTION, room, caption);
-            c.text(
-                tx + 6.0,
+            c.text_centered(
+                mid,
                 Canvas::text_y_at(cy + TILE_PAD, text::CAPTION),
                 text::CAPTION,
                 rgba(ink::CAPTION, 1.0),
@@ -1378,8 +1381,8 @@ impl Preview {
             let value = Canvas::fit(size, room, value);
             let value_top = cy + tile_h - TILE_PAD - Canvas::text_height(text::HEADING);
             let drop = Canvas::text_height(text::HEADING) - Canvas::text_height(size);
-            c.text(
-                tx + 6.0,
+            c.text_centered(
+                mid,
                 Canvas::text_y_at(value_top + drop, size),
                 size,
                 rgba(ink::PRIMARY, *alpha),
@@ -1388,7 +1391,8 @@ impl Preview {
             // A value still being read: a skeleton where it goes.
             if value.is_empty() && d.is_none() {
                 let vh = Canvas::text_height(text::HEADING);
-                crate::style::skeleton(c, [tx + 6.0, value_top, room * 0.6, vh], 2.0);
+                let sw = room * 0.6;
+                crate::style::skeleton(c, [mid - sw / 2.0, value_top, sw, vh], 2.0);
             }
             if k == 0 && c.hovered(tx, cy, tw, tile_h) {
                 od_hovered = Some((tx, cy + tile_h));
@@ -2346,9 +2350,10 @@ impl Preview {
         // right corners).
         let strip = [lane_x, by, lane_end - lane_x + LANE_FADE[0], bh];
         // A tile as the stats' are, not a dark box: on a bright picture that read as black.
+        // No line round it: a tone a step lighter than the panel's sets it apart.
         if self.bare {
             let r = crate::style::radius::SMALL;
-            crate::style::surface(c, strip, r, crate::style::Surface::Raised);
+            crate::style::tile(c, strip, r, crate::style::Surface::Raised);
         } else {
             c.round_rect(
                 [bx, by],
@@ -2605,15 +2610,15 @@ fn fit_size(value: &str, room: f32) -> f32 {
 fn pp_chip(c: &mut Canvas, rect: [f32; 4], lit: bool) {
     use crate::style::{block_tones, radius, tone};
     let [x, y, w, h] = rect;
+    // Its tone alone at rest (no line round a strip of numbers); the edge under the pointer,
+    // as a button's.
     let (fill, edge) = block_tones(lit, false);
-    c.round_rect(
-        [x, y],
-        [w, h],
-        radius::CONTROL,
-        rgba(fill, 1.0),
-        rgba(edge, 1.0),
-        tone::LINE,
-    );
+    let (edge, line) = if lit {
+        (rgba(edge, 1.0), tone::LINE)
+    } else {
+        (rgba(fill, 1.0), 0.0)
+    };
+    c.round_rect([x, y], [w, h], radius::CONTROL, rgba(fill, 1.0), edge, line);
 }
 
 const BARE_GRAPH_H: f32 = 28.0;

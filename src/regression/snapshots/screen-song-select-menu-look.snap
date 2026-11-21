@@ -5,49 +5,49 @@ text   85,33   click to search...
 text  285,33   ctrl+f
 text  340,33   SORT
 text  361,33   artist
+text  420,37   basics
+text  420,52   Regression
 text   24,54   basics
-text  420,56   basics
 text   24,66   Regression  |  mapped by tests
-text  420,70   Regression
+text  791,67   3.08
+text  425,68   basics
+text  473,68   by
+text  491,68   tests
+text  701,68   NOT SUBMITTED
 text  366,82   3.08
 text   37,83   basics
-text  791,85   3.08
-text  425,86   basics
-text  473,86   by
-text  491,86   tests
-text  701,87   NOT SUBMITTED
+text  465,86   OD
+text  564,86   BPM
+text  658,86   LENGTH
+text  763,86   NOTES
+text  458,92   5.0
+text  560,92   200
+text  658,92   0:09
+text  768,92   64
 text   32,101  big-notes
-text  424,104  OD
-text  526,104  BPM
-text  628,104  LENGTH
-text  730,104  NOTES
-text  424,111  5.0
-text  526,111  200
-text  628,111  0:09
-text  730,111  64
+text  420,110  32 DON
+text  794,110  32 KAT
 text   32,112  Regression  |  mapped by tests
-text  420,129  32 DON
-text  794,129  32 KAT
+text  425,126  SS
+text  438,126  93pp
+text  560,126  99%
+text  579,126  82pp
+text  696,126  98%
+text  714,126  69pp
 text   32,130  rolls-and-swells
 text   32,142  Regression  |  mapped by tests
-text  438,144  93pp
-text  579,144  82pp
-text  714,144  69pp
-text  425,145  SS
-text  560,145  99%
-text  696,145  98%
 text   32,159  sv-and-kiai
+text  427,165  Local
+text  473,165  Online
+text  784,166  Website
 text   32,171  Regression  |  mapped by tests
-text  427,178  Local
-text  473,178  Online
-text  784,178  Website
 text   33,189  stream
 text   33,200  Regression  |  mapped by tests
 text   35,218  low-od
+text  556,226  No plays on this map yet
 text   34,230  Regression  |  mapped by tests
-text  556,235  No plays on this map yet
+text  573,241  Show online scores
 text   36,247  high-od
-text  573,250  Show online scores
 text   36,259  Regression  |  mapped by tests
 text  420,406  0:00 / 0:10
 text  692,406  peak 7.0 notes/s at 0:01
@@ -66,17 +66,17 @@ hit    25,184   378x29   SongHeader(4)
 hit    26,213   377x29   SongHeader(5)
 hit    28,243   375x29   SongHeader(6)
 hit     3,49     13x413  SongScrollbar
-hit   681,85     11x9    SelectLike
-hit   420,143   405x11   PpSim
-hit   420,308   399x72   Preview
+hit   681,67     11x9    SelectLike
+hit   420,125   405x11   PpSim
+hit   420,301   399x79   Preview
 hit   419,384   408x21   Preview
-hit   420,175    41x12   BoardTab(false)
-hit   467,175    47x12   BoardTab(true)
-hit   779,175    47x12   BoardWebsite
-hit   565,247   116x13   BoardTab(true)
+hit   420,163    41x12   BoardTab(false)
+hit   467,163    47x12   BoardTab(true)
+hit   779,163    47x12   BoardWebsite
+hit   565,237   116x13   BoardTab(true)
 hit   416,437    43x23   ModsButton
 hit   463,437    55x23   Key(F2)
 hit   696,437   133x23   Key(Enter)
-hit   404,240     5x32   SplitList
+hit   404,231     5x32   SplitList
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account

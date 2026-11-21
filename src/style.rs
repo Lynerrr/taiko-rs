@@ -63,6 +63,53 @@ pub const SURFACE_1_ALPHA: f32 = tone::PANEL_ALPHA;
 pub const SURFACE_2: u32 = tone::CONTROL;
 pub const SURFACE_2_ALPHA: f32 = 0.97;
 
+/// Song select's ground and panels in the main menu's look, in the cold dark of the mods' and
+/// the profile's screens: a deep navy over the whole of the map's (blurred) picture, so a
+/// yellow, beige or white one doesn't colour the screen and the room between the panels a muddy
+/// brown, darker still towards the screen's edges; and the panels the list and the right column
+/// are on, all but opaque.
+pub const GROUND: u32 = 0x0a0c14;
+pub const GROUND_ALPHA: f32 = 0.72;
+pub const GROUND_VIGNETTE: f32 = 0.6;
+pub const PANEL_COLD: u32 = 0x0d101a;
+pub const PANEL_COLD_ALPHA: f32 = 0.94;
+
+/// Song select's cold panel over `[x, y, w, h]`: its tone alone, no line round it.
+pub fn cold_panel(c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
+    let fill = rgba(PANEL_COLD, PANEL_COLD_ALPHA);
+    c.round_rect([x, y], [w, h], radius::CARD, fill, fill, 0.0);
+}
+
+/// A thin line across a panel from `x`, `w` long, at `y`: what parts its sections.
+pub fn rule(c: &mut Canvas, x: f32, y: f32, w: f32) {
+    c.rect(x, y, w, tone::LINE, rgba(tone::EDGE, 1.0));
+}
+
+/// Song select's ground over the whole screen (in the screen's units), `alpha` of the way on:
+/// the cold tint, and the vignette darker towards the screen's edges.
+pub fn ground(c: &mut Canvas, alpha: f32) {
+    if alpha <= 0.0 {
+        return;
+    }
+    let (w, h) = (c.width, render::VIRTUAL_HEIGHT);
+    c.rect(0.0, 0.0, w, h, rgba(GROUND, GROUND_ALPHA * alpha));
+    let edge = rgba(GROUND, GROUND_VIGNETTE * alpha);
+    let clear = rgba(GROUND, 0.0);
+    let side = w * 0.2;
+    c.shade_eased([0.0, 0.0], [side, h], 0.0, edge, clear);
+    c.shade_eased([w - side, 0.0], [side, h], 0.0, clear, edge);
+    // Top and bottom in bands, eased out.
+    const BANDS: usize = 8;
+    let band = h * 0.16 / BANDS as f32;
+    for k in 0..BANDS {
+        let f = 1.0 - (k as f32 + 0.5) / BANDS as f32;
+        let a = GROUND_VIGNETTE * alpha * f * f * (3.0 - 2.0 * f) / 2.0;
+        let col = rgba(GROUND, a);
+        c.rect(0.0, k as f32 * band, w, band, col);
+        c.rect(0.0, h - (k + 1) as f32 * band, w, band, col);
+    }
+}
+
 /// A surface's fill (the back one is clear).
 pub fn surface_fill(level: Surface) -> [f32; 4] {
     match level {

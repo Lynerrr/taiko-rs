@@ -302,6 +302,11 @@ impl Screen for SongSelect {
             None => {
                 // The routes behind lean a little away from the pointer: sharp, as the main
                 // menu's, and calmed (`routes_brightness`) for the text over them.
+                // Over the map's picture, under the routes: the cold ground (the main menu's
+                // look on a computer).
+                if !state.select.legacy && !mobile::active() {
+                    style::ground(canvas, 1.0);
+                }
                 let routes = canvas.shapes.len();
                 draw_crowd(state, canvas, frame.now, true, 1.0, 1.0);
                 // A pointer off the window (or none) leans nothing.
@@ -493,6 +498,9 @@ struct SplitShown<'a> {
 /// The right column's sections' shares of its height (the main menu's look), top down: the
 /// details, the leaderboard and the preview. Fixed, so nothing in it moves from map to map.
 const COLUMN_SHARES: [f32; 3] = [0.32, 0.34, 0.34];
+/// How far in from the column's sides the lines between its sections run: across all of it
+/// (the details' own lines run within their text's edges).
+pub(crate) const COLUMN_RULE_INSET: f32 = 0.0;
 
 /// The right column's sections in `rect`, top down (`COLUMN_SHARES`): the details (never
 /// shorter than they need, `preview::compact_head`), the leaderboard and the preview.
@@ -525,10 +533,18 @@ fn draw_split_column(
     shown: &SplitShown,
 ) {
     let [head, board, lane] = column_sections(rect);
-    let start = canvas.shapes.len();
-    for r in [head, lane] {
-        style::surface(canvas, r, style::radius::CARD, style::Surface::Raised);
+    // On the column's one panel (drawn by the caller), the sections parted by a line in the
+    // room between them, no box round each.
+    for r in [board, lane] {
+        let y = r[1] - style::space::SECTION / 2.0;
+        style::rule(
+            canvas,
+            r[0] + COLUMN_RULE_INSET,
+            y,
+            r[2] - 2.0 * COLUMN_RULE_INSET,
+        );
     }
+    let start = canvas.shapes.len();
     let preview = &mut state.preview;
     preview.bare = true;
     preview.split = Some(preview::Split {
@@ -795,11 +811,15 @@ fn draw_songs(
         state.mobile_select_panel(canvas.width)
     } else {
         let x = 24.0 + lw + style::space::PAD;
-        // Level with the list's frame (the Legacy layout keeps its own).
+        // Level with the list's frame (the Legacy layout keeps its own); in the main menu's look
+        // its top level with the search row's, the column one panel from there down to the
+        // list's bottom (unless the readout beside the search row has the place).
         let [top, end] = if state.select.legacy {
             [54.0, 436.0]
-        } else {
+        } else if state.select.show_info {
             state.select.frame_span()
+        } else {
+            [state.select.search_row(), state.select.frame_span()[1]]
         };
         // Clear of the friends tab at the screen's right edge (17 of its units wide).
         let margin = if state.select.in_ui_space() {
@@ -871,6 +891,15 @@ fn draw_songs(
         // The main menu's look: the details, the leaderboard and the preview, each a section of
         // its own (no pages to slide between).
         if bare {
+            // One cold panel for the whole column, the actions' lane at its bottom under a line.
+            style::cold_panel(canvas, [x, panel_top, pw, panel_end - panel_top]);
+            let line_y = panel_top + panel_h + style::space::SECTION / 2.0;
+            style::rule(
+                canvas,
+                x + COLUMN_RULE_INSET,
+                line_y,
+                pw - 2.0 * COLUMN_RULE_INSET,
+            );
             let rect = [x, panel_top, pw, panel_h];
             let shown = SplitShown {
                 stars: selected_stars,
@@ -1359,6 +1388,10 @@ fn draw_shift(
 ) {
     let w = canvas.width;
     let ph = menu_shift::phases(t);
+    // Song select's cold ground comes on with the camera (the main menu's look on a computer).
+    if !state.select.legacy && !mobile::active() {
+        style::ground(canvas, ph.cam);
+    }
     let routes = canvas.shapes.len();
     draw_menu(state, canvas, frame, Layer::Routes);
     canvas.fade_since(routes, routes_brightness(ph.cam), 1.0);

@@ -87,29 +87,61 @@ fn inside([x, y]: [f32; 2], [rx, ry, rw, rh]: [f32; 4], slack: f32) -> bool {
 }
 
 /// A rectangle or rounded box (not a letter, a skin image or a picture).
-/// The main menu's edge round a surface: one unit of its neutral line.
-fn neutral_edge(s: &Shape) -> bool {
-    s.params[1] == style::tone::LINE && same_rgb(s.border, render::rgba(style::tone::EDGE, 1.0))
-}
-
 fn plain(s: &Shape) -> bool {
     (0.0..10.0).contains(&s.params[3])
 }
 
-/// The right column's sections, top down: the map's details, its leaderboard and the preview,
-/// each a raised surface as round as the cards.
-fn sections(c: &Canvas, s: &State) -> Vec<[f32; 4]> {
+/// The right column's one panel: song select's cold one right of the list.
+fn column_panel(c: &Canvas, s: &State) -> Option<[f32; 4]> {
     let lw = s.select.list_w(c.width);
-    let fill = style::surface_fill(style::Surface::Raised);
+    let fill = render::rgba(style::PANEL_COLD, style::PANEL_COLD_ALPHA);
+    c.shapes
+        .iter()
+        .filter(|sh| plain(sh) && sh.fill == fill && sh.border[3] == fill[3])
+        .filter(|sh| sh.center[0] > 28.0 + lw && sh.half[1] * 2.0 > 60.0)
+        .map(rect)
+        .next()
+}
+
+/// The lines across the right column's panel parting its sections, top down.
+fn column_rules(c: &Canvas, s: &State) -> Vec<[f32; 4]> {
+    let Some([px, py, pw, ph]) = column_panel(c, s) else {
+        return Vec::new();
+    };
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let inset = crate::screens::select::song_select::COLUMN_RULE_INSET;
     let mut found: Vec<[f32; 4]> = c
         .shapes
         .iter()
-        .filter(|sh| plain(sh) && sh.params[0] == style::radius::CARD && same_rgb(sh.fill, fill))
-        .filter(|sh| sh.center[0] > 28.0 + lw && sh.half[1] * 2.0 > 60.0)
+        .filter(|sh| plain(sh) && sh.fill == edge)
         .map(rect)
+        .filter(|r| {
+            (r[3] - style::tone::LINE).abs() < 0.01
+                && (r[0] - (px + inset)).abs() < 0.01
+                && (r[2] - (pw - 2.0 * inset)).abs() < 0.01
+                && r[1] > py
+                && r[1] < py + ph
+        })
         .collect();
     found.sort_by(|a, b| a[1].total_cmp(&b[1]));
     found.dedup();
+    found
+}
+
+/// The right column's sections, top down: the map's details, its leaderboard and the preview,
+/// on the column's one panel between the lines parting them (the last line is over the lane of
+/// actions).
+fn sections(c: &Canvas, s: &State) -> Vec<[f32; 4]> {
+    let Some([px, py, pw, _]) = column_panel(c, s) else {
+        return Vec::new();
+    };
+    let half_gap = style::space::SECTION / 2.0;
+    let mut top = py;
+    let mut found = Vec::new();
+    for r in column_rules(c, s).into_iter().take(3) {
+        found.push([px, top, pw, r[1] - half_gap - top]);
+        top = r[1] + half_gap;
+    }
     found
 }
 
@@ -174,63 +206,55 @@ fn many() -> Vec<maps::Chart> {
 }
 
 #[test]
-fn surfaces_have_one_neutral_edge_and_rows_no_lines_under_them() {
+fn surfaces_are_parted_by_tone_with_lines_only_round_what_is_pressed_or_selected() {
     let (mut s, _songs, mut now) = menu_look("select-look-edges");
     let c = settled(&mut s, &mut now);
-    // The selection's outline round the open set's card is the one strong edge; the other set
-    // cards have a faint white one each, so neighbouring pictures of like colours stay apart.
+    // The selection's outline round the open set's card and the brackets round the selected
+    // difficulty are the strong edges; a badge (a rating, the map's status) is edged in its
+    // colour, and a button has the main menu's neutral edge. Nothing else has a line round it:
+    // not the other cards, the difficulty rows, the right column's sections, the pp strip, the
+    // leaderboard's tabs and rows or the preview's lane.
     let open = open_card(&c, &s);
     let set_cards = cards(&c);
-    // (White, or grey on a card dimmed by being drawn darker.)
-    let faint_card_edge = |sh: &Shape| {
-        sh.border[0] == sh.border[1]
-            && sh.border[1] == sh.border[2]
-            && sh.border[3] <= 0.2
-            && set_cards.iter().any(|(_, r)| inside(sh.center, *r, 0.5))
+    // What a click presses: the search row's and the actions' buttons, the search, the grip
+    // (small; not a row, a card, a tab or the lane).
+    let pressed = |p: [f32; 2]| {
+        c.hits.iter().any(|h| {
+            !matches!(
+                h.hit,
+                Hit::SongRow(_)
+                    | Hit::SongHeader(_)
+                    | Hit::ScoreRow(_)
+                    | Hit::OnlineScoreRow(_)
+                    | Hit::Preview
+                    | Hit::BoardTab(false)
+                    | Hit::PpSim
+            ) && h.rect[2] < 400.0
+                // (A button, the search field, or the list's grip down its side.)
+                && (h.rect[3] < 60.0 || h.rect[2] <= 24.0)
+                && inside(p, h.rect, 0.5)
+        })
     };
+    let primary = render::rgba(style::role::primary(), 1.0);
     let edged: Vec<[f32; 4]> = c
         .shapes
         .iter()
         .filter(|sh| plain(sh) && on_select(sh, &c, &s) && !inside(sh.center, open, 1.0))
         .filter(|sh| sh.params[1] > 0.0 && sh.border[3] > 0.01)
         .filter(|sh| !same_rgb(sh.border, sh.fill) || sh.fill[3] < sh.border[3])
-        .filter(|sh| !faint_card_edge(sh))
-        // The main menu's edge: one unit of its neutral line, round every surface (darker on a
-        // card dimmed by being drawn darker).
-        .filter(|sh| !neutral_edge(sh))
-        .filter(|sh| {
-            let e = render::rgba(style::tone::EDGE, 1.0);
-            let k = sh.border[0] / e[0];
-            !(sh.params[1] == style::tone::LINE
-                && (0.5..=1.0).contains(&k)
-                && (0..3).all(|i| (sh.border[i] - e[i] * k).abs() < 1e-3))
-        })
-        // The selector's brackets round the selected difficulty: corners of one outline.
-        .filter(|sh| !same_rgb(sh.border, render::rgba(style::selector_colour(), 1.0)))
-        // Ratings and the map's status on badges as the mods' are, edged in their colour.
+        // The brackets round the selected difficulty.
+        .filter(|sh| !same_rgb(sh.border, primary))
         .filter(|sh| !badge(sh))
+        .filter(|sh| !pressed(sh.center))
         .map(rect)
         .collect();
     assert!(
         edged.is_empty(),
-        "boxes with another edge round them: {edged:?}"
+        "lines round what isn't pressed or selected: {edged:?}"
     );
-    // The panels are framed: each of the right column's three sections (the search row and the
-    // actions under the list stand on their own, with no strip round them).
-    let framed = c
-        .shapes
-        .iter()
-        .filter(|sh| {
-            neutral_edge(sh) && same_rgb(sh.fill, style::surface_fill(style::Surface::Raised))
-        })
-        .filter(|sh| sh.half[0] * 2.0 > 150.0)
-        .count();
-    assert!(framed >= 3, "the column's sections framed: {framed}");
-    let parted = c.shapes.iter().filter(|sh| faint_card_edge(sh)).count();
-    assert!(
-        parted + 1 >= set_cards.len(),
-        "every set card but the open one parted: {parted}"
-    );
+    // The column is one panel (its sections parted by lines across it), as the list is.
+    assert!(column_panel(&c, &s).is_some(), "the column's one panel");
+    assert_eq!(sections(&c, &s).len(), 3, "its three sections");
     // No line under a row of the list: rows are parted by room (the one line is the list's
     // panel's, along its top above the rows).
     let lw = s.select.list_w(c.width);
@@ -751,7 +775,7 @@ fn a_cards_picture_is_behind_a_curtain_a_dark_plate_under_the_text_then_an_eased
     );
     assert_eq!(plate.fill, plate.border, "the plate plain");
     assert!(
-        plate.fill[3] > 0.99 && sw.fill[3] > 0.99 && sw.border[3] < 0.3,
+        plate.fill[3] > 0.99 && sw.fill[3] > 0.99 && (0.35..0.45).contains(&sw.border[3]),
         "dark under the text, the picture coming out to the right: {} to {}",
         sw.fill[3],
         sw.border[3]
@@ -1323,7 +1347,10 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
     assert_eq!(strips.len(), 1, "one strip: {found:?}");
     let strip = strips[0];
     assert_eq!(strip.params[0], style::radius::SMALL, "its corners round");
-    assert!(neutral_edge(strip), "the main menu's edge round it");
+    assert!(
+        strip.params[1] == 0.0 || strip.border[3] == 0.0,
+        "no line round it: its tone apart from the panel's"
+    );
     let [left, y, w, h] = rect(strip);
     let right = left + w;
     // From the lane's start (no drum left of it, out past the details' edge), on past the lane's
@@ -1717,7 +1744,7 @@ fn the_search_row_sits_under_the_performance_readout_its_buttons_blocks_of_one_h
 }
 
 #[test]
-fn play_and_the_row_of_actions_keep_the_screen_s_margin_with_no_strip_round_them() {
+fn play_and_the_row_of_actions_keep_the_screen_s_margin_at_the_foot_of_the_column_s_panel() {
     let (mut s, _songs, mut now) = menu_look("select-look-play-margin");
     let c = settled(&mut s, &mut now);
     let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
@@ -1736,7 +1763,9 @@ fn play_and_the_row_of_actions_keep_the_screen_s_margin_with_no_strip_round_them
         "Play 8 in from the margin: {play:?}"
     );
     assert!(play[1] > last[1] + last[3], "under the column: {play:?}");
-    // No surface round the row: nothing raised under Play but Play's own.
+    // No strip of their own round the buttons: they stand at the foot of the column's one
+    // panel, under the line closing its last section, 8 up from its bottom, which is level
+    // with the list's.
     let fill = style::surface_fill(style::Surface::Raised);
     let strips: Vec<[f32; 4]> = c
         .shapes
@@ -1747,6 +1776,40 @@ fn play_and_the_row_of_actions_keep_the_screen_s_margin_with_no_strip_round_them
         .filter(|r| r[2] > play[2] + 1.0)
         .collect();
     assert!(strips.is_empty(), "a strip round the actions: {strips:?}");
+    let panel = column_panel(&c, &s).expect("the column's panel");
+    let [_, end] = s.select.frame_span();
+    assert!(
+        (panel[1] + panel[3] - end).abs() < 0.5,
+        "the panel down to the list's bottom: {panel:?} to {end}"
+    );
+    assert!(
+        (panel[1] + panel[3] - 8.0 - (play[1] + play[3])).abs() < 0.5,
+        "Play 8 up from its bottom: {play:?} in {panel:?}"
+    );
+    let rules = column_rules(&c, &s);
+    assert_eq!(
+        rules.len(),
+        3,
+        "a line between each two sections and over the actions"
+    );
+    assert!(
+        rules[2][1] < play[1],
+        "the line over the actions: {rules:?} {play:?}"
+    );
+}
+
+#[test]
+fn the_right_column_s_panel_starts_level_with_the_search_row() {
+    let (mut s, _songs, mut now) = menu_look("select-look-column-top");
+    let c = settled(&mut s, &mut now);
+    let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
+    let panel = column_panel(&c, &s).expect("the column's panel");
+    assert!(
+        (panel[1] - search[1]).abs() < 0.5,
+        "no hole over the column: {panel:?}, the search at {search:?}"
+    );
+    // The details start at the panel's top.
+    assert!((sections(&c, &s)[0][1] - panel[1]).abs() < 0.01);
 }
 
 #[test]
@@ -1980,12 +2043,12 @@ fn the_full_combo_pp_is_one_button_across_its_row() {
         (left_in - right_in).abs() < 0.5,
         "across the row: {pp:?} in {head:?}"
     );
-    // A block of the buttons' tone and edge.
+    // A block of the buttons' tone, no line round it at rest (a strip of numbers in a box read
+    // as a table's cell; the edge comes under the pointer).
     let block = c.shapes.iter().any(|sh| {
         same_rgb(sh.fill, render::rgba(style::tone::CONTROL, 1.0))
-            && same_rgb(sh.border, render::rgba(style::tone::EDGE, 1.0))
             && sh.params[0] == style::radius::CONTROL
-            && sh.params[1] == style::tone::LINE
+            && sh.params[1] == 0.0
             && inside([pp[0] + pp[2] / 2.0, pp[1] + pp[3] / 2.0], rect(sh), 0.0)
     });
     assert!(block, "on a block");
@@ -2485,12 +2548,14 @@ fn the_volume_mixer_comes_up_opaque_above_the_lane_of_actions() {
     let (mut s, _songs, mut now) = menu_look("select-look-mixer");
     s.volume.touch(now);
     let c = settled(&mut s, &mut now);
+    // The mixer's panel: the menu's tone, all but opaque (an overlay's).
     let mixer = c
         .shapes
         .iter()
         .filter(|sh| same_rgb(sh.fill, render::rgba(style::tone::PANEL, 1.0)))
-        .filter(|sh| sh.fill[3] >= 0.95 && sh.half[0] * 2.0 > 200.0 && sh.half[1] * 2.0 > 90.0)
-        .filter(|sh| sh.half[1] * 2.0 < 110.0 && sh.center[0] > c.width / 2.0)
+        .filter(|sh| sh.fill[3] >= 0.97)
+        .filter(|sh| sh.half[0] * 2.0 > 200.0 && sh.half[1] * 2.0 > 90.0)
+        .filter(|sh| sh.center[0] > c.width / 2.0)
         .map(rect)
         .next_back()
         .expect("the mixer's panel, all but opaque");
@@ -2758,6 +2823,8 @@ fn everything_in_the_right_column_is_within_the_preview_tiles_edges_at_any_list_
             .shapes
             .iter()
             .filter(|sh| inside(sh.center, page, 0.0) && sh.half[0] * 2.0 < page[2] - 1.0)
+            // (Not the screen's backdrop, taller than the page: the vignette down its side.)
+            .filter(|sh| sh.half[1] * 2.0 <= page[3] + 1.0)
             .filter(|sh| sh.fill[3] > 0.0 || sh.border[3] > 0.0)
             .map(rect)
             .filter(|r| r[0] < left - 0.01 || r[0] + r[2] > right + 0.01)
@@ -2787,9 +2854,42 @@ fn everything_in_the_right_column_is_within_the_preview_tiles_edges_at_any_list_
                 assert!(apart, "share {share}: {a:?} {ra:?} runs into {b:?} {rb:?}");
             }
         }
-        // And the details start on the same line as the lane: the title, the stats, the
-        // timeline's times.
-        for t in ["Regression", "OD", "0:00 / 0:10"] {
+        // And the details start on the same line as the lane: the title, the stats' first tile
+        // (its caption in its middle), the timeline's times.
+        let od = c
+            .texts
+            .iter()
+            .filter(|(_, s)| s == "OD")
+            .filter_map(|(r, _)| c.shapes.get(r.clone()))
+            .map(|g| {
+                let x0 = g.iter().map(|sh| rect(sh)[0]).fold(f32::MAX, f32::min);
+                let x1 = g
+                    .iter()
+                    .map(|sh| rect(sh)[0] + rect(sh)[2])
+                    .fold(f32::MIN, f32::max);
+                let y = rect(&g[0])[1];
+                [x0, x1, y]
+            })
+            .find(|[x0, _, y]| inside([*x0, *y], page, 0.0))
+            .expect("OD");
+        let od_tile = c
+            .shapes
+            .iter()
+            .filter(|sh| plain(sh) && sh.params[0] == style::radius::SMALL)
+            .map(rect)
+            .find(|r| inside([od[0], od[2]], *r, 0.0) && r[2] < page[2] / 2.0)
+            .expect("OD's tile");
+        assert!(
+            (od_tile[0] - left).abs() < 0.01,
+            "share {share}: the stats from {}, the lane from {left}",
+            od_tile[0]
+        );
+        let (mid, tile_mid) = ((od[0] + od[1]) / 2.0, od_tile[0] + od_tile[2] / 2.0);
+        assert!(
+            (mid - tile_mid).abs() < 1.5,
+            "share {share}: OD in its tile's middle: {mid} vs {tile_mid}"
+        );
+        for t in ["Regression", "0:00 / 0:10"] {
             let at = c
                 .texts
                 .iter()
@@ -2933,12 +3033,15 @@ fn the_song_list_runs_down_a_dark_panel_with_a_line_along_its_top() {
         .fold(f32::MIN, f32::max);
     // A dark panel the whole list is on (nothing bright shows between its rows), no line round
     // it.
-    let panel_rgb = render::rgba(style::tone::PANEL, 1.0);
+    let panel_rgb = render::rgba(style::PANEL_COLD, 1.0);
     let panel = c
         .shapes
         .iter()
         .filter(|sh| {
-            plain(sh) && same_rgb(sh.fill, panel_rgb) && sh.fill[3] >= 0.85 && sh.border[3] == 0.0
+            plain(sh)
+                && same_rgb(sh.fill, panel_rgb)
+                && sh.fill[3] >= 0.9
+                && (sh.params[1] == 0.0 || sh.border == sh.fill)
         })
         .map(rect)
         .find(|r| r[0] <= 24.0 && r[0] + r[2] >= 24.0 + lw && r[3] > 200.0)
@@ -2967,16 +3070,41 @@ fn the_song_list_runs_down_a_dark_panel_with_a_line_along_its_top() {
 }
 
 #[test]
-fn a_maps_picture_behind_song_select_is_dimmed_to_a_fifth() {
+fn a_maps_picture_behind_song_select_is_under_a_dense_cold_ground_darker_at_the_edges() {
     let (mut s, _songs, mut now) = menu_look("select-look-bg-dim");
     s.preview.has_background = true;
     settled(&mut s, &mut now);
     s.preview.has_background = true;
     now += Duration::from_millis(16);
     frame(&mut s, now);
+    let c = frame(&mut s, now + Duration::from_millis(16));
+    // Over the whole screen a deep navy, not a grey: a yellow or white picture doesn't colour
+    // the screen and the room between the panels brown.
+    let ground = render::rgba(style::GROUND, 1.0);
+    let tint = c
+        .shapes
+        .iter()
+        .find(|sh| {
+            plain(sh)
+                && same_rgb(sh.fill, ground)
+                && sh.half[0] * 2.0 >= c.width - 1.0
+                && sh.half[1] * 2.0 >= render::VIRTUAL_HEIGHT - 1.0
+        })
+        .expect("the ground over the whole screen");
+    assert!(ground[2] > ground[0], "cold: {ground:?}");
+    let shown = s.bg_brightness * (1.0 - tint.fill[3]);
     assert!(
-        s.bg_brightness > 0.0 && s.bg_brightness <= 0.2 + 1e-6,
-        "a bright picture doesn't wash the screen out: {}",
-        s.bg_brightness
+        s.bg_brightness > 0.0 && shown <= 0.1,
+        "a bright picture doesn't wash the screen out: {} under {}",
+        s.bg_brightness,
+        tint.fill[3]
     );
+    // Darker still at the screen's sides: a shade from each edge in.
+    let sides = c
+        .shapes
+        .iter()
+        .filter(|sh| sh.params[3] == render::SHADE_EASED && same_rgb(sh.fill, ground))
+        .filter(|sh| sh.half[1] * 2.0 >= render::VIRTUAL_HEIGHT - 1.0)
+        .count();
+    assert_eq!(sides, 2, "a vignette down both sides");
 }

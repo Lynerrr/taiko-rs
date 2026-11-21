@@ -216,9 +216,10 @@ enum Scene {
 
 /// How slowly a new background comes in on the main menu, where it's the whole picture.
 const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
-/// How bright the map's picture behind song select in the main menu's look is (a fifth): a white
-/// or yellow one washed the screen out to grey round the list and the column.
-const SELECT_BG_BRIGHTNESS: f32 = 0.2;
+/// How bright the map's picture behind song select in the main menu's look is, under its cold
+/// ground (`style::ground`): a white or yellow one washed the screen out round the list and the
+/// column.
+const SELECT_BG_BRIGHTNESS: f32 = 0.3;
 
 /// How long "Reset map offsets" waits for its second press.
 const RESET_CONFIRM: Duration = Duration::from_secs(4);
