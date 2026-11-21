@@ -161,8 +161,10 @@ jobs:
           prefix-key: v1-rust
           save-if: ${{ github.ref == 'refs/heads/worktree-taiko-client' }}
 
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+      # A prebuilt binary from cargo-ndk's releases (through cargo-binstall), not a source build.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
 
       - name: Signing key
         env:
@@ -188,9 +190,11 @@ jobs:
           name: android
           path: taiko-rs-android.apk
 
-  # install.sh against the archive just built, before anything is published.
+  # install.sh against the archive just built, before anything is published. Stable only: dev's
+  # test builds skip them, and every release of dev to stable runs them before publishing.
   linux-install-check:
     needs: linux
+    if: github.ref == 'refs/heads/worktree-taiko-client'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -209,9 +213,10 @@ jobs:
 
   # install.sh against the archive just built, on both of the binary's architectures, before
   # anything is published. Starting it writes the settings, which proves it runs (the runner may
-  # have no GPU, so it may exit right after).
+  # have no GPU, so it may exit right after). Stable only, like linux-install-check.
   macos-install-check:
     needs: macos
+    if: github.ref == 'refs/heads/worktree-taiko-client'
     strategy:
       matrix:
         os: [macos-latest, macos-15-intel]
@@ -237,7 +242,20 @@ jobs:
 
   publish:
     needs: [windows, linux, linux-install-check, macos, macos-install-check, android]
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/worktree-taiko-client' || github.ref == 'refs/heads/dev')
+    # always(): a skipped install check (on dev) would otherwise skip this job too. Every build
+    # must succeed; the install checks must succeed on stable and may only be skipped on dev.
+    if: >-
+      always()
+      && github.event_name != 'pull_request'
+      && (github.ref == 'refs/heads/worktree-taiko-client' || github.ref == 'refs/heads/dev')
+      && needs.windows.result == 'success'
+      && needs.linux.result == 'success'
+      && needs.macos.result == 'success'
+      && needs.android.result == 'success'
+      && (needs.linux-install-check.result == 'success'
+        || (github.ref == 'refs/heads/dev' && needs.linux-install-check.result == 'skipped'))
+      && (needs.macos-install-check.result == 'success'
+        || (github.ref == 'refs/heads/dev' && needs.macos-install-check.result == 'skipped'))
     runs-on: ubuntu-latest
     steps:
       # Cargo.toml only: the version the releases are named by.

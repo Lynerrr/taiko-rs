@@ -7,6 +7,10 @@ New commits cancel the previous run for the same pull request.
 - The game builds its application and test binaries, runs Clippy, and executes the tests
   on Linux, Windows, and macOS.
 - Android builds an APK with a debug signing key, without release secrets.
+- Pull requests into `dev` run the Linux desktop job only: dev is the test channel, and its
+  release build still compiles all four platforms after the merge. Pull requests into stable
+  (release pull requests from dev too), merge queue groups, pushes and manual runs keep the
+  full matrix, so anything dev broke on Windows, macOS or Android is caught before stable.
 - Clippy treats every warning as an error (`-D warnings`). Builds use the committed
   lockfile (`--locked`).
 
@@ -30,7 +34,9 @@ and test targets avoids building dependencies again for tests.
 The `Release build` workflow runs on pushes to the main/dev branches and manual dispatch,
 not on pull requests. Production release optimization, desktop packaging, and installer
 checks happen there, so PRs do not repeat the same tests/builds in two workflows. It runs no
-tests: Pre-merge ran them on every platform before the merge.
+tests: Pre-merge ran them before the merge. The installer checks (`linux-install-check`,
+`macos-install-check`) run on stable only; dev's `dev-build` is published from the four
+builds alone.
 
 ## Build caches
 
@@ -104,7 +110,8 @@ branches to be up to date before merging** when using branch protection without 
 queue. See [GitHub's required status check documentation](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 
 The final check runs even when a dependency fails or is skipped and succeeds only when
-all desktop matrix jobs and the Android build succeed. A workflow file alone does not enable
+all desktop matrix jobs and the Android build succeed (a Linux-only run, for a pull request
+into `dev` or from sync-to-dev, skips Android on purpose). A workflow file alone does not enable
 merge protection; the repository setting must require this status check.
 
 If branch protection previously required checks from `Release build` on pull requests,
