@@ -216,6 +216,9 @@ enum Scene {
 
 /// How slowly a new background comes in on the main menu, where it's the whole picture.
 const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
+/// How bright the map's picture behind song select in the main menu's look is (a fifth): a white
+/// or yellow one washed the screen out to grey round the list and the column.
+const SELECT_BG_BRIGHTNESS: f32 = 0.2;
 
 /// How long "Reset map offsets" waits for its second press.
 const RESET_CONFIRM: Duration = Duration::from_secs(4);
@@ -12942,6 +12945,11 @@ impl State {
                     } else {
                         0.5
                     }
+                }
+                // Song select in the main menu's look: darker, so a bright picture doesn't wash
+                // the screen out round the list and the column.
+                _ if self.scene.is_select() && !self.select.legacy && !self.select.classic => {
+                    SELECT_BG_BRIGHTNESS
                 }
                 Scene::Other(ref s) => s.background_dim().unwrap_or(0.35),
             };

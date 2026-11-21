@@ -1799,11 +1799,11 @@ impl Preview {
             // At the top of the details' panel, its top corners as round as the panel's.
             drawn |= c.picture_cover_round_top(&bg, rect, clip, tint, crate::style::radius::CARD);
         }
-        // A plate of the panel's tone under the title and artist, over the banner's left, fading
-        // out to nothing at its right end: in layers as the picture is, so it fades out downwards
-        // with it and no edge of it shows where the picture has gone.
+        // A plate of the panel's tone over the banner, dark under the title and artist at its
+        // left and lighter to its right end in an eased sweep: in layers as the picture is, so it
+        // fades out downwards with it and no edge of it shows where the picture has gone.
         if drawn {
-            let (strength, reach) = BANNER_PLATE;
+            let (strength, rest) = BANNER_PLATE;
             for k in 0..BANNER_STRIPS {
                 let below = if k + 1 < BANNER_STRIPS {
                     1.0 - keep(k + 1)
@@ -1821,14 +1821,14 @@ impl Preview {
                 let bottom = crate::render::snap_to_grid(y + (k + 1) as f32 * sh);
                 let start = c.shapes.len();
                 let plate = crate::style::SURFACE_1;
-                c.shade_across(
+                c.shade_eased(
                     [x, y],
-                    [w * reach, h],
+                    [w, h],
                     crate::style::radius::CARD,
                     rgba(plate, strength * alpha),
-                    rgba(plate, 0.0),
+                    rgba(plate, rest * alpha),
                 );
-                c.clip_since(start, x, y, w * reach, bottom - y);
+                c.clip_since(start, x, y, w, bottom - y);
             }
         }
         if drawn && since.is_none() {
@@ -2137,7 +2137,13 @@ impl Preview {
         // box is as tall as its section leaves it, and all the lane's reach fits it.
         let [top, bottom] = self.shown_reach();
         let (k, fit) = match split {
-            Some(s) => (s.lane[1] / (bottom - top).max(band_h).max(1.0), 1.0),
+            // Split, a share of its box's height: big notes and the drum keep clear of its
+            // edges and of the hint along its bottom (the lane's band fitted to the box filled
+            // it with them).
+            Some(s) => (
+                s.lane[1] / (bottom - top).max(band_h).max(1.0) * SPLIT_LANE_FILL,
+                1.0,
+            ),
             None => {
                 let k = k_full * wanted;
                 let extra = (bottom - top - band_h) * k;
@@ -2418,7 +2424,13 @@ impl Preview {
         crate::game::with_look(preview_look(crate::game::playfield_look()), || {
             game.draw_playfield(c, scroll_speed)
         });
-        let oy = by - band_top * k;
+        // Split, in the middle of its box (the band takes a share of its height).
+        let centre = if split.is_some() {
+            (bh - band_h * k) / 2.0
+        } else {
+            0.0
+        };
+        let oy = by - band_top * k + centre;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
         // Bare, the lane fits its round tile; its notes slide in from under the tile's edge (the
@@ -2445,7 +2457,13 @@ impl Preview {
             .iter()
             .find(|s| Canvas::text_width(size, s) <= room);
             if let Some(hint) = hint {
-                c.text_right(right, by + bh - 10.0, size, rgba(0x6f6f86, 1.0), hint);
+                // Split, in the room under the notes, clear of them.
+                let hy = if split.is_some() {
+                    Canvas::text_y_at(by + bh - 3.0 - Canvas::text_height(size), size)
+                } else {
+                    by + bh - 10.0
+                };
+                c.text_right(right, hy, size, rgba(0x6f6f86, 1.0), hint);
             }
         }
         if fade < 1.0 {
@@ -2486,6 +2504,10 @@ pub use crate::config::PREVIEW_SIZE;
 
 /// Space between the stats in the details.
 const STAT_GAP: f32 = 10.0;
+
+/// Split (song select's sections), how much of its box's height the lane's band takes, in the
+/// middle of it: room above and under the big notes and the drum, and for the hint under them.
+const SPLIT_LANE_FILL: f32 = 0.8;
 
 /// Bare: how far the autoplay's lane fades in at its left end (out from the drum's side) and its
 /// right (where the notes come in), and how tall the timeline's bars are.
@@ -2608,9 +2630,9 @@ const BARS_PLAYED: f32 = 0.8;
 /// heights (the mapper's line, the difficulty's chip, the stat tiles, the Don/Kat bar with its
 /// counts, the pp chips, what a TJA course leaves out) and the gaps between the blocks.
 const BANNER_H: f32 = 96.0;
-/// The plate under the banner's text: how dark at its left, and how much of the banner it
-/// reaches over.
-const BANNER_PLATE: (f32, f32) = (0.75, 0.65);
+/// The plate over the banner, under its text: how dark at its left and at its right end, an
+/// eased sweep between (the title, the artist and the mapper read on a white or yellow picture).
+const BANNER_PLATE: (f32, f32) = (0.9, 0.45);
 const BANNER_TOP: f32 = 14.0;
 const MAPPER_H: f32 = 13.0;
 const CHIP_H: f32 = 18.0;
@@ -2637,7 +2659,7 @@ const PREVIEW_GAP: f32 = 10.0;
 const BANNER_STRIPS: usize = 12;
 const BANNER_WHOLE: f32 = 0.45;
 /// How bright the banner's picture is drawn, so the title reads over it.
-const BANNER_BRIGHT: f32 = 0.6;
+const BANNER_BRIGHT: f32 = 0.5;
 
 /// The bare details' text, laid out before anything is drawn (the panel's height follows it):
 /// the title at the title size on one line, or two lines a step smaller; the artist one step
@@ -3370,6 +3392,111 @@ mod beat_tests {
         }
         assert!(seen > 0, "notes in the lane");
         assert!(outside > 0, "notes drawn from outside the lane, to be cut");
+    }
+
+    /// In song select's sections (split), the lane's notes and drum are scaled to the lane's box
+    /// with room round them: big ones reach neither its edges nor the hint along its bottom.
+    #[test]
+    fn split_the_notes_fit_the_lane_with_room_and_clear_the_hint() {
+        crate::render::set_frame_theme(Some(crate::render::Theme {
+            animations: false,
+            ..crate::render::Theme::default()
+        }));
+        let text = format!(
+            "TITLE:Big\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n{}#END\n",
+            "3434,\n".repeat(16)
+        );
+        let map = taiko_logic::tja::parse(&text)
+            .unwrap()
+            .courses
+            .remove(0)
+            .map;
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.tja"),
+            map.meta.clone(),
+        )];
+        let mut game = new_preview_game(&map, 1.0);
+        game.game.set_time(3000.0);
+        let mut p = Preview {
+            seen: Some(0),
+            ready_for: Some(0),
+            game: Some(game),
+            map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+            bare: true,
+            split: Some(Split {
+                head: 120.0,
+                lane: Split::lane_in(200.0, 200.0),
+            }),
+            ..Default::default()
+        };
+        let mut c = Canvas {
+            audit: true,
+            ..Canvas::default()
+        };
+        c.clear(853.3);
+        p.draw_panel(
+            &mut c,
+            &library,
+            500.0,
+            40.0,
+            340.0,
+            400.0,
+            1.0,
+            None,
+            Some(("Play from", "Shift+Enter")),
+            None,
+            None,
+        );
+        let [bx, by, _, bh] = p.box_rect.expect("the lane");
+        let hint = c
+            .texts
+            .iter()
+            .find(|(_, t)| t.starts_with("click: fullscreen"))
+            .map(|(r, _)| {
+                c.shapes[r.clone()].iter().fold(
+                    [f32::MAX, f32::MAX, f32::MIN, f32::MIN],
+                    |[x0, y0, x1, y1], g| {
+                        [
+                            x0.min(g.center[0] - g.half[0]),
+                            y0.min(g.center[1] - g.half[1]),
+                            x1.max(g.center[0] + g.half[0]),
+                            y1.max(g.center[1] + g.half[1]),
+                        ]
+                    },
+                )
+            })
+            .expect("the hint");
+        let mut seen = 0;
+        for sh in &c.shapes {
+            let circle = sh.half[0] > 3.0
+                && (sh.half[0] - sh.half[1]).abs() < 0.01
+                && sh.params[0] >= sh.half[0] - 0.01
+                && sh.params[3] < 10.0
+                && sh.fill[3] > 0.5;
+            let near = sh.center[0] >= bx && (sh.center[1] - (by + bh / 2.0)).abs() < bh;
+            if !circle || !near {
+                continue;
+            }
+            seen += 1;
+            let r = [
+                sh.center[0] - sh.half[0],
+                sh.center[1] - sh.half[1],
+                sh.center[0] + sh.half[0],
+                sh.center[1] + sh.half[1],
+            ];
+            // An eighth of the lane at least above and under the biggest of them.
+            let room = bh * 0.12;
+            assert!(
+                r[1] >= by + room && r[3] <= by + bh - room,
+                "a circle at {}..{}, in the lane {by}..{}",
+                r[1],
+                r[3],
+                by + bh
+            );
+            let apart = r[2] <= hint[0] || r[0] >= hint[2] || r[3] <= hint[1] || r[1] >= hint[3];
+            assert!(apart, "a circle {r:?} over the hint {hint:?}");
+        }
+        assert!(seen > 3, "notes on the lane: {seen}");
     }
 
     #[test]

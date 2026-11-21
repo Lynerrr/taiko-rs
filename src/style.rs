@@ -9,8 +9,6 @@ use crate::hit::Canvas;
 use crate::render::{self, pixel_size, rgba, snap_to_grid};
 
 const GOLD: u32 = 0xFFD34D;
-/// A kiai's gold, for what lights up in one.
-pub const KIAI_GOLD: u32 = GOLD;
 const GLITCH_RED: u32 = 0x9f2137;
 const GLITCH_CYAN: u32 = 0x2a9fb5;
 /// A panel: the main menu's.
@@ -396,7 +394,12 @@ pub fn selector_colour() -> u32 {
 /// No fill: an outline alone.
 const CLEAR_FILL: [f32; 4] = [0.0; 4];
 
-pub fn brackets(c: &mut Canvas, [x, y, w, h]: [f32; 4], alpha: f32) {
+pub fn brackets(c: &mut Canvas, rect: [f32; 4], alpha: f32) {
+    brackets_in(c, rect, alpha, selector_colour());
+}
+
+/// `brackets` in `colour` (song select's selection keeps Play's colour through a kiai).
+pub fn brackets_in(c: &mut Canvas, [x, y, w, h]: [f32; 4], alpha: f32, colour: u32) {
     // Bolder on a phone, to be seen from arm's length.
     let t = pixel_size(crate::mobile::pick(2.0, 3.0));
     let arm = (w.min(h) * 0.35).clamp(5.0, crate::mobile::pick(10.0, 20.0));
@@ -406,7 +409,7 @@ pub fn brackets(c: &mut Canvas, [x, y, w, h]: [f32; 4], alpha: f32) {
         snap_to_grid(y),
         snap_to_grid(y + h),
     );
-    let col = rgba(selector_colour(), alpha * (0.75 + 0.25 * pulse()));
+    let col = rgba(colour, alpha * (0.75 + 0.25 * pulse()));
     // Each corner a piece of one outline as round as the cards' (a little more, as it's round
     // them), cut to the corner: the brackets turn their corners round as everything else does.
     let round = (radius::SMALL + 3.0).min(arm);
@@ -1247,15 +1250,20 @@ pub fn star_chip(
 /// A colour as a badge's ink on its dark tint: as it is, or lifted towards white where it's too
 /// dark to read there (the top of the star spectrum).
 pub fn badge_ink(col: u32) -> u32 {
-    let luma = 0.299 * (col >> 16 & 0xff) as f32
-        + 0.587 * (col >> 8 & 0xff) as f32
-        + 0.114 * (col & 0xff) as f32;
-    if luma < 110.0 {
-        crate::menu::tint(col, 0xffffff, 0.45)
-    } else {
-        col
+    let luma = |c: u32| {
+        0.299 * (c >> 16 & 0xff) as f32 + 0.587 * (c >> 8 & 0xff) as f32 + 0.114 * (c & 0xff) as f32
+    };
+    // Towards white in steps until it's as light as `BADGE_INK_LUMA`: the dark blues and
+    // purples of the top ratings came out nearly unreadable on their tint.
+    let mut t = 0.0;
+    while t < 1.0 && luma(crate::menu::tint(col, 0xffffff, t)) < BADGE_INK_LUMA {
+        t += 0.05;
     }
+    crate::menu::tint(col, 0xffffff, t.min(1.0))
 }
+
+/// How light (0 to 255) a badge's ink is at least.
+const BADGE_INK_LUMA: f32 = 175.0;
 
 /// A badge as the mods' (`HR`, `HD`) are, over `[x, y, w, h]`: a dark tint of `col`, a line
 /// of it round, for text in it (`badge_ink`).
@@ -1299,9 +1307,11 @@ fn rated_badge(c: &mut Canvas, right: f32, y: f32, size: f32, col: u32, text: &s
     let x = right - w;
     badge(c, [x, y - 3.0, w, h], col);
     let ink = rgba(badge_ink(col), 1.0);
+    // The diamond in the rating's own colour, the text lifted off its tint.
+    let dot = rgba(col, 1.0);
     let d = size * 0.32;
     let (dx, dy) = (x + size * 0.6 + 2.0, y - 3.0 + h / 2.0);
-    c.round_rect([dx - d, dy - d], [d * 2.0, d * 2.0], d * 0.4, ink, ink, 0.0);
+    c.round_rect([dx - d, dy - d], [d * 2.0, d * 2.0], d * 0.4, dot, dot, 0.0);
     c.text(x + size * 1.3 + 4.0, y, size, ink, text);
     w
 }
@@ -1364,7 +1374,8 @@ fn rating_pill(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_details_rating_is_a_badge_as_the_mods_are_dark_with_its_colour_on_the_edge_and_ink() {
+    fn the_details_rating_is_a_badge_as_the_mods_are_dark_with_its_colour_on_the_edge_and_diamond()
+    {
         let mut c = Canvas::default();
         let w = star_chip(&mut c, 400.0, 100.0, 10.0, None, Some(5.36));
         let mut pill = Canvas::default();
@@ -1383,8 +1394,8 @@ mod tests {
         assert_eq!(chip.border, rgba(col, 0.9));
         assert_eq!(chip.params[1], 1.0, "a one-unit edge");
         assert_eq!(chip.half[0] * 2.0, w);
-        // Not a block of the colour: the diamond and the value are in its ink, nothing is
-        // filled with the rating's colour itself.
+        // Not a block of the colour: only the small diamond is in it, the value in its ink,
+        // lifted off the tint.
         let ink = rgba(badge_ink(col), 1.0);
         assert!(
             !c.shapes
@@ -1392,8 +1403,55 @@ mod tests {
                 .any(|s| s.fill == rgba(col, 1.0) && s.half[0] > 5.0),
             "no block of the colour"
         );
+        assert!(
+            c.shapes.iter().any(|s| s.fill == rgba(col, 1.0)),
+            "the diamond in the colour"
+        );
         let inked = c.shapes.iter().filter(|s| s.fill == ink).count();
-        assert!(inked > 1, "the diamond and the value in its ink: {inked}");
+        assert!(inked > 0, "the value in its ink: {inked}");
+    }
+
+    #[test]
+    fn brackets_in_a_colour_keep_it_through_a_kiai_as_the_selectors_turn_gold() {
+        render::set_frame_theme(Some(render::Theme {
+            kiai: 1.0,
+            ..render::Theme::default()
+        }));
+        let colour_of = |c: &Canvas| {
+            let b = c.shapes[0].border;
+            [b[0], b[1], b[2]]
+        };
+        let mut gold = Canvas::default();
+        brackets(&mut gold, [10.0, 10.0, 100.0, 30.0], 1.0);
+        let g = rgba(GOLD, 1.0);
+        assert_eq!(
+            colour_of(&gold),
+            [g[0], g[1], g[2]],
+            "the selector's: gold in a kiai"
+        );
+        let mut kept = Canvas::default();
+        brackets_in(&mut kept, [10.0, 10.0, 100.0, 30.0], 1.0, 0xEB452C);
+        let k = rgba(0xEB452C, 1.0);
+        assert_eq!(colour_of(&kept), [k[0], k[1], k[2]], "the colour given");
+        render::set_frame_theme(None);
+    }
+
+    #[test]
+    fn a_badges_ink_is_light_enough_to_read_even_for_the_top_ratings() {
+        let luma = |c: u32| {
+            0.299 * (c >> 16 & 0xff) as f32
+                + 0.587 * (c >> 8 & 0xff) as f32
+                + 0.114 * (c & 0xff) as f32
+        };
+        for stars in [1.0f32, 2.5, 4.0, 5.5, 6.5, 7.14, 8.0, 9.5] {
+            let col = role::rating(None, Some(stars));
+            let ink = badge_ink(col);
+            assert!(
+                luma(ink) >= 170.0,
+                "{stars}: {ink:06x} from {col:06x} ({})",
+                luma(ink)
+            );
+        }
     }
 
     #[test]

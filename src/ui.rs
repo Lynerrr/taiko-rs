@@ -540,16 +540,17 @@ const DIFF_CASCADE_SPAN_MS: f32 = 120.0;
 const COVER_FADE_MS: f32 = 200.0;
 /// How round a difficulty row's card is, and its light under the pointer or the selection's.
 const DIFF_ROUND: f32 = 4.0;
-/// The curtain over a card's picture: a plain dark plate over the left part of it (its share of
-/// the card) under the title and artist, then the picture coming out of it to the right end,
-/// where as much of it shows as the second value on a card not open, the third on the open one.
-const CURTAIN: (f32, f32, f32) = (0.54, 0.45, 0.85);
+/// The curtain over a card's picture: a plain dark plate under the title and artist from the
+/// card's left to the first value's share of it, then an eased sweep out of it to the right end,
+/// where as much of the picture shows as the second value on a card not open, the third on the
+/// open one.
+const CURTAIN: (f32, f32, f32) = (0.30, 0.40, 0.75);
+/// How opaque the dark panel the song list runs down is: a bright picture behind it doesn't
+/// show between the rows.
+const LIST_PANEL_ALPHA: f32 = 0.9;
 /// How far in from the list's right end a difficulty's rating badge ends in the main menu's look:
 /// well inside the selection's brackets.
 const DIFF_BADGE_INSET: f32 = 18.0;
-/// How far past the seam between the curtain's plate and its sweep each is clipped: a clip is
-/// rounded in to whole pixels, and a seam a float's error off a pixel's edge left a gap of one.
-const SEAM_SLACK: f32 = 0.1;
 /// The open set's card: its edge in the selection's colour (muted: its brackets are the strong
 /// mark), and how strong its brackets are next to the selected difficulty's.
 const OPEN_EDGE: f32 = 0.5;
@@ -3052,6 +3053,17 @@ impl Select {
         let frame = [20.0, frame_top - 4.0, lw + 8.0, bottom - frame_top + 8.0];
         if legacy {
             crate::style::panel(c, frame[0], frame[1], frame[2], frame[3]);
+        } else {
+            // The main menu's look: a dark panel the list runs down, as the right column's
+            // sections are but with no line round it, only a thin one along its top under the
+            // search row and the tabs. A bright picture behind doesn't show between the rows,
+            // and a row scrolling up goes under a clear edge.
+            let [px, py, pw, ph] = [20.0, top - 4.0, lw + 8.0, bottom - top + 8.0];
+            let r = crate::style::radius::CARD;
+            let fill = rgba(crate::style::tone::PANEL, LIST_PANEL_ALPHA);
+            c.round_rect([px, py], [pw, ph], r, fill, rgba(0, 0.0), 0.0);
+            let line = rgba(crate::style::tone::EDGE, 1.0);
+            c.rect(px + r, py, pw - 2.0 * r, crate::style::tone::LINE, line);
         }
         let tabs = self.source_tabs();
         if !tabs.is_empty() {
@@ -3157,7 +3169,12 @@ impl Select {
                         );
                     }
                     if holds_cursor {
-                        crate::style::brackets(c, [21.0, y - 3.0, lw + 6.0, rh + 3.0], 1.0);
+                        crate::style::brackets_in(
+                            c,
+                            [21.0, y - 3.0, lw + 6.0, rh + 3.0],
+                            1.0,
+                            crate::style::role::primary(),
+                        );
                     }
                     c.hit(24.0, y, lw, *rh, Hit::SectionHeader(*si));
                     let n = sec.groups.len();
@@ -3541,7 +3558,9 @@ impl Select {
                     && !g.contains(&self.cursor)
                 {
                     let l = lights.get(&g.start).copied().unwrap_or(0.0);
-                    c.fade_since(row_start, CARD_DIM + (1.0 - CARD_DIM) * l, 1.0);
+                    // Darker rather than see-through: through a see-through curtain the picture
+                    // under it showed.
+                    c.fade_since(row_start, 1.0, CARD_DIM + (1.0 - CARD_DIM) * l);
                 }
                 // Farther from the target, a little fainter.
                 let e = (away(y + rh / 2.0) / ARC_FADE_REACH).min(1.0);
@@ -3617,7 +3636,9 @@ impl Select {
         let outline_start = c.shapes.len();
         if !self.visible.is_empty() && !cursor_hidden && oy > top - diff_h && oy < bottom {
             let target = [41.0, oy - 3.0, lw - 14.0, diff_h + 3.0];
-            crate::style::brackets(c, target, 1.0);
+            // In Play's colour, a kiai or not (its gold read as a stray yellow on the list).
+            let mark = crate::style::role::primary();
+            crate::style::brackets_in(c, target, 1.0, mark);
             // A song landing in it: a flash, the brackets opening out and fading.
             if let Some(t) = self
                 .anim
@@ -3638,7 +3659,7 @@ impl Select {
                     );
                     let g = LAND_FLASH_GROW * t;
                     let out = [x - g, y - g, w + 2.0 * g, h + 2.0 * g];
-                    crate::style::brackets(c, out, 1.0 - t);
+                    crate::style::brackets_in(c, out, 1.0 - t, mark);
                 } else {
                     self.anim.flash = None;
                 }
@@ -3840,11 +3861,6 @@ impl Select {
             let colour = c.card_colour(&bg);
             // Everything on the card is as round as it, 1 in.
             let round = CARD_RADIUS - 1.0;
-            // Where the curtain's plate ends, on a whole pixel. The picture (and its colour before
-            // it) is drawn only from there on: a dimmed row is drawn see-through, and a picture
-            // under the plate showed through it under the title.
-            let seam = crate::render::snap_to_grid(inner[0] + inner[2] * CURTAIN.0);
-            let picture_start = c.shapes.len();
             if let Some([r, g, b]) = colour
                 && (!shown || a < 1.0)
             {
@@ -3860,13 +3876,6 @@ impl Select {
             }
             let tint = [1.0, 1.0, 1.0, a];
             let drawn = c.card_picture(&bg, inner, tint, round, self.card_greys);
-            c.clip_since(
-                picture_start,
-                seam - SEAM_SLACK,
-                inner[1],
-                inner[0] + inner[2] - seam + SEAM_SLACK,
-                inner[3],
-            );
             if drawn && since.is_none() {
                 covers.insert(key, crate::render::frame_now());
             }
@@ -3875,8 +3884,9 @@ impl Select {
                 // with the picture.
                 let base = if colour.is_some() { 1.0 } else { a };
                 // A curtain drawn back from the left: a plain dark plate under the title and
-                // artist over the card's left part, then the picture coming out of it to the
-                // right, muted on the cards not open (less under the pointer).
+                // artist, then the picture coming out of it to the right in one eased sweep (no
+                // edge where it starts, as a straight one showed), muted on the cards not open
+                // (less under the pointer).
                 let shade = |s: f32| rgba(style::SURFACE_1, s * base);
                 let [cx, cy, cw, ch] = inner;
                 let reveal = if open {
@@ -3884,43 +3894,31 @@ impl Select {
                 } else {
                     CURTAIN.1 + (CURTAIN.2 - CURTAIN.1) * light
                 };
-                // Each cut square where they meet (the seam on a whole pixel, as a clip is rounded
-                // in to whole pixels): laid over each other there, a row's dimming showed the seam
-                // as a line.
-                let start = c.shapes.len();
+                let from = cx + cw * CURTAIN.0;
+                // The plate runs on under the sweep's start, as dark there as it: the plate's
+                // end and the sweep's round corners at its start are both out of sight.
                 c.round_rect(
                     [cx, cy],
-                    [seam - cx + round, ch],
+                    [from - cx + 2.0 * round, ch],
                     round,
                     shade(1.0),
                     shade(1.0),
                     0.0,
                 );
-                // A hair past the seam each, so both round to the same pixel.
-                c.clip_since(start, cx, cy, seam - cx + SEAM_SLACK, ch);
-                let start = c.shapes.len();
-                c.shade_across(
-                    [seam - round, cy],
-                    [cx + cw - seam + round, ch],
+                c.shade_eased(
+                    [from, cy],
+                    [cx + cw - from, ch],
                     round,
                     shade(1.0),
                     shade(1.0 - reveal),
-                );
-                c.clip_since(
-                    start,
-                    seam - SEAM_SLACK,
-                    cy,
-                    cx + cw - seam + SEAM_SLACK,
-                    ch,
                 );
             }
         }
         if open {
             // The selection's mark, as on the difficulty in it: a light of its colour, a muted
-            // edge of it and the selector's brackets. On the beat they light a little; in a kiai
-            // they turn gold.
-            let kiai = style::kiai();
-            let col = crate::menu::tint(style::selector_colour(), style::KIAI_GOLD, kiai);
+            // edge of it and the selector's brackets, in Play's colour. On the beat they light a
+            // little.
+            let col = style::role::primary();
             let beat = style::pulse();
             c.round_rect(
                 [x, y],
@@ -3930,7 +3928,7 @@ impl Select {
                 rgba(col, OPEN_EDGE + 0.2 * beat),
                 1.0,
             );
-            style::brackets(c, [x - 3.0, y - 3.0, w + 6.0, h + 6.0], OPEN_BRACKETS);
+            style::brackets_in(c, [x - 3.0, y - 3.0, w + 6.0, h + 6.0], OPEN_BRACKETS, col);
         } else {
             // A faint edge round every card, so neighbouring pictures of like colours don't run
             // into each other; brighter under the pointer.

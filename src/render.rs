@@ -256,6 +256,9 @@ pub(crate) const SPRITE_BASE: f32 = 10.0;
 /// A plain shape's kind (`params[3]`) for `Canvas::shade_across`: its fill sweeps from `fill`
 /// to `border` across it.
 pub const SHADE_ACROSS: f32 = 3.0;
+/// A plain shape's kind for `Canvas::shade_eased`: as `SHADE_ACROSS`, eased in and out (no edge
+/// shows where it starts or ends against something of its colour).
+pub const SHADE_EASED: f32 = 4.0;
 
 fn flip_x(sh: &mut Shape) {
     let sprite = |s: Sprite| SPRITE_BASE + s as usize as f32;
@@ -267,7 +270,7 @@ fn flip_x(sh: &mut Shape) {
     // Turned the other way in the mirror (the pieces of a bent lane: left as they were, its
     // bends came out turned against the lane and cut into it).
     sh.angle = -sh.angle;
-    if sh.params[3] == SHADE_ACROSS {
+    if sh.params[3] == SHADE_ACROSS || sh.params[3] == SHADE_EASED {
         std::mem::swap(&mut sh.fill, &mut sh.border);
     } else if (0.5..2.5).contains(&sh.params[3]) {
         sh.params[3] = 3.0 - sh.params[3];
@@ -1369,6 +1372,11 @@ fn shade(in: VOut) -> vec4<f32> {
             // `Canvas::shade_across`: fill at the left edge, border at the right.
             let u = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
             let c = mix(in.fill, in.border, u);
+            color = vec4<f32>(c.rgb, c.a * coverage);
+        } else if (in.params.w > 3.5 && in.params.w < 4.5) {
+            // `Canvas::shade_eased`: as across, eased in and out.
+            let u = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
+            let c = mix(in.fill, in.border, smoothstep(0.0, 1.0, u));
             color = vec4<f32>(c.rgb, c.a * coverage);
         } else {
             let bw = in.params.y;
@@ -4683,6 +4691,27 @@ impl<H> Canvas<H> {
             fill: left,
             border: right,
             params: [radius, 0.0, 0.0, SHADE_ACROSS],
+            angle: 0.0,
+        });
+    }
+
+    /// As `shade_across`, the sweep eased in and out: where it starts and ends it runs level, so
+    /// no edge shows against a plain part of its colour on either side of it (a straight sweep
+    /// meeting a plain part showed a line there).
+    pub fn shade_eased(
+        &mut self,
+        [x, y]: [f32; 2],
+        [w, h]: [f32; 2],
+        radius: f32,
+        left: [f32; 4],
+        right: [f32; 4],
+    ) {
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [w / 2.0, h / 2.0],
+            fill: left,
+            border: right,
+            params: [radius, 0.0, 0.0, SHADE_EASED],
             angle: 0.0,
         });
     }
