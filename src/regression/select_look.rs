@@ -368,6 +368,121 @@ fn picture(s: &Shape) -> bool {
 }
 
 #[test]
+fn the_banners_text_sits_on_a_plate_fading_out_across_and_down_with_the_picture() {
+    let (mut s, _songs, mut now) = menu_look("select-look-banner-plate");
+    let i = s.select.selected().expect("a map is selected");
+    let bg = preview::background_path(&s.library[i]).expect("it names a picture");
+    s.pictures
+        .pretend_loaded(&render::path_picture_key(&bg), 16.0 / 9.0);
+    let c = settled(&mut s, &mut now);
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let dark = render::rgba(style::SURFACE_1, 1.0);
+    // Right of the list: the plate's layers, sweeps of the panel's tone from dark at the left to
+    // nothing, each cut to its strip as the picture's layers are.
+    let layers: Vec<(f32, [f32; 4], [f32; 4])> = c
+        .shapes
+        .iter()
+        .enumerate()
+        .filter(|(_, sh)| {
+            sh.params[3] == render::SHADE_ACROSS
+                && sh.center[0] > 28.0 + lw
+                && same_rgb(sh.fill, dark)
+        })
+        .map(|(i, sh)| {
+            let clip = c
+                .clips
+                .iter()
+                .find(|(r, _)| r.contains(&i))
+                .map(|(_, rect)| *rect)
+                .expect("a layer is cut to its strip");
+            (sh.fill[3], rect(sh), clip)
+        })
+        .collect();
+    assert!(layers.len() >= 4, "a plate in layers: {layers:?}");
+    for (_, r, _) in &layers {
+        assert!(
+            r[2] < (c.width - 24.0 - (36.0 + lw)) * 0.7,
+            "over the left: {r:?}"
+        );
+    }
+    let ends: Vec<f32> = c
+        .shapes
+        .iter()
+        .filter(|sh| {
+            sh.params[3] == render::SHADE_ACROSS
+                && sh.center[0] > 28.0 + lw
+                && same_rgb(sh.fill, dark)
+        })
+        .map(|sh| sh.border[3])
+        .collect();
+    assert!(
+        ends.iter().all(|a| *a == 0.0),
+        "nothing of it at its right end: {ends:?}"
+    );
+    let shown = |y: f32| {
+        1.0 - layers
+            .iter()
+            .filter(|(_, _, r)| y >= r[1] && y < r[1] + r[3])
+            .map(|(a, _, _)| 1.0 - a)
+            .product::<f32>()
+    };
+    let top = layers.iter().map(|(_, _, r)| r[1]).fold(f32::MAX, f32::min);
+    let bottom = layers
+        .iter()
+        .map(|(_, _, r)| r[1] + r[3])
+        .fold(0.0, f32::max);
+    let (under_title, at_end) = (shown(top + 10.0), shown(bottom - 0.5));
+    assert!(under_title > 0.6, "dark under the title: {under_title}");
+    assert!(at_end < 0.1, "gone where the picture has: {at_end}");
+}
+
+#[test]
+fn the_details_sections_are_split_by_lines_of_the_panels_edge() {
+    let (mut s, _songs, mut now) = menu_look("select-look-dividers");
+    let c = settled(&mut s, &mut now);
+    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let mut lines: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, edge) && sh.center[0] > 28.0 + lw)
+        .map(rect)
+        .filter(|r| (r[3] - style::tone::LINE).abs() < 0.01 && r[2] > 200.0)
+        .collect();
+    lines.sort_by(|a, b| a[1].total_cmp(&b[1]));
+    let [_, od] = text_at(&c, "OD").expect("the OD tile");
+    let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
+    let lane = hit_rect(&c, |h| *h == Hit::Preview).expect("the preview");
+    let between = |a: f32, b: f32| lines.iter().any(|r| r[1] > a && r[1] + r[3] < b);
+    assert!(
+        between(od - 12.0, od),
+        "over the stats: {lines:?}, OD at {od}"
+    );
+    assert!(
+        between(pp[1] - 8.0, pp[1]),
+        "over the pp: {lines:?}, {pp:?}"
+    );
+    assert!(
+        between(pp[1] + pp[3], lane[1]),
+        "over the preview: {lines:?}, {pp:?} {lane:?}"
+    );
+    // The timeline's bars stand on one, starting with it (its times are under its left end,
+    // 5 under its bars' box).
+    let all = texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT]);
+    let times = all
+        .iter()
+        .find(|t| t.contains(" / "))
+        .expect("the timeline's times");
+    let [tx, ty] = text_at(&c, times).expect("where they are");
+    assert!(
+        lines
+            .iter()
+            .any(|r| (r[0] - tx).abs() < 0.5 && r[1] < ty - 5.0 && r[1] > ty - 12.0),
+        "under the bars: {lines:?}, times at {tx},{ty}"
+    );
+}
+
+#[test]
 fn the_details_open_on_a_banner_of_the_maps_picture_fading_out() {
     let (mut s, _songs, mut now) = menu_look("select-look-banner");
     let i = s.select.selected().expect("a map is selected");
@@ -1417,7 +1532,7 @@ fn the_map_s_picture_behind_song_select_is_blurred_to_a_field_of_colour() {
 
 #[test]
 fn the_search_row_sits_under_the_performance_readout_its_buttons_blocks_of_one_height() {
-    let (mut s, _songs, mut now) = menu_look("select-look-search-row");
+    let (mut s, _songs, mut now) = menu_look("select-look-under-readout");
     let c = settled(&mut s, &mut now);
     let menu = hit_rect(&c, |h| *h == Hit::ToMenu).expect("Menu");
     let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
