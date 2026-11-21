@@ -11,6 +11,71 @@ use crate::font;
 /// Virtual canvas height. Width follows the window aspect ratio.
 pub const VIRTUAL_HEIGHT: f32 = 480.0;
 
+/// How tall the interface's own space is on a desktop at `ui_scale` 1 (`Canvas::begin_space`):
+/// a unit is a pixel at 720p, 1.5 at 1080p and 2 at 1440p, where the screen's 480 units are
+/// 1.5, 2.25 and 3.
+#[allow(
+    dead_code,
+    reason = "song select lays itself out in it next; until then only the tests use it"
+)]
+pub const UI_SPACE_HEIGHT: f32 = 720.0;
+
+/// How tall the interface's space is at `ui_scale` (bigger `ui_scale`, fewer units, all bigger).
+#[allow(
+    dead_code,
+    reason = "song select lays itself out in it next; until then only the tests use it"
+)]
+pub fn ui_space_height(ui_scale: f32) -> f32 {
+    let scale = if ui_scale.is_finite() {
+        ui_scale.clamp(0.5, 2.0)
+    } else {
+        1.0
+    };
+    UI_SPACE_HEIGHT / scale
+}
+
+/// A screen drawn in a space of its own, `Canvas::begin_space` to `Canvas::end_space`: how its
+/// units map onto the screen's, and what the canvas had before it.
+#[must_use = "end_space puts the canvas back"]
+#[allow(
+    dead_code,
+    reason = "song select lays itself out in it next; until then only the tests use it"
+)]
+pub struct Space {
+    /// Screen units per unit of the space (480 / its height).
+    scale: f32,
+    start: usize,
+    hits: usize,
+    regions: usize,
+    width: f32,
+    mouse: (f32, f32),
+    grid: f32,
+    font_scale: f32,
+    disc: Option<[f32; 4]>,
+}
+
+#[allow(
+    dead_code,
+    reason = "song select lays itself out in it next; until then only the tests use it"
+)]
+impl Space {
+    /// Screen units per unit of the space.
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
+    /// A point of the space on the screen (virtual units, 480 tall): for what other screens
+    /// take from this one, as the place a note flies to.
+    pub fn to_screen(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        [x * self.scale, y * self.scale]
+    }
+
+    /// A point of the screen in the space.
+    pub fn to_space(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        [x / self.scale, y / self.scale]
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Shape {
@@ -4645,6 +4710,73 @@ impl<H> Canvas<H> {
 
     /// Scales every shape drawn since `start` about `anchor`, then moves it by (`dx`, `dy`). Radii,
     /// borders and glows scale with it, so the result stays crisp (used for the playfield area).
+    /// Lays out what's drawn next in a space `h` units tall (the width from the screen's aspect),
+    /// until `end_space` maps it onto the screen. The pointer is in its units meanwhile, and text
+    /// snaps to whole screen pixels of them: `h` 480 is the screen itself.
+    #[allow(
+        dead_code,
+        reason = "song select lays itself out in it next; until then only the tests use it"
+    )]
+    pub fn begin_space(&mut self, h: f32) -> Space {
+        let scale = VIRTUAL_HEIGHT / h.max(1.0);
+        let grid = TEXT_GRID.with(std::cell::Cell::get);
+        let font_scale = crate::system_font::pixel_scale();
+        let space = Space {
+            scale,
+            start: self.shapes.len(),
+            hits: self.hits.len(),
+            regions: self.input_regions.len(),
+            width: self.width,
+            mouse: self.mouse,
+            grid,
+            font_scale,
+            disc: self.disc,
+        };
+        self.width /= scale;
+        self.mouse = (self.mouse.0 / scale, self.mouse.1 / scale);
+        // Render pixels per unit: a unit of the space is `scale` of the screen's.
+        if grid > 0.0 {
+            TEXT_GRID.with(|g| g.set(grid * scale));
+        }
+        crate::system_font::set_pixel_scale(font_scale * scale);
+        space
+    }
+
+    /// Maps what was drawn since `begin_space` onto the screen (shapes, clicks, clips, the text
+    /// fields' places) and puts the canvas back as it was.
+    #[allow(
+        dead_code,
+        reason = "song select lays itself out in it next; until then only the tests use it"
+    )]
+    pub fn end_space(&mut self, space: Space) {
+        let k = space.scale;
+        self.transform_since(space.start, [0.0, 0.0], k, 0.0, 0.0);
+        // A click made before the space's first shape isn't moved with the shapes.
+        for h in self.hits[space.hits..]
+            .iter_mut()
+            .filter(|h| h.shape <= space.start)
+        {
+            h.rect = h.rect.map(|v| v * k);
+        }
+        for r in &mut self.input_regions[space.regions..] {
+            r.rect = r.rect.map(|v| v * k);
+            for (_, x) in &mut r.stops {
+                *x *= k;
+            }
+        }
+        if self.disc != space.disc
+            && let Some(d) = self.disc.as_mut()
+        {
+            d[0] *= k;
+            d[1] *= k;
+            d[2] *= k;
+        }
+        self.width = space.width;
+        self.mouse = space.mouse;
+        TEXT_GRID.with(|g| g.set(space.grid));
+        crate::system_font::set_pixel_scale(space.font_scale);
+    }
+
     pub fn transform_since(
         &mut self,
         start: usize,
