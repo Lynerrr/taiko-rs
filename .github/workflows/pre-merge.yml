@@ -21,6 +21,11 @@ on:
         type: boolean
         default: false
 
+# Pull requests into dev also run the Linux desktop job only: dev is the test channel, and its
+# release build still compiles every platform after the merge. Pull requests into stable
+# (release/* PRs from dev included), merge queue groups, pushes and manual runs keep all four.
+# A run called by sync-to-dev.yml reports the caller's event (push), so only linux_only applies.
+
 permissions:
   contents: read
 
@@ -41,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.linux_only && '["ubuntu-24.04"]' || '["ubuntu-24.04", "windows-latest", "macos-latest"]') }}
+        os: ${{ fromJSON((inputs.linux_only || (github.event_name == 'pull_request' && github.base_ref == 'dev')) && '["ubuntu-24.04"]' || '["ubuntu-24.04", "windows-latest", "macos-latest"]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,7 +88,7 @@ jobs:
 
   android:
     name: Android build
-    if: ${{ !inputs.linux_only }}
+    if: ${{ !inputs.linux_only && !(github.event_name == 'pull_request' && github.base_ref == 'dev') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -100,8 +105,10 @@ jobs:
           shared-key: pre-merge-android
           save-if: ${{ github.event_name == 'push' && !inputs.ref }}
 
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+      # A prebuilt binary from cargo-ndk's releases (through cargo-binstall), not a source build.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
 
       # PRs use the script's debug signing key; release signing secrets are not needed.
       - name: Build APK
@@ -123,9 +130,9 @@ jobs:
         env:
           DESKTOP_RESULT: ${{ needs.desktop.result }}
           ANDROID_RESULT: ${{ needs.android.result }}
-          LINUX_ONLY: ${{ inputs.linux_only && 'true' || 'false' }}
+          LINUX_ONLY: ${{ (inputs.linux_only || (github.event_name == 'pull_request' && github.base_ref == 'dev')) && 'true' || 'false' }}
         run: |
-          # A Linux-only run (sync-to-dev.yml) skips Android on purpose.
+          # A Linux-only run (sync-to-dev.yml, a pull request into dev) skips Android on purpose.
           if [ "$LINUX_ONLY" = true ] && [ "$ANDROID_RESULT" = skipped ]; then
             ANDROID_RESULT=success
           fi
