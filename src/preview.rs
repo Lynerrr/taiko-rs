@@ -308,8 +308,6 @@ pub struct Preview {
     pub mods: crate::mods::Mods,
     /// Bottom of the song select panel as last drawn (virtual units).
     pub panel_bottom: f32,
-    /// How tall song select draws the details' page, following `panel_bottom` (0: not yet).
-    pub page_h: f32,
     /// Room kept free at the right of the title line, for a button over the panel's corner
     /// (song select's way to the leaderboard); 0 elsewhere.
     pub title_room: f32,
@@ -318,6 +316,8 @@ pub struct Preview {
     /// off the screen's right edge and the timeline's bars on their own. Set by the caller
     /// before `draw_panel`.
     pub bare: bool,
+    /// Bare: the details and the lane in sections of their own (`Split`), set before each draw.
+    pub split: Option<Split>,
     /// How far left of its place the panel is drawn (song select sliding to its leaderboard):
     /// the bare lane's end, at the screen's right edge, goes along with it, so nothing in the
     /// panel stretches on the way. Set by the caller before `draw_panel`.
@@ -344,10 +344,6 @@ pub struct Preview {
     /// would give, which song select works out.
     pub sim: Option<PpSim>,
     pub sim_pp: Option<f64>,
-    /// Bare: room at the right of the pp row for the way to the leaderboard (song select's), and
-    /// where it goes as last drawn.
-    pub board_w: f32,
-    pub board_at: Option<[f32; 4]>,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
     /// changes per unit of that (for dragging the panel's bottom edge).
     pub size: f32,
@@ -1036,7 +1032,6 @@ impl Preview {
     pub fn hide_panel(&mut self) {
         self.graph_rect = None;
         self.play_rect = None;
-        self.board_at = None;
     }
 
     /// The map whose music plays, and where it is (map ms).
@@ -1221,84 +1216,88 @@ impl Preview {
         self.enter(c, part, 40.0);
         let part = c.shapes.len();
 
-        // The mapper's line: the EPIC pill (bumping on the beat) or the status at its right,
-        // the heart left of that.
-        self.epic_at = None;
-        let mut right = x + w - 14.0;
-        if self.epic {
-            let pw = crate::epic::pill_width();
-            right -= pw;
-            crate::epic::pill(c, right, cy, 1.0, crate::style::pulse());
-            self.epic_at = Some([right, cy]);
-            right -= 8.0;
-        } else if let Some((label, col)) = shown.status.filter(|s| !s.0.is_empty()) {
-            let cw = Canvas::text_width(text::CAPTION, label) + 12.0;
-            right -= cw;
-            let fill = rgba(col, 0.22);
-            c.round_rect([right, cy], [cw, MAPPER_H], MAPPER_H / 2.0, fill, fill, 0.0);
-            let ty = cy + (MAPPER_H - Canvas::text_height(text::CAPTION)) / 2.0;
-            c.text_centered(right + cw / 2.0, ty, text::CAPTION, rgba(col, 1.0), label);
-            right -= 8.0;
-        }
-        if let Some(liked) = shown.liked {
-            const HEART_W: f32 = 16.0;
-            right -= HEART_W;
-            let hover = c.hovered(right, cy, HEART_W, MAPPER_H);
-            let colour = match (liked, hover) {
-                (true, _) => 0xff5fa2,
-                (false, true) => ink::SECONDARY,
-                (false, false) => ink::CAPTION,
-            };
-            crate::player::draw_heart(c, right + 3.5, cy + 2.5, 1.0, colour);
-            c.hit(right, cy, HEART_W, MAPPER_H, Hit::SelectLike);
-            right -= 6.0;
-        }
-        let ty = cy + (MAPPER_H - Canvas::text_height(text::BODY)) / 2.0;
-        // No mapper given (a TJA chart without MAKER): no empty "mapped by".
-        if !e.meta.creator.trim().is_empty() {
-            let by = tr!("mapped by ", "譜面: ", "маппер: ");
-            let bw = c.text(lx, ty, text::BODY, rgba(ink::CAPTION, 1.0), by);
-            let name = Canvas::fit(text::BODY, (right - lx - bw).max(0.0), &e.meta.creator);
-            c.text(lx + bw, ty, text::BODY, rgba(ink::PRIMARY, 1.0), &name);
-        }
-        cy += MAPPER_H + BLOCK_GAP;
-        self.enter(c, part, 70.0);
-
-        // The difficulty: a chip of its rating's colour, its rating pill at the right. The
-        // rating counts from the last song's to this one's; while it's being worked out, a
-        // skeleton stands in the pill's place.
-        let part = c.shapes.len();
-        let level = e.meta.level;
-        let stars = follow(&mut self.stars_shown, shown.stars, c.dt_ms);
-        let pill_w = if level.is_none() && stars.is_none() {
-            let pw = Canvas::text_width(text::HEADING, "0.00") + text::HEADING * 1.6 + 6.0;
-            let ph = text::HEADING + 6.0;
-            crate::style::skeleton(c, [x + w - 14.0 - pw, cy + 3.0, pw, ph], ph / 2.0);
-            pw
+        if self.split.is_some() {
+            cy = self.draw_compact_row(c, e, [x, cy, w], shown);
         } else {
-            crate::style::star_chip(c, x + w - 14.0, cy + 3.0, text::HEADING, level, stars)
-        };
-        let chip = role::rating(level, stars);
-        let luma = 0.299 * (chip >> 16 & 0xff) as f32
-            + 0.587 * (chip >> 8 & 0xff) as f32
-            + 0.114 * (chip & 0xff) as f32;
-        let chip_ink = if luma > 140.0 { 0x15151d } else { ink::PRIMARY };
-        let room = (iw - pill_w - space::SECTION - 16.0).max(0.0);
-        let name = Canvas::fit(text::BODY, room, &e.meta.version);
-        let cw = Canvas::text_width(text::BODY, &name) + 16.0;
-        let fill = rgba(chip, 1.0);
-        c.round_rect(
-            [lx, cy],
-            [cw, CHIP_H],
-            crate::style::radius::SMALL,
-            fill,
-            fill,
-            0.0,
-        );
-        let ty = cy + (CHIP_H - Canvas::text_height(text::BODY)) / 2.0;
-        c.text(lx + 8.0, ty, text::BODY, rgba(chip_ink, 1.0), &name);
-        cy += CHIP_H + BLOCK_GAP;
-        self.enter(c, part, 100.0);
+            // The mapper's line: the EPIC pill (bumping on the beat) or the status at its right,
+            // the heart left of that.
+            self.epic_at = None;
+            let mut right = x + w - 14.0;
+            if self.epic {
+                let pw = crate::epic::pill_width();
+                right -= pw;
+                crate::epic::pill(c, right, cy, 1.0, crate::style::pulse());
+                self.epic_at = Some([right, cy]);
+                right -= 8.0;
+            } else if let Some((label, col)) = shown.status.filter(|s| !s.0.is_empty()) {
+                let cw = Canvas::text_width(text::CAPTION, label) + 12.0;
+                right -= cw;
+                let fill = rgba(col, 0.22);
+                c.round_rect([right, cy], [cw, MAPPER_H], MAPPER_H / 2.0, fill, fill, 0.0);
+                let ty = cy + (MAPPER_H - Canvas::text_height(text::CAPTION)) / 2.0;
+                c.text_centered(right + cw / 2.0, ty, text::CAPTION, rgba(col, 1.0), label);
+                right -= 8.0;
+            }
+            if let Some(liked) = shown.liked {
+                const HEART_W: f32 = 16.0;
+                right -= HEART_W;
+                let hover = c.hovered(right, cy, HEART_W, MAPPER_H);
+                let colour = match (liked, hover) {
+                    (true, _) => 0xff5fa2,
+                    (false, true) => ink::SECONDARY,
+                    (false, false) => ink::CAPTION,
+                };
+                crate::player::draw_heart(c, right + 3.5, cy + 2.5, 1.0, colour);
+                c.hit(right, cy, HEART_W, MAPPER_H, Hit::SelectLike);
+                right -= 6.0;
+            }
+            let ty = cy + (MAPPER_H - Canvas::text_height(text::BODY)) / 2.0;
+            // No mapper given (a TJA chart without MAKER): no empty "mapped by".
+            if !e.meta.creator.trim().is_empty() {
+                let by = tr!("mapped by ", "譜面: ", "маппер: ");
+                let bw = c.text(lx, ty, text::BODY, rgba(ink::CAPTION, 1.0), by);
+                let name = Canvas::fit(text::BODY, (right - lx - bw).max(0.0), &e.meta.creator);
+                c.text(lx + bw, ty, text::BODY, rgba(ink::PRIMARY, 1.0), &name);
+            }
+            cy += MAPPER_H + BLOCK_GAP;
+            self.enter(c, part, 70.0);
+
+            // The difficulty: a chip of its rating's colour, its rating pill at the right. The
+            // rating counts from the last song's to this one's; while it's being worked out, a
+            // skeleton stands in the pill's place.
+            let part = c.shapes.len();
+            let level = e.meta.level;
+            let stars = follow(&mut self.stars_shown, shown.stars, c.dt_ms);
+            let pill_w = if level.is_none() && stars.is_none() {
+                let pw = Canvas::text_width(text::HEADING, "0.00") + text::HEADING * 1.6 + 6.0;
+                let ph = text::HEADING + 6.0;
+                crate::style::skeleton(c, [x + w - 14.0 - pw, cy + 3.0, pw, ph], ph / 2.0);
+                pw
+            } else {
+                crate::style::star_chip(c, x + w - 14.0, cy + 3.0, text::HEADING, level, stars)
+            };
+            let chip = role::rating(level, stars);
+            let luma = 0.299 * (chip >> 16 & 0xff) as f32
+                + 0.587 * (chip >> 8 & 0xff) as f32
+                + 0.114 * (chip & 0xff) as f32;
+            let chip_ink = if luma > 140.0 { 0x15151d } else { ink::PRIMARY };
+            let room = (iw - pill_w - space::SECTION - 16.0).max(0.0);
+            let name = Canvas::fit(text::BODY, room, &e.meta.version);
+            let cw = Canvas::text_width(text::BODY, &name) + 16.0;
+            let fill = rgba(chip, 1.0);
+            c.round_rect(
+                [lx, cy],
+                [cw, CHIP_H],
+                crate::style::radius::SMALL,
+                fill,
+                fill,
+                0.0,
+            );
+            let ty = cy + (CHIP_H - Canvas::text_height(text::BODY)) / 2.0;
+            c.text(lx + 8.0, ty, text::BODY, rgba(chip_ink, 1.0), &name);
+            cy += CHIP_H + BLOCK_GAP;
+            self.enter(c, part, 100.0);
+        }
         // The map's name and difficulty, the stats, the pp and the preview: sections split by
         // a line of the panels' edge, each coming in with what's under it.
         let divider = |c: &mut Canvas, at: f32| {
@@ -1352,6 +1351,7 @@ impl Preview {
             tiles.push((tr!("OFFSET", "オフセット", "ОФФСЕТ"), offset, 1.0));
         }
         let n = tiles.len() as f32;
+        let tile_h = tile_h();
         let tw = (iw - (n - 1.0) * space::CARD_GAP) / n;
         let mut od_hovered = None;
         for (k, (caption, value, alpha)) in tiles.iter().enumerate() {
@@ -1359,7 +1359,7 @@ impl Preview {
             let tx = lx + k as f32 * (tw + space::CARD_GAP);
             crate::style::tile(
                 c,
-                [tx, cy, tw, TILE_H],
+                [tx, cy, tw, tile_h],
                 crate::style::radius::SMALL,
                 Surface::Raised,
             );
@@ -1367,7 +1367,7 @@ impl Preview {
             let caption = Canvas::fit(text::CAPTION, room, caption);
             c.text(
                 tx + 6.0,
-                cy + 5.0,
+                Canvas::text_y_at(cy + TILE_PAD, text::CAPTION),
                 text::CAPTION,
                 rgba(ink::CAPTION, 1.0),
                 &caption,
@@ -1376,10 +1376,11 @@ impl Preview {
             // on the same baseline.
             let size = fitting_size(value, room);
             let value = Canvas::fit(size, room, value);
+            let value_top = cy + tile_h - TILE_PAD - Canvas::text_height(text::HEADING);
             let drop = Canvas::text_height(text::HEADING) - Canvas::text_height(size);
             c.text(
                 tx + 6.0,
-                cy + 13.0 + drop,
+                Canvas::text_y_at(value_top + drop, size),
                 size,
                 rgba(ink::PRIMARY, *alpha),
                 &value,
@@ -1387,23 +1388,26 @@ impl Preview {
             // A value still being read: a skeleton where it goes.
             if value.is_empty() && d.is_none() {
                 let vh = Canvas::text_height(text::HEADING);
-                crate::style::skeleton(c, [tx + 6.0, cy + 13.0, room * 0.6, vh], 2.0);
+                crate::style::skeleton(c, [tx + 6.0, value_top, room * 0.6, vh], 2.0);
             }
-            if k == 0 && c.hovered(tx, cy, tw, TILE_H) {
-                od_hovered = Some((tx, cy + TILE_H));
+            if k == 0 && c.hovered(tx, cy, tw, tile_h) {
+                od_hovered = Some((tx, cy + tile_h));
             }
             self.enter(c, part, 130.0 + 25.0 * k as f32);
         }
-        cy += TILE_H + BLOCK_GAP;
+        cy += tile_h + BLOCK_GAP;
 
         // Don and Kat as one bar split in proportion, the counts at its ends, rolls and swells
-        // between them.
+        // between them. Compact (`split`), the pp simulator open takes its place.
+        let compact = self.split.is_some();
+        let bar_shown = !(compact && self.sim.is_some());
         let part = c.shapes.len();
         let notes = crate::game::note_colours();
         let caption_h = Canvas::text_height(text::CAPTION);
         let bar_y = cy + caption_h + 3.0;
+        let cap_y = Canvas::text_y_at(cy, text::CAPTION);
         let bar_h = BAR_H - caption_h - 3.0;
-        match d.filter(|d| d.dons + d.kats > 0) {
+        match d.filter(|d| d.dons + d.kats > 0 && bar_shown) {
             Some(d) => {
                 let a = shown.fade;
                 let dw = iw * d.dons as f32 / (d.dons + d.kats) as f32;
@@ -1412,8 +1416,8 @@ impl Preview {
                 let quiet = rgba(ink::CAPTION, a);
                 let dons = format!("{} {}", d.dons, tr!("DON", "ドン", "ДОН"));
                 let kats = format!("{} {}", d.kats, tr!("KAT", "カッ", "КАТ"));
-                c.text(lx, cy, text::CAPTION, quiet, &dons);
-                c.text_right(lx + iw, cy, text::CAPTION, quiet, &kats);
+                c.text(lx, cap_y, text::CAPTION, quiet, &dons);
+                c.text_right(lx + iw, cap_y, text::CAPTION, quiet, &kats);
                 let mut extra = Vec::new();
                 if d.rolls > 0 {
                     extra.push(format!("{} {}", d.rolls, tr!("ROLLS", "連打", "РОЛЛЫ")));
@@ -1421,33 +1425,44 @@ impl Preview {
                 if d.swells > 0 {
                     extra.push(format!("{} {}", d.swells, tr!("SWELLS", "風船", "БАЛЛОНЫ")));
                 }
-                if !extra.is_empty() {
-                    c.text_centered(lx + iw / 2.0, cy, text::CAPTION, quiet, &extra.join("  "));
+                // Compact, what a TJA course leaves out is said here (no row of its own).
+                if let (true, Some(what)) = (compact, shown.left_out) {
+                    let room = iw
+                        - Canvas::text_width(text::CAPTION, &dons)
+                        - Canvas::text_width(text::CAPTION, &kats)
+                        - 24.0;
+                    let line = format!("{} {what}", left_out_label());
+                    let line = Canvas::fit(text::CAPTION, room.max(0.0), &line);
+                    let ink = rgba(ink::SECONDARY, a);
+                    c.text_centered(lx + iw / 2.0, cap_y, text::CAPTION, ink, &line);
+                } else if !extra.is_empty() {
+                    c.text_centered(
+                        lx + iw / 2.0,
+                        cap_y,
+                        text::CAPTION,
+                        quiet,
+                        &extra.join("  "),
+                    );
                 }
             }
+            None if !bar_shown => {}
             None if d.is_none() => crate::style::skeleton(c, [lx, bar_y, iw, bar_h], 0.0),
             None => {
                 let fill = surface_fill(Surface::Lifted);
                 c.rect(lx, bar_y, iw, bar_h, fill);
             }
         }
-        cy += BAR_H + BLOCK_GAP;
+        if bar_shown {
+            cy += BAR_H + BLOCK_GAP;
+        }
         self.enter(c, part, 230.0);
 
         // What a full combo would give, on one button that opens the pp simulator in its place,
-        // counting from the last song's; a skeleton while the map is being read. The way to
-        // the leaderboard ends the row (song select draws it at `board_at`).
+        // counting from the last song's; a skeleton while the map is being read.
         let part = c.shapes.len();
         divider(c, cy - BLOCK_GAP / 2.0);
         let pp_now = follow_pp(&mut self.pp_shown, self.potential, c.dt_ms);
-        let room = if self.board_w > 0.0 {
-            self.board_w + space::CARD_GAP
-        } else {
-            0.0
-        };
-        let row_w = (iw - room).max(0.0);
-        self.board_at =
-            (self.board_w > 0.0).then_some([lx + iw - self.board_w, cy, self.board_w, PP_H]);
+        let row_w = iw;
         let ty = cy + (PP_H - Canvas::text_height(text::BODY)) / 2.0;
         let pointer = c.mouse;
         let over = |[x, y, w, h]: [f32; 4]| {
@@ -1594,7 +1609,7 @@ impl Preview {
         }
         self.enter(c, part, PP_ENTER_MS);
         cy += PP_H;
-        if let (true, Some(what)) = (l.left_out, shown.left_out) {
+        if let (true, Some(what), false) = (l.left_out, shown.left_out, compact) {
             cy += 4.0;
             let label = format!("{} ", left_out_label());
             let lw = c.text(
@@ -1613,11 +1628,99 @@ impl Preview {
                 &what,
             );
         }
-        // Under the pp, the line over the preview (in the gap the layout leaves above it).
-        let part = c.shapes.len();
-        divider(c, y + l.head - PREVIEW_GAP / 2.0);
-        self.enter(c, part, PP_ENTER_MS);
+        // Under the pp, the line over the preview (in the gap the layout leaves above it); compact,
+        // the preview is a section of its own.
+        if !compact {
+            let part = c.shapes.len();
+            divider(c, y + l.head - PREVIEW_GAP / 2.0);
+            self.enter(c, part, PP_ENTER_MS);
+        }
         od_hovered
+    }
+
+    /// The compact details' (`split`) one row under the artist at `[x, y, w]`: the difficulty as
+    /// a chip in its rating's colour and who mapped it at the left; the rating badge at the right,
+    /// the EPIC pill or the status and the heart left of it. Returns where what's under it starts.
+    fn draw_compact_row(
+        &mut self,
+        c: &mut Canvas,
+        e: &Entry,
+        [x, y, w]: [f32; 3],
+        shown: &BareShown,
+    ) -> f32 {
+        use crate::style::{ink, role, text};
+        let lx = x + 14.0;
+        let part = c.shapes.len();
+        let mut right = x + w - 14.0;
+        let level = e.meta.level;
+        let stars = follow(&mut self.stars_shown, shown.stars, c.dt_ms);
+        let pill_w = if level.is_none() && stars.is_none() {
+            let pw = Canvas::text_width(text::HEADING, "0.00") + text::HEADING * 1.6 + 6.0;
+            let ph = text::HEADING + 6.0;
+            crate::style::skeleton(c, [right - pw, y, pw, ph], ph / 2.0);
+            pw
+        } else {
+            crate::style::star_chip(c, right, y + 3.0, text::HEADING, level, stars)
+        };
+        right -= pill_w + 8.0;
+        // The small marks on the row's middle line.
+        let my = y + (CHIP_H - MAPPER_H) / 2.0;
+        self.epic_at = None;
+        if self.epic {
+            let pw = crate::epic::pill_width();
+            right -= pw;
+            crate::epic::pill(c, right, my, 1.0, crate::style::pulse());
+            self.epic_at = Some([right, my]);
+            right -= 8.0;
+        } else if let Some((label, col)) = shown.status.filter(|s| !s.0.is_empty()) {
+            let cw = Canvas::text_width(text::CAPTION, label) + 12.0;
+            right -= cw;
+            crate::style::badge(c, [right, my, cw, MAPPER_H], col);
+            let ty = Canvas::text_y_mid(my + MAPPER_H / 2.0, text::CAPTION);
+            let ink = rgba(crate::style::badge_ink(col), 1.0);
+            c.text_centered(right + cw / 2.0, ty, text::CAPTION, ink, label);
+            right -= 8.0;
+        }
+        if let Some(liked) = shown.liked {
+            const HEART_W: f32 = 16.0;
+            right -= HEART_W;
+            let hover = c.hovered(right, my, HEART_W, MAPPER_H);
+            let colour = match (liked, hover) {
+                (true, _) => 0xff5fa2,
+                (false, true) => ink::SECONDARY,
+                (false, false) => ink::CAPTION,
+            };
+            crate::player::draw_heart(c, right + 3.5, my + 2.5, 1.0, colour);
+            c.hit(right, my, HEART_W, MAPPER_H, Hit::SelectLike);
+            right -= 6.0;
+        }
+        // The difficulty: a badge as the rating's (a dark tint of its colour, a line of it round,
+        // its name in it), up to most of the room left.
+        let chip = role::rating(level, stars);
+        let room = (right - lx).max(0.0);
+        let name = Canvas::fit(text::BODY, (room * 0.6 - 16.0).max(0.0), &e.meta.version);
+        let cw = if name.is_empty() {
+            0.0
+        } else {
+            Canvas::text_width(text::BODY, &name) + 16.0
+        };
+        if cw > 0.0 {
+            crate::style::badge(c, [lx, y, cw, CHIP_H], chip);
+            let ty = Canvas::text_y_mid(y + CHIP_H / 2.0, text::BODY);
+            let ink = rgba(crate::style::badge_ink(chip), 1.0);
+            c.text(lx + 8.0, ty, text::BODY, ink, &name);
+        }
+        // Who mapped it, after it, where there's room (no empty "mapped by").
+        let mx = lx + cw + if cw > 0.0 { 10.0 } else { 0.0 };
+        if !e.meta.creator.trim().is_empty() && right - mx > 40.0 {
+            let ty = Canvas::text_y_mid(y + CHIP_H / 2.0, text::BODY);
+            let by = tr!("by ", "譜面: ", "маппер: ");
+            let bw = c.text(mx, ty, text::BODY, rgba(ink::CAPTION, 1.0), by);
+            let name = Canvas::fit(text::BODY, (right - mx - bw).max(0.0), &e.meta.creator);
+            c.text(mx + bw, ty, text::BODY, rgba(ink::PRIMARY, 1.0), &name);
+        }
+        self.enter(c, part, 70.0);
+        y + CHIP_H + BLOCK_GAP
     }
 
     /// The bare details' part drawn since shape `start` coming in `delay` ms after its song was
@@ -1634,15 +1737,6 @@ impl Preview {
         }
         c.transform_since(start, [0.0, 0.0], 1.0, ENTER_SHIFT * (1.0 - p), 0.0);
         c.fade_since(start, p, 1.0);
-    }
-
-    /// Song select's Leaderboard chip, drawn since shape `start` after the details (at
-    /// `board_at`): it comes in with the pp row it ends and goes out with the details.
-    pub(crate) fn enter_board(&mut self, c: &mut Canvas, start: usize) {
-        self.enter(c, start, PP_ENTER_MS);
-        if let (true, Some(drawn)) = (crate::render::animations(), c.shapes.get(start..)) {
-            self.drawn.shapes.extend_from_slice(drawn);
-        }
     }
 
     /// The map's picture over `[x, y, w, h]` (cover-cropped), whole down to `BANNER_WHOLE` of
@@ -1883,7 +1977,6 @@ impl Preview {
         self.graph_rect = None;
         self.play_rect = None;
         self.box_rect = None;
-        self.board_at = None;
         let Some(i) = self.seen.filter(|&i| i < library.len()) else {
             (self.size_cap, self.size_shown) = (fitted(110.0), wanted.min(fitted(110.0)));
             let below = unit * self.size_shown + 12.0 + after_box;
@@ -2030,20 +2123,28 @@ impl Preview {
             + 6.0;
         // Bare: the banner layout, of its own height.
         let left_out_text = stats[3].first().map(|cell| cell.1.clone());
-        let bare_layout = self
-            .bare
-            .then(|| Bare::new(e, iw, left_out_text.is_some(), self.sim.is_some()));
+        let split = self.split.filter(|_| self.bare);
+        let bare_layout = self.bare.then(|| {
+            let sim = self.sim.is_some();
+            Bare::new(e, iw, left_out_text.is_some(), sim, split.is_some())
+        });
         let head = bare_layout.as_ref().map_or(head, |l| l.head);
         (self.size_cap, self.size_shown) = (fitted(head), wanted.min(fitted(head)));
         // The lane fills the panel's width (at the size chosen), however little room the details
         // leave: the panel grows down, into the leaderboard's room, rather than the lane shrink.
-        let k = k_full * wanted;
         // A .tko map that moves things off the lane gets a taller box, as far as the room left
-        // under the panel goes (both ends drawn in alike when it doesn't all fit).
+        // under the panel goes (both ends drawn in alike when it doesn't all fit). Split, the
+        // box is as tall as its section leaves it, and all the lane's reach fits it.
         let [top, bottom] = self.shown_reach();
-        let extra = (bottom - top - band_h) * k;
-        let room = (h - head - band_h * k - after_box).max(0.0);
-        let fit = if extra > room { room / extra } else { 1.0 };
+        let (k, fit) = match split {
+            Some(s) => (s.lane[1] / (bottom - top).max(band_h).max(1.0), 1.0),
+            None => {
+                let k = k_full * wanted;
+                let extra = (bottom - top - band_h) * k;
+                let room = (h - head - band_h * k - after_box).max(0.0);
+                (k, if extra > room { room / extra } else { 1.0 })
+            }
+        };
         let band_top = band_top - (band_top - top) * fit;
         let band_h = band_h + (bottom - top - band_h) * fit;
         let preview_h = band_h * k;
@@ -2055,7 +2156,10 @@ impl Preview {
         } else {
             0.0
         };
-        self.panel_bottom = y + h - tail;
+        self.panel_bottom = match split {
+            Some(s) => s.lane[0] + s.lane[1] + after_box - tail,
+            None => y + h - tail,
+        };
         // Bare, it's on a panel of its own that song select draws under the whole page.
         if !self.bare {
             c.round_rect(
@@ -2218,7 +2322,10 @@ impl Preview {
         } else {
             x + 10.0 + (w - 20.0 - bw) / 2.0
         };
-        let (by, bh) = (cy, preview_h);
+        let (by, bh) = match split {
+            Some(s) => (s.lane[0], s.lane[1]),
+            None => (cy, preview_h),
+        };
         // Bare, the autoplay is a lane like the menu's, its drum at the left, running on to the
         // tiles' right edge; the notes come in from its end.
         let lane_end = if self.bare {
@@ -2508,6 +2615,16 @@ const BANNER_TOP: f32 = 14.0;
 const MAPPER_H: f32 = 13.0;
 const CHIP_H: f32 = 18.0;
 const TILE_H: f32 = 30.0;
+/// How far in from a stat tile's top its caption is, and from its bottom its value.
+const TILE_PAD: f32 = 5.0;
+
+/// How tall a stat tile is: `TILE_H`, or taller where text comes out taller than asked
+/// (`render::TextSizes`), for its caption and value to keep apart.
+fn tile_h() -> f32 {
+    use crate::style::text::{CAPTION, HEADING};
+    let fits = 2.0 * TILE_PAD + Canvas::text_height(CAPTION) + 1.0 + Canvas::text_height(HEADING);
+    fits.max(TILE_H)
+}
 const BAR_H: f32 = 14.0;
 const PP_H: f32 = 16.0;
 /// Between the pp button, open, and the play it works out under it.
@@ -2535,14 +2652,27 @@ struct Bare {
 }
 
 impl Bare {
-    fn new(e: &Entry, iw: f32, left_out: bool, sim: bool) -> Bare {
+    fn new(e: &Entry, iw: f32, left_out: bool, sim: bool, compact: bool) -> Bare {
         use crate::style::text::{BODY, HEADING, TITLE};
         let (title_size, title, artist_size) = if Canvas::text_width(TITLE, &e.meta.title) <= iw {
             (TITLE, vec![e.meta.title.clone()], HEADING)
+        } else if compact {
+            // Compact, the title keeps to one line, a step smaller and cut short if need be.
+            (HEADING, vec![Canvas::fit(HEADING, iw, &e.meta.title)], BODY)
         } else {
             (HEADING, wrap(HEADING, iw, &e.meta.title, 2), BODY)
         };
         let artist = Canvas::fit(artist_size, iw, &e.meta.artist);
+        if compact {
+            return Bare {
+                title_size,
+                title,
+                artist_size,
+                artist,
+                left_out,
+                head: compact_head(),
+            };
+        }
         let head = BANNER_TOP
             + title.len() as f32 * (Canvas::text_height(title_size) + 4.0)
             + Canvas::text_height(artist_size)
@@ -2551,7 +2681,7 @@ impl Bare {
             + BLOCK_GAP
             + CHIP_H
             + BLOCK_GAP
-            + TILE_H
+            + tile_h()
             + BLOCK_GAP
             + BAR_H
             + BLOCK_GAP
@@ -2569,6 +2699,48 @@ impl Bare {
         }
     }
 }
+
+/// How tall the compact details (`Split`) are, whatever the map: the title on one line, the
+/// difficulty and its mapper on one row, the stats, Don and Kat's bar (or the pp simulator's
+/// play in its place) and the pp.
+pub fn compact_head() -> f32 {
+    use crate::style::text::{HEADING, TITLE};
+    BANNER_TOP
+        + Canvas::text_height(TITLE)
+        + 4.0
+        + Canvas::text_height(HEADING)
+        + 6.0
+        + CHIP_H
+        + BLOCK_GAP
+        + tile_h()
+        + BLOCK_GAP
+        + BAR_H
+        + BLOCK_GAP
+        + PP_H
+        + PREVIEW_GAP
+}
+
+/// The details split into sections of their own (song select's right column in the main menu's
+/// look): the details `head` tall at the top, the autoplay's lane in a box of its own lower down.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Split {
+    pub head: f32,
+    /// The lane's box: its top and height (the timeline goes under it).
+    pub lane: [f32; 2],
+}
+
+impl Split {
+    /// The lane's box in a section from `top`, `h` tall: the timeline and the room for
+    /// "Play from" under it in there too.
+    pub fn lane_in(top: f32, h: f32) -> [f32; 2] {
+        let under = 8.0 + BARE_GRAPH_H + TIMELINE_UNDER + PLAY_FROM_ROOM;
+        [top + SPLIT_PAD, (h - SPLIT_PAD - under).max(24.0)]
+    }
+}
+
+/// Split: the room over the lane in its section, and under the timeline for its times.
+const SPLIT_PAD: f32 = 10.0;
+const TIMELINE_UNDER: f32 = 12.0;
 
 /// What the bare details show of the map besides its entry.
 struct BareShown<'a> {

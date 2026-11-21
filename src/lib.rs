@@ -185,8 +185,8 @@ use screens::play::{FAIL_RESTART_LINGER, PlayScreen, draw_spectate_all, pause_la
 use screens::preview::Preview;
 use screens::results::{ResultsScreen, results_job, results_title};
 use screens::select::leaderboard::{
-    BOARD_HEAD, BOARD_ROW, draw_divider, draw_leaderboard, draw_online_leaderboard, fetch_board,
-    misses_and_age,
+    BOARD_HEAD, BOARD_ROW, BoardLine, BoardShown, draw_board_section, draw_divider,
+    draw_leaderboard, draw_online_leaderboard, fetch_board, misses_and_age, section_rows,
 };
 use screens::select::presets::{draw_preset_deleting, draw_preset_naming, preset_key};
 use screens::select::preview_chrome::{draw_analysis, draw_preview_chrome};

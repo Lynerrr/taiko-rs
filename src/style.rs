@@ -818,25 +818,6 @@ const DICE_SIX: Icon = [
 ];
 /// The die's faces as it rolls (Random pressed), the five (`DICE`) where it stops.
 pub const DICE_ROLL: [&Icon; 5] = [&DICE_THREE, &DICE_SIX, &DICE_TWO, &DICE_FOUR, &DICE_ONE];
-/// Rankings: a podium.
-pub const PODIUM: Icon = [
-    "................",
-    "................",
-    "......####......",
-    "......####......",
-    "......####......",
-    "......####......",
-    "......####......",
-    ".####.####......",
-    ".####.####......",
-    ".####.####.####.",
-    ".####.####.####.",
-    ".####.####.####.",
-    ".####.####.####.",
-    ".####.####.####.",
-    "................",
-    "................",
-];
 /// Play: the main menu's own.
 pub const PLAY: Icon = [
     "................",
@@ -1558,7 +1539,7 @@ mod tests {
 
     #[test]
     fn a_bare_icons_rectangles_cover_its_lit_pixels_exactly() {
-        for art in [&BACK, &SORT, &FOLDER, &SPARK, &DICE, &PODIUM, &PLAY] {
+        for art in [&BACK, &SORT, &FOLDER, &SPARK, &DICE, &PLAY] {
             assert!(art.iter().all(|row| row.len() == 16), "16 pixels a row");
             let mut painted = [[false; 16]; 16];
             for (x, y, w, h) in icon_rects(art) {

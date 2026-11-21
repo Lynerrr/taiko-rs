@@ -43,7 +43,7 @@ fn title(s: &State) -> String {
 
 /// Where the text `t` is drawn on the details' side (left of its first letter) and how opaque.
 fn text_on_panel(c: &Canvas, s: &State, t: &str) -> Option<(f32, f32)> {
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let lw = s.select.list_w(c.width);
     c.texts.iter().find_map(|(r, text)| {
         let sh = c.shapes.get(r.start)?;
         (text == t && sh.center[0] > 24.0 + lw).then(|| (sh.center[0] - sh.half[0], sh.fill[3]))
@@ -107,7 +107,7 @@ fn details_on_their_way_show_skeletons_not_dots() {
         "no dots for what's on its way: {:?}",
         c.texts.iter().map(|(_, t)| t).collect::<Vec<_>>()
     );
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let lw = s.select.list_w(c.width);
     let lifted = style::surface_fill(style::Surface::Lifted);
     let blocks = c
         .shapes
