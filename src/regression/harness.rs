@@ -194,6 +194,18 @@ pub fn frame_on(s: &mut State, now: Instant, width: f32) -> Canvas {
     c
 }
 
+/// What a frame drew, back in song select's own units: it lays itself out in a space of its own
+/// height (`State::select_scale` screen units to one of its), so its tests read its layout in
+/// the units it was laid out in, whatever the size of that space.
+pub fn in_select_units(mut c: Canvas, s: &State) -> Canvas {
+    let k = 1.0 / s.select_scale.max(1e-3);
+    c.rescale_since(0, 0, 0, k);
+    c.width *= k;
+    c.height *= k;
+    c.mouse = (c.mouse.0 * k, c.mouse.1 * k);
+    c
+}
+
 /// Draws frames `step` apart from `*now` until `done` holds (true) or `limit` frames pass
 /// (false). `*now` is left at the last frame.
 pub fn run_until(

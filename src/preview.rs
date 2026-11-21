@@ -256,6 +256,9 @@ pub struct Preview {
     play_rect: Option<[f32; 4]>,
     /// Where the autoplay box was drawn (clicking it opens the fullscreen preview).
     box_rect: Option<[f32; 4]>,
+    /// Screen units to one of those the rects above were drawn in: song select draws the
+    /// panel in a space of its own (`render::Canvas::begin_space`). 0 (none yet) is 1.
+    drawn_scale: f32,
     /// When the shown map's details could first be shown (they fade in), and for which entry.
     ready_at: Option<Instant>,
     shown_for: Option<usize>,
@@ -1069,12 +1072,29 @@ impl Preview {
             .map(|(_, t)| *t)
     }
 
+    /// A point of the screen (virtual units) in the units the panel was drawn in.
+    fn drawn_at(&self, x: f32, y: f32) -> (f32, f32) {
+        let k = if self.drawn_scale > 0.0 {
+            self.drawn_scale
+        } else {
+            1.0
+        };
+        (x / k, y / k)
+    }
+
+    /// Notes the units of the canvas the panel's rects are drawn in.
+    fn drawn_in(&mut self, c: &Canvas) {
+        self.drawn_scale = VIRTUAL_HEIGHT / c.height.max(1.0);
+    }
+
     pub fn play_button_at(&self, x: f32, y: f32) -> bool {
+        let (x, y) = self.drawn_at(x, y);
         self.play_rect
             .is_some_and(|[bx, by, bw, bh]| x >= bx && x <= bx + bw && y >= by && y <= by + bh)
     }
 
     pub fn box_at(&self, x: f32, y: f32) -> bool {
+        let (x, y) = self.drawn_at(x, y);
         self.box_rect
             .is_some_and(|[bx, by, bw, bh]| x >= bx && x <= bx + bw && y >= by && y <= by + bh)
     }
@@ -1128,6 +1148,7 @@ impl Preview {
             !self.bare,
         );
         self.graph_rect = Some(rect);
+        self.drawn_in(c);
         // Bare, there's no hint: the timeline is plain enough.
         let hint = !self.bare;
         self.play_rect = draw_play_button(
@@ -1157,6 +1178,7 @@ impl Preview {
 
     /// Map time under a point of the difficulty timeline, if the point is on it.
     pub fn time_at(&self, x: f32, y: f32) -> Option<f64> {
+        let (x, y) = self.drawn_at(x, y);
         let [gx, gy, gw, gh] = self.graph_rect?;
         if x < gx - 2.0 || x > gx + gw + 2.0 || y < gy - 2.0 || y > gy + gh + 2.0 {
             return None;
@@ -2214,6 +2236,7 @@ impl Preview {
             );
         }
         self.box_rect = Some([bx, by, bw, bh]);
+        self.drawn_in(c);
         c.hit(lane_x, by, lane_end.min(c.width) - lane_x, bh, Hit::Preview);
         // Bare, the timeline is as wide as the lane's tile, edge to edge.
         let (gx, gw) = if self.bare {
@@ -2326,9 +2349,9 @@ impl Preview {
         let clip_x = if self.bare { lane_x } else { bx };
         let clip = crate::layout::Area {
             x: clip_x / full_w,
-            y: by / VIRTUAL_HEIGHT,
+            y: by / c.height,
             w: (notes_end - clip_x) / full_w,
-            h: bh / VIRTUAL_HEIGHT,
+            h: bh / c.height,
         };
         // Only the lane is clipped to the box.
         let end = c.shapes.len();

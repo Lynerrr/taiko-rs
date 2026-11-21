@@ -1345,6 +1345,7 @@ impl State {
             board_for: (0, false, false),
             board_max: 0,
             board_rect: None,
+            select_scale: 1.0,
             split_drag: None,
             split_click: None,
             online_leaderboard: Vec::new(),

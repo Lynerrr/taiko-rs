@@ -37,10 +37,6 @@ pub fn ui_space_height(ui_scale: f32) -> f32 {
 /// A screen drawn in a space of its own, `Canvas::begin_space` to `Canvas::end_space`: how its
 /// units map onto the screen's, and what the canvas had before it.
 #[must_use = "end_space puts the canvas back"]
-#[allow(
-    dead_code,
-    reason = "song select lays itself out in it next; until then only the tests use it"
-)]
 pub struct Space {
     /// Screen units per unit of the space (480 / its height).
     scale: f32,
@@ -48,16 +44,13 @@ pub struct Space {
     hits: usize,
     regions: usize,
     width: f32,
+    height: f32,
     mouse: (f32, f32),
     grid: f32,
     font_scale: f32,
     disc: Option<[f32; 4]>,
 }
 
-#[allow(
-    dead_code,
-    reason = "song select lays itself out in it next; until then only the tests use it"
-)]
 impl Space {
     /// Screen units per unit of the space.
     pub fn scale(&self) -> f32 {
@@ -3810,6 +3803,8 @@ pub struct Canvas<H> {
     /// The whole picture glitches this frame: how much (0 to 1) and a number picking how.
     pub glitch: Option<[f32; 2]>,
     pub width: f32,
+    /// How tall it is in its units: the screen's 480, or a space's (`begin_space`).
+    pub height: f32,
     /// Clickable areas, in drawing order (later ones are on top).
     pub hits: Vec<HitBox<H>>,
     /// Pointer position (virtual units), for hover highlights.
@@ -3864,6 +3859,7 @@ impl<H> Default for Canvas<H> {
             disc: Default::default(),
             glitch: Default::default(),
             width: Default::default(),
+            height: VIRTUAL_HEIGHT,
             hits: Default::default(),
             mouse: Default::default(),
             dt_ms: Default::default(),
@@ -4708,17 +4704,11 @@ impl<H> Canvas<H> {
         });
     }
 
-    /// Scales every shape drawn since `start` about `anchor`, then moves it by (`dx`, `dy`). Radii,
-    /// borders and glows scale with it, so the result stays crisp (used for the playfield area).
     /// Lays out what's drawn next in a space `h` units tall (the width from the screen's aspect),
     /// until `end_space` maps it onto the screen. The pointer is in its units meanwhile, and text
     /// snaps to whole screen pixels of them: `h` 480 is the screen itself.
-    #[allow(
-        dead_code,
-        reason = "song select lays itself out in it next; until then only the tests use it"
-    )]
     pub fn begin_space(&mut self, h: f32) -> Space {
-        let scale = VIRTUAL_HEIGHT / h.max(1.0);
+        let scale = self.height / h.max(1.0);
         let grid = TEXT_GRID.with(std::cell::Cell::get);
         let font_scale = crate::system_font::pixel_scale();
         let space = Space {
@@ -4727,12 +4717,14 @@ impl<H> Canvas<H> {
             hits: self.hits.len(),
             regions: self.input_regions.len(),
             width: self.width,
+            height: self.height,
             mouse: self.mouse,
             grid,
             font_scale,
             disc: self.disc,
         };
         self.width /= scale;
+        self.height = h.max(1.0);
         self.mouse = (self.mouse.0 / scale, self.mouse.1 / scale);
         // Render pixels per unit: a unit of the space is `scale` of the screen's.
         if grid > 0.0 {
@@ -4744,26 +4736,9 @@ impl<H> Canvas<H> {
 
     /// Maps what was drawn since `begin_space` onto the screen (shapes, clicks, clips, the text
     /// fields' places) and puts the canvas back as it was.
-    #[allow(
-        dead_code,
-        reason = "song select lays itself out in it next; until then only the tests use it"
-    )]
     pub fn end_space(&mut self, space: Space) {
         let k = space.scale;
-        self.transform_since(space.start, [0.0, 0.0], k, 0.0, 0.0);
-        // A click made before the space's first shape isn't moved with the shapes.
-        for h in self.hits[space.hits..]
-            .iter_mut()
-            .filter(|h| h.shape <= space.start)
-        {
-            h.rect = h.rect.map(|v| v * k);
-        }
-        for r in &mut self.input_regions[space.regions..] {
-            r.rect = r.rect.map(|v| v * k);
-            for (_, x) in &mut r.stops {
-                *x *= k;
-            }
-        }
+        self.rescale_since(space.start, space.hits, space.regions, k);
         if self.disc != space.disc
             && let Some(d) = self.disc.as_mut()
         {
@@ -4772,11 +4747,30 @@ impl<H> Canvas<H> {
             d[2] *= k;
         }
         self.width = space.width;
+        self.height = space.height;
         self.mouse = space.mouse;
         TEXT_GRID.with(|g| g.set(space.grid));
         crate::system_font::set_pixel_scale(space.font_scale);
     }
 
+    /// Scales what was drawn since shape `start` (and click `hits`, text field `regions`) `k`
+    /// times about the top left corner: shapes, clicks, clips and the text fields' places.
+    pub(crate) fn rescale_since(&mut self, start: usize, hits: usize, regions: usize, k: f32) {
+        self.transform_since(start, [0.0, 0.0], k, 0.0, 0.0);
+        // A click made before the first of those shapes isn't moved with the shapes.
+        for h in self.hits[hits..].iter_mut().filter(|h| h.shape <= start) {
+            h.rect = h.rect.map(|v| v * k);
+        }
+        for r in &mut self.input_regions[regions..] {
+            r.rect = r.rect.map(|v| v * k);
+            for (_, x) in &mut r.stops {
+                *x *= k;
+            }
+        }
+    }
+
+    /// Scales every shape drawn since `start` about `anchor`, then moves it by (`dx`, `dy`). Radii,
+    /// borders and glows scale with it, so the result stays crisp (used for the playfield area).
     pub fn transform_since(
         &mut self,
         start: usize,

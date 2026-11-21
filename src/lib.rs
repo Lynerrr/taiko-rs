@@ -589,6 +589,9 @@ struct State {
     board_for: (u64, bool, bool),
     board_max: usize,
     board_rect: Option<[f32; 4]>,
+    /// Screen units to one of song select's own (it lays itself out in a space of its own
+    /// height, `render::Canvas::begin_space`), as last drawn: 1 where it uses the screen's.
+    select_scale: f32,
     /// A song select divider being dragged: which, where the pointer started (virtual units)
     /// and the size it had then; and the last press on one (a second soon after resets it).
     split_drag: Option<(hit::Hit, f32, f32)>,
@@ -6723,6 +6726,14 @@ impl State {
         (self.mouse.0 as f32 * k, self.mouse.1 as f32 * k)
     }
 
+    /// The pointer in song select's units (`select_scale`), for what it lays out itself: the
+    /// list's drag and scroll bar, the divider beside it.
+    fn mouse_select(&self) -> (f32, f32) {
+        let (x, y) = self.mouse_virtual();
+        let k = self.select_scale.max(1e-3);
+        (x / k, y / k)
+    }
+
     /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
     /// Turns the volume picked on the volume overlay (Alt+wheel, Alt+Up/Down) `notches` up.
     fn turn_volume(&mut self, notches: i32) {
@@ -7070,7 +7081,7 @@ impl State {
                 self.right_scroll = true;
             }
         }
-        let (_, drag_y) = self.mouse_virtual();
+        let (_, drag_y) = self.mouse_select();
         if let Some(d) = &mut self.list_drag {
             let dy = drag_y - d.from_y;
             d.moved |= dy.abs() > DRAG_START;
@@ -7085,7 +7096,7 @@ impl State {
         }
         if self.scrollbar_drag {
             if self.scene.is_select() {
-                let (_, vy) = self.mouse_virtual();
+                let (_, vy) = self.mouse_select();
                 self.select.scroll_to(vy, &self.library);
                 return CursorIcon::NsResize;
             }
@@ -7093,7 +7104,7 @@ impl State {
         }
         if self.right_scroll {
             if self.scene.is_select() {
-                let (_, vy) = self.mouse_virtual();
+                let (_, vy) = self.mouse_select();
                 self.select.scroll_to(vy, &self.library);
                 return CursorIcon::NsResize;
             }
@@ -7110,7 +7121,8 @@ impl State {
                     self.split_click = None;
                 }
                 // Kept where the list's width still follows it.
-                if let Some((min, max)) = Select::share_range(width) {
+                // The list's share of song select's own width, in its units.
+                if let Some((min, max)) = Select::share_range(width / self.select_scale.max(1e-3)) {
                     self.cfg.song_list_share = (start + (vx - from) / width).clamp(min, max);
                 }
                 return CursorIcon::EwResize;
@@ -7371,7 +7383,10 @@ impl State {
                     y,
                 })
             }
-            Some((_, y, Some(hit::Hit::SongScrollbar))) => self.select.scroll_to(y, &self.library),
+            Some((_, y, Some(hit::Hit::SongScrollbar))) => {
+                let y = y / self.select_scale.max(1e-3);
+                self.select.scroll_to(y, &self.library);
+            }
             _ => {}
         }
     }
@@ -7648,14 +7663,14 @@ impl State {
             // A row acts on release, unless the press turns into dragging the list.
             if let (true, Some(hit::Hit::SongScrollbar)) = (self.scene.is_select(), hit) {
                 self.scrollbar_drag = true;
-                self.select.scroll_to(vy, &self.library);
+                self.select.scroll_to(self.mouse_select().1, &self.library);
                 return;
             }
             if let (true, Some(h @ (hit::Hit::SongRow(_) | hit::Hit::SongHeader(_)))) =
                 (self.scene.is_select(), hit)
             {
                 self.list_drag = Some(ListDrag {
-                    from_y: vy,
+                    from_y: self.mouse_select().1,
                     hit: h,
                     moved: false,
                 });

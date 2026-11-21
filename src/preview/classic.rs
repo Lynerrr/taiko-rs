@@ -317,6 +317,7 @@ impl Preview {
             1.0,
         );
         self.box_rect = Some([bx, by, bw, bh]);
+        self.drawn_scale = VIRTUAL_HEIGHT / c.height.max(1.0);
         c.hit(bx, by, bw, bh, Hit::Preview);
         let loaded = loaded.is_some();
         if loaded {
@@ -425,6 +426,7 @@ impl Preview {
             marker,
         );
         self.graph_rect = Some(rect);
+        self.drawn_in(c);
         self.play_rect = draw_play_button_classic(
             c,
             rect[0] + rect[2] / 2.0,

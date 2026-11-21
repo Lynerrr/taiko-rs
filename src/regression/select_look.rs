@@ -9,6 +9,13 @@ use crate::hit::Hit;
 use crate::render::Shape;
 use crate::*;
 
+/// A frame, in song select's own units (`harness::in_select_units`): what's tested here is its
+/// layout, whatever the size of the space it lays itself out in.
+fn frame(s: &mut State, now: Instant) -> Canvas {
+    let c = harness::frame(s, now);
+    harness::in_select_units(c, s)
+}
+
 /// An accent nothing else on the screen is drawn in, so what's in it is the accent's.
 const ACCENT: u32 = 0x13c4a7;
 

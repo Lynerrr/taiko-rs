@@ -3804,12 +3804,22 @@ impl Select {
     /// The collection picker and the right-click menu, over everything else on the screen
     /// (call after the map panel is drawn).
     pub fn draw_popups(&self, c: &mut Canvas, library: &[Entry]) {
+        self.draw_overlays(c, library);
+        self.draw_lens_popup(c);
+    }
+
+    /// The collection or sort list and a row's menu: over the whole screen, in its units.
+    pub fn draw_overlays(&self, c: &mut Canvas, library: &[Entry]) {
         if let Some(cursor) = self.picker {
             self.draw_picker(c, cursor);
         }
         if self.menu.is_some() {
             self.draw_menu(c, library);
         }
+    }
+
+    /// The sort and filter panel, hanging from the search row (in the list's units).
+    pub fn draw_lens_popup(&self, c: &mut Canvas) {
         self.draw_lens(c, 20.0, self.frame_top() - 2.0);
     }
 }
