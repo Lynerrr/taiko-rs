@@ -1174,6 +1174,12 @@ impl Preview {
         self.graph_rect
     }
 
+    /// Where the autoplay's lane box was last drawn (virtual units), if it was.
+    #[cfg(test)]
+    pub fn box_rect(&self) -> Option<[f32; 4]> {
+        self.box_rect
+    }
+
     /// Map time under a point of the difficulty timeline, if the point is on it.
     pub fn time_at(&self, x: f32, y: f32) -> Option<f64> {
         let (x, y) = self.drawn_at(x, y);
@@ -1206,12 +1212,13 @@ impl Preview {
         let mut cy = y + BANNER_TOP;
         let part = c.shapes.len();
         for line in &l.title {
-            c.text(lx, cy, l.title_size, rgba(ink::PRIMARY, 1.0), line);
+            shadowed_text(c, lx, cy, l.title_size, rgba(ink::PRIMARY, 1.0), line);
             cy += Canvas::text_height(l.title_size) + 4.0;
         }
         self.enter(c, part, 0.0);
         let part = c.shapes.len();
-        c.text(lx, cy, l.artist_size, rgba(ink::SECONDARY, 1.0), &l.artist);
+        let artist = rgba(ink::SECONDARY, 1.0);
+        shadowed_text(c, lx, cy, l.artist_size, artist, &l.artist);
         cy += Canvas::text_height(l.artist_size) + 6.0;
         self.enter(c, part, 40.0);
         let part = c.shapes.len();
@@ -1350,56 +1357,97 @@ impl Preview {
             let offset = format!("{:+.0}", self.map_offset);
             tiles.push((tr!("OFFSET", "オフセット", "ОФФСЕТ"), offset, 1.0));
         }
-        let n = tiles.len() as f32;
-        let tile_h = tile_h();
-        let tw = (iw - (n - 1.0) * space::CARD_GAP) / n;
         let mut od_hovered = None;
-        for (k, (caption, value, alpha)) in tiles.iter().enumerate() {
-            let part = c.shapes.len();
-            let tx = lx + k as f32 * (tw + space::CARD_GAP);
-            crate::style::tile(
-                c,
-                [tx, cy, tw, tile_h],
-                crate::style::radius::SMALL,
-                Surface::Raised,
-            );
-            // Caption and value in the tile's middle: the columns even across the row, no
-            // empty run right of a short value.
-            let room = tw - 12.0;
-            let mid = tx + tw / 2.0;
-            let caption = Canvas::fit(text::CAPTION, room, caption);
-            c.text_centered(
-                mid,
-                Canvas::text_y_at(cy + TILE_PAD, text::CAPTION),
-                text::CAPTION,
-                rgba(ink::CAPTION, 1.0),
-                &caption,
-            );
-            // A value too long for its tile (a BPM range) gets smaller rather than cut short,
-            // on the same baseline.
-            let size = fitting_size(value, room);
-            let value = Canvas::fit(size, room, value);
-            let value_top = cy + tile_h - TILE_PAD - Canvas::text_height(text::HEADING);
-            let drop = Canvas::text_height(text::HEADING) - Canvas::text_height(size);
-            c.text_centered(
-                mid,
-                Canvas::text_y_at(value_top + drop, size),
-                size,
-                rgba(ink::PRIMARY, *alpha),
-                &value,
-            );
-            // A value still being read: a skeleton where it goes.
-            if value.is_empty() && d.is_none() {
-                let vh = Canvas::text_height(text::HEADING);
-                let sw = room * 0.6;
-                crate::style::skeleton(c, [mid - sw / 2.0, value_top, sw, vh], 2.0);
+        if self.split.is_some() {
+            // Compact: one dense line, each a caption and its value, the cells even across it.
+            let line_h = stat_line_h();
+            let cell = iw / tiles.len() as f32;
+            for (k, (caption, value, alpha)) in tiles.iter().enumerate() {
+                let part = c.shapes.len();
+                let tx = lx + k as f32 * cell;
+                let mid = cy + line_h / 2.0;
+                let caption = Canvas::fit(text::CAPTION, cell * 0.5, caption);
+                let cw = c.text(
+                    tx,
+                    Canvas::text_y_mid(mid, text::CAPTION),
+                    text::CAPTION,
+                    rgba(ink::CAPTION, 1.0),
+                    &caption,
+                );
+                let vx = tx + cw + STAT_LINE_GAP;
+                let room = (tx + cell - STAT_LINE_GAP - vx).max(0.0);
+                let size = fit_size(value, room);
+                let value = Canvas::fit(size, room, value);
+                c.text(
+                    vx,
+                    Canvas::text_y_mid(mid, size),
+                    size,
+                    rgba(ink::PRIMARY, *alpha),
+                    &value,
+                );
+                // A value still being read: a skeleton where it goes.
+                if value.is_empty() && d.is_none() {
+                    let vh = Canvas::text_height(text::BODY);
+                    let sw = (room * 0.6).min(28.0);
+                    crate::style::skeleton(c, [vx, mid - vh / 2.0, sw, vh], 2.0);
+                }
+                if k == 0 && c.hovered(tx, cy, cell, line_h) {
+                    od_hovered = Some((tx, cy + line_h));
+                }
+                self.enter(c, part, 130.0 + 25.0 * k as f32);
             }
-            if k == 0 && c.hovered(tx, cy, tw, tile_h) {
-                od_hovered = Some((tx, cy + tile_h));
+            cy += line_h + BLOCK_GAP;
+        } else {
+            let n = tiles.len() as f32;
+            let tile_h = tile_h();
+            let tw = (iw - (n - 1.0) * space::CARD_GAP) / n;
+            for (k, (caption, value, alpha)) in tiles.iter().enumerate() {
+                let part = c.shapes.len();
+                let tx = lx + k as f32 * (tw + space::CARD_GAP);
+                crate::style::tile(
+                    c,
+                    [tx, cy, tw, tile_h],
+                    crate::style::radius::SMALL,
+                    Surface::Raised,
+                );
+                // Caption and value in the tile's middle: the columns even across the row, no
+                // empty run right of a short value.
+                let room = tw - 12.0;
+                let mid = tx + tw / 2.0;
+                let caption = Canvas::fit(text::CAPTION, room, caption);
+                c.text_centered(
+                    mid,
+                    Canvas::text_y_at(cy + TILE_PAD, text::CAPTION),
+                    text::CAPTION,
+                    rgba(ink::CAPTION, 1.0),
+                    &caption,
+                );
+                // A value too long for its tile (a BPM range) gets smaller rather than cut short,
+                // on the same baseline.
+                let size = fitting_size(value, room);
+                let value = Canvas::fit(size, room, value);
+                let value_top = cy + tile_h - TILE_PAD - Canvas::text_height(text::HEADING);
+                let drop = Canvas::text_height(text::HEADING) - Canvas::text_height(size);
+                c.text_centered(
+                    mid,
+                    Canvas::text_y_at(value_top + drop, size),
+                    size,
+                    rgba(ink::PRIMARY, *alpha),
+                    &value,
+                );
+                // A value still being read: a skeleton where it goes.
+                if value.is_empty() && d.is_none() {
+                    let vh = Canvas::text_height(text::HEADING);
+                    let sw = room * 0.6;
+                    crate::style::skeleton(c, [mid - sw / 2.0, value_top, sw, vh], 2.0);
+                }
+                if k == 0 && c.hovered(tx, cy, tw, tile_h) {
+                    od_hovered = Some((tx, cy + tile_h));
+                }
+                self.enter(c, part, 130.0 + 25.0 * k as f32);
             }
-            self.enter(c, part, 130.0 + 25.0 * k as f32);
+            cy += tile_h + BLOCK_GAP;
         }
-        cy += tile_h + BLOCK_GAP;
 
         // Don and Kat as one bar split in proportion, the counts at its ends, rolls and swells
         // between them. Compact (`split`), the pp simulator open takes its place.
@@ -1719,9 +1767,9 @@ impl Preview {
         if !e.meta.creator.trim().is_empty() && right - mx > 40.0 {
             let ty = Canvas::text_y_mid(y + CHIP_H / 2.0, text::BODY);
             let by = tr!("by ", "譜面: ", "маппер: ");
-            let bw = c.text(mx, ty, text::BODY, rgba(ink::CAPTION, 1.0), by);
+            let bw = shadowed_text(c, mx, ty, text::BODY, rgba(ink::CAPTION, 1.0), by);
             let name = Canvas::fit(text::BODY, (right - mx - bw).max(0.0), &e.meta.creator);
-            c.text(mx + bw, ty, text::BODY, rgba(ink::PRIMARY, 1.0), &name);
+            shadowed_text(c, mx + bw, ty, text::BODY, rgba(ink::PRIMARY, 1.0), &name);
         }
         self.enter(c, part, 70.0);
         y + CHIP_H + BLOCK_GAP
@@ -1807,18 +1855,27 @@ impl Preview {
         // left and lighter to its right end in an eased sweep: in layers as the picture is, so it
         // fades out downwards with it and no edge of it shows where the picture has gone.
         if drawn {
-            let (strength, rest) = BANNER_PLATE;
-            for k in 0..BANNER_STRIPS {
-                let below = if k + 1 < BANNER_STRIPS {
-                    1.0 - keep(k + 1)
-                } else {
-                    1.0
-                };
-                let alpha = if below > 1e-4 {
-                    (1.0 - (1.0 - keep(k)) / below).max(0.0)
-                } else {
-                    0.0
-                };
+            let alphas: Vec<f32> = (0..BANNER_STRIPS)
+                .map(|k| {
+                    let below = if k + 1 < BANNER_STRIPS {
+                        1.0 - keep(k + 1)
+                    } else {
+                        1.0
+                    };
+                    if below > 1e-4 {
+                        (1.0 - (1.0 - keep(k)) / below).max(0.0)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+            // The layers all start at the banner's top, so there they're over one another: each
+            // takes the strength that makes them come to `BANNER_PLATE` together.
+            let (strength, rest) = (
+                stacked_strength(&alphas, BANNER_PLATE.0),
+                stacked_strength(&alphas, BANNER_PLATE.1),
+            );
+            for (k, &alpha) in alphas.iter().enumerate() {
                 if alpha <= 0.0 {
                     continue;
                 }
@@ -2140,15 +2197,17 @@ impl Preview {
         // under the panel goes (both ends drawn in alike when it doesn't all fit). Split, the
         // box is as tall as its section leaves it, and all the lane's reach fits it.
         let [top, bottom] = self.shown_reach();
-        let (k, fit) = match split {
-            // Split, a share of its box's height: big notes and the drum keep clear of its
-            // edges and of the hint along its bottom (the lane's band fitted to the box filled
-            // it with them).
-            Some(s) => (
-                s.lane[1] / (bottom - top).max(band_h).max(1.0) * SPLIT_LANE_FILL,
-                1.0,
-            ),
-            None => {
+        // Split, the preview's section laid out for the lane's band and its reach.
+        let split_lane = split
+            .and_then(|s| s.area)
+            .map(|area| SplitLane::new(area, band_h, bottom - top, k_full * wanted));
+        let graph_h = split_lane.map_or(graph_h, |l| l.graph_h);
+        let after_box = 8.0 + graph_h + 44.0;
+        let (k, fit) = match (split, split_lane) {
+            (Some(_), Some(l)) => (l.k, l.fit),
+            // The leaderboard has the section: no lane.
+            (Some(_), None) => (k_full * wanted, 1.0),
+            (None, _) => {
                 let k = k_full * wanted;
                 let extra = (bottom - top - band_h) * k;
                 let room = (h - head - band_h * k - after_box).max(0.0);
@@ -2166,9 +2225,10 @@ impl Preview {
         } else {
             0.0
         };
-        self.panel_bottom = match split {
-            Some(s) => s.lane[0] + s.lane[1] + after_box - tail,
-            None => y + h - tail,
+        self.panel_bottom = match (split, split_lane) {
+            (Some(_), Some(l)) => l.lane[0] + l.lane[1] + after_box - tail,
+            (Some(s), None) => y + s.head,
+            (None, _) => y + h - tail,
         };
         // Bare, it's on a panel of its own that song select draws under the whole page.
         if !self.bare {
@@ -2321,6 +2381,21 @@ impl Preview {
                 + 6.0;
         }
 
+        // Split with the leaderboard in the preview's section: the details alone.
+        if split.is_some() && split_lane.is_none() {
+            self.graph_rect = None;
+            self.play_rect = None;
+            if let Some(at) = od_hovered {
+                let windows = crate::game::Windows::for_map(
+                    &e.meta,
+                    self.mods,
+                    crate::od_override::get(),
+                    crate::game::WindowRule::Osu,
+                );
+                draw_hit_windows(c, at, windows.at_rate(self.requested_rate.0));
+            }
+            return None;
+        }
         // Autoplay preview: just the lane band of the playfield, fitted to the box.
         // As wide as the lane at that scale (all of the panel at full size), centred.
         let bw = lane_w * k;
@@ -2332,8 +2407,8 @@ impl Preview {
         } else {
             x + 10.0 + (w - 20.0 - bw) / 2.0
         };
-        let (by, bh) = match split {
-            Some(s) => (s.lane[0], s.lane[1]),
+        let (by, bh) = match split_lane {
+            Some(l) => (l.lane[0], l.lane[1]),
             None => (cy, preview_h),
         };
         // Bare, the autoplay is a lane like the menu's, its drum at the left, running on to the
@@ -2510,9 +2585,18 @@ pub use crate::config::PREVIEW_SIZE;
 /// Space between the stats in the details.
 const STAT_GAP: f32 = 10.0;
 
-/// Split (song select's sections), how much of its box's height the lane's band takes, in the
-/// middle of it: room above and under the big notes and the drum, and for the hint under them.
+/// Split (song select's sections), how much of its box's height the lane's band takes at most,
+/// in the middle of it: room above and under the big notes and the drum, and for the hint under
+/// them.
 const SPLIT_LANE_FILL: f32 = 0.8;
+/// Split, the density graph under the lane: its share of the section's room, between the bare
+/// timeline's height and this much (tall enough to read its dense runs and peaks at a glance).
+const SPLIT_GRAPH_SHARE: f32 = 0.3;
+const SPLIT_GRAPH_MAX: f32 = 84.0;
+/// Split, a .tko map whose playfield reaches past the lane: it is fitted whole into the box, its
+/// notes never drawn smaller than this share of a plain map's (what's still out of reach then is
+/// cut evenly at both ends).
+const SPLIT_REACH_MIN: f32 = 0.5;
 
 /// Bare: how far the autoplay's lane fades in at its left end (out from the drum's side) and its
 /// right (where the notes come in), and how tall the timeline's bars are.
@@ -2636,14 +2720,25 @@ const BARS_PLAYED: f32 = 0.8;
 /// counts, the pp chips, what a TJA course leaves out) and the gaps between the blocks.
 const BANNER_H: f32 = 96.0;
 /// The plate over the banner, under its text: how dark at its left and at its right end, an
-/// eased sweep between (the title, the artist and the mapper read on a white or yellow picture).
-const BANNER_PLATE: (f32, f32) = (0.9, 0.45);
+/// eased sweep between. Dense under the title and the artist at the left, open towards the top
+/// right where the picture shows; the picture's own fade down the banner darkens it downwards,
+/// and the text has a soft shadow (`shadowed_text`) to read on a white or yellow picture.
+const BANNER_PLATE: (f32, f32) = (0.82, 0.1);
 const BANNER_TOP: f32 = 14.0;
 const MAPPER_H: f32 = 13.0;
 const CHIP_H: f32 = 18.0;
 const TILE_H: f32 = 30.0;
 /// How far in from a stat tile's top its caption is, and from its bottom its value.
 const TILE_PAD: f32 = 5.0;
+
+/// The compact details' (`Split`) one line of stats: its height (or taller where text comes out
+/// taller than asked), and the room between a caption and its value.
+const STAT_LINE_H: f32 = 14.0;
+const STAT_LINE_GAP: f32 = 4.0;
+
+fn stat_line_h() -> f32 {
+    (Canvas::text_height(crate::style::text::BODY) + 4.0).max(STAT_LINE_H)
+}
 
 /// How tall a stat tile is: `TILE_H`, or taller where text comes out taller than asked
 /// (`render::TextSizes`), for its caption and value to keep apart.
@@ -2663,8 +2758,54 @@ const PREVIEW_GAP: f32 = 10.0;
 /// The banner's strips (it fades out down them) and how far down it stays whole.
 const BANNER_STRIPS: usize = 12;
 const BANNER_WHOLE: f32 = 0.45;
-/// How bright the banner's picture is drawn, so the title reads over it.
-const BANNER_BRIGHT: f32 = 0.5;
+/// How bright the banner's picture is drawn: near its own, the plate under the text does the rest.
+const BANNER_BRIGHT: f32 = 0.85;
+/// How strong each of the layers `alphas` of a shade over one another must be (each `alpha` of
+/// it) for them to come to `target` together.
+fn stacked_strength(alphas: &[f32], target: f32) -> f32 {
+    let together = |s: f32| 1.0 - alphas.iter().map(|a| 1.0 - s * a).product::<f32>();
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    if together(hi) <= target {
+        return hi;
+    }
+    for _ in 0..24 {
+        let mid = (lo + hi) / 2.0;
+        if together(mid) < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) / 2.0
+}
+
+/// The banner text's shadow: how far down it is, and how strong.
+const TEXT_SHADOW: (f32, f32) = (1.0, 0.6);
+
+/// Text with a soft shadow under it (a dark copy `TEXT_SHADOW` down, drawn first), to read on
+/// a bright picture. Hands back its width, as `Canvas::text`.
+fn shadowed_text(c: &mut Canvas, x: f32, y: f32, size: f32, color: [f32; 4], s: &str) -> f32 {
+    let (start, texts) = (c.shapes.len(), c.texts.len());
+    let w = c.text(x, y, size, color, s);
+    let shadow: Vec<crate::render::Shape> = c.shapes[start..]
+        .iter()
+        .map(|sh| {
+            let mut sh = *sh;
+            sh.center[1] += TEXT_SHADOW.0;
+            for col in [&mut sh.fill, &mut sh.border] {
+                *col = [0.0, 0.0, 0.0, col[3] * TEXT_SHADOW.1];
+            }
+            sh
+        })
+        .collect();
+    let n = shadow.len();
+    c.shapes.splice(start..start, shadow);
+    // The text itself is after its shadow now.
+    for (r, _) in &mut c.texts[texts..] {
+        *r = r.start + n..r.end + n;
+    }
+    w
+}
 
 /// The bare details' text, laid out before anything is drawn (the panel's height follows it):
 /// the title at the title size on one line, or two lines a step smaller; the artist one step
@@ -2728,8 +2869,8 @@ impl Bare {
 }
 
 /// How tall the compact details (`Split`) are, whatever the map: the title on one line, the
-/// difficulty and its mapper on one row, the stats, Don and Kat's bar (or the pp simulator's
-/// play in its place) and the pp.
+/// difficulty and its mapper on one row, the stats on one line, Don and Kat's bar (or the pp
+/// simulator's play in its place) and the pp, with no room left under it.
 pub fn compact_head() -> f32 {
     use crate::style::text::{HEADING, TITLE};
     BANNER_TOP
@@ -2739,29 +2880,65 @@ pub fn compact_head() -> f32 {
         + 6.0
         + CHIP_H
         + BLOCK_GAP
-        + tile_h()
+        + stat_line_h()
         + BLOCK_GAP
         + BAR_H
         + BLOCK_GAP
         + PP_H
-        + PREVIEW_GAP
+        + COMPACT_FOOT
 }
+
+/// Under the compact details' pp row, before the section's end: a little room, no empty band.
+const COMPACT_FOOT: f32 = 4.0;
 
 /// The details split into sections of their own (song select's right column in the main menu's
 /// look): the details `head` tall at the top, the autoplay's lane in a box of its own lower down.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Split {
     pub head: f32,
-    /// The lane's box: its top and height (the timeline goes under it).
-    pub lane: [f32; 2],
+    /// The section the preview has: its top and height (the lane's box, the density graph and
+    /// "Play from" under it). None: the section is the leaderboard's, and no lane is drawn.
+    pub area: Option<[f32; 2]>,
 }
 
-impl Split {
-    /// The lane's box in a section from `top`, `h` tall: the timeline and the room for
-    /// "Play from" under it in there too.
-    pub fn lane_in(top: f32, h: f32) -> [f32; 2] {
-        let under = 8.0 + BARE_GRAPH_H + TIMELINE_UNDER + PLAY_FROM_ROOM;
-        [top + SPLIT_PAD, (h - SPLIT_PAD - under).max(24.0)]
+/// Split, the preview's section laid out (`SplitLane::new`): the lane's box (its top and
+/// height), the density graph's height under it, the lane's scale and how much of its reach
+/// past the lane's band shows (`fit`, 1: all of it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SplitLane {
+    pub lane: [f32; 2],
+    pub graph_h: f32,
+    pub k: f32,
+    pub fit: f32,
+}
+
+impl SplitLane {
+    /// The section `[top, h]` for a lane whose band is `band_h` tall and whose playfield reaches
+    /// `reach_h` (a .tko map's moves; the band's own height on a plain map), drawn at most at
+    /// `k_max` (the lane's scale at full size outside the sections). The graph takes its share,
+    /// the box the rest: the band at most `SPLIT_LANE_FILL` of it, and a .tko map's whole reach
+    /// in it, at no less than `SPLIT_REACH_MIN` of a plain map's scale. The scale is worked out
+    /// once, from the box, so nothing is made smaller twice.
+    pub fn new([top, h]: [f32; 2], band_h: f32, reach_h: f32, k_max: f32) -> SplitLane {
+        let under = 8.0 + TIMELINE_UNDER + PLAY_FROM_ROOM;
+        let room = (h - SPLIT_PAD - under).max(24.0 + BARE_GRAPH_H);
+        let graph_h = (room * SPLIT_GRAPH_SHARE).clamp(BARE_GRAPH_H, SPLIT_GRAPH_MAX);
+        let box_h = (room - graph_h).max(24.0);
+        let band_h = band_h.max(1.0);
+        let reach_h = reach_h.max(band_h);
+        let plain = (box_h * SPLIT_LANE_FILL / band_h).min(k_max.max(0.01));
+        let k = (box_h / reach_h).min(plain).max(plain * SPLIT_REACH_MIN);
+        let fit = if reach_h > band_h + 0.5 {
+            ((box_h / k - band_h) / (reach_h - band_h)).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        SplitLane {
+            lane: [top + SPLIT_PAD, box_h],
+            graph_h,
+            k,
+            fit,
+        }
     }
 }
 
@@ -3399,6 +3576,40 @@ mod beat_tests {
         assert!(outside > 0, "notes drawn from outside the lane, to be cut");
     }
 
+    /// Song select's preview section: the scale comes from the section's whole height, once. A
+    /// plain map's lane at most its usual size; a .tko map reaching all over the screen fitted
+    /// whole into the box, never smaller than half a plain map's (no dots), bigger the taller
+    /// the section; the density graph taller than the bare timeline.
+    #[test]
+    fn split_the_lanes_scale_fits_a_tko_maps_whole_reach_and_never_makes_it_tiny() {
+        let (band, k_max) = (100.0, 0.7);
+        let plain = SplitLane::new([0.0, 400.0], band, band, k_max);
+        assert!(plain.k <= k_max + 1e-6, "{plain:?}");
+        assert!(
+            plain.k * band <= plain.lane[1] * SPLIT_LANE_FILL + 1e-3,
+            "{plain:?}"
+        );
+        assert_eq!(plain.fit, 1.0);
+        assert!(plain.graph_h > BARE_GRAPH_H, "{plain:?}");
+        let tko = SplitLane::new([0.0, 400.0], band, 480.0, k_max);
+        assert!(
+            tko.k * 480.0 <= tko.lane[1] + 0.01,
+            "the whole reach in: {tko:?}"
+        );
+        assert_eq!(tko.fit, 1.0, "{tko:?}");
+        assert!(tko.k >= plain.k * SPLIT_REACH_MIN - 1e-6, "{tko:?}");
+        assert!(tko.k > 0.5 * plain.k, "not tiny: {tko:?} vs {plain:?}");
+        let short = SplitLane::new([0.0, 200.0], band, 480.0, k_max);
+        assert!(
+            tko.k > short.k,
+            "bigger in a taller section: {tko:?} {short:?}"
+        );
+        assert!(
+            (short.k - plain.k * SPLIT_REACH_MIN).abs() < 1e-4 && short.fit < 1.0,
+            "at least half a plain map's, the rest cut: {short:?}"
+        );
+    }
+
     /// In song select's sections (split), the lane's notes and drum are scaled to the lane's box
     /// with room round them: big ones reach neither its edges nor the hint along its bottom.
     #[test]
@@ -3430,7 +3641,7 @@ mod beat_tests {
             bare: true,
             split: Some(Split {
                 head: 120.0,
-                lane: Split::lane_in(200.0, 200.0),
+                area: Some([200.0, 200.0]),
             }),
             ..Default::default()
         };

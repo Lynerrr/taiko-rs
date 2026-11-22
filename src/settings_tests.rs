@@ -2087,7 +2087,8 @@ fn song_select_dividers_drag_within_limits_and_reset() {
 #[test]
 fn the_leaderboard_scrolls_with_the_wheel() {
     let mut s = select_with_scores();
-    // The leaderboard is a section of the panel of its own, under the map's details.
+    // The leaderboard is the right column's body on its tab, under the map's details.
+    s.click(crate::hit::Hit::BoardTab(false), None);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     let [bx, by, bw, bh] = s.board_rect.expect("a leaderboard");
     let shown = s.leaderboard.len();
