@@ -73,6 +73,8 @@ resume_delay_ms = 1500
 sort = title
 # the collection song select shows (own:name or osu:name; empty: all songs)
 collection = own:Warm Up
+# the download tab leaves out the maps already installed
+download_hide_installed = true
 kiai_effects = false
 # song select's preview shows the drum at the start of its lane
 preview_drum = false

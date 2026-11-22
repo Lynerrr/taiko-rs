@@ -1399,3 +1399,55 @@ fn the_download_tab_shows_no_pp_of_song_selects_map() {
         "the simulator stays open for song select"
     );
 }
+
+/// Discord idea: the download tab can leave out the maps already installed. The switch is kept
+/// in the config; a map downloaded from the list stays in it until the next search.
+#[test]
+fn the_download_tab_can_hide_the_installed_maps() {
+    let mut s = state_with(harness::config(), Vec::new());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_download();
+    let set = |id: u32| download::SetInfo {
+        id,
+        title: format!("set {id}"),
+        ..Default::default()
+    };
+    s.browse.results = vec![set(1), set(2), set(3)];
+    s.browse.cursor = 2;
+    s.installed_sets = Some([2].into());
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(
+        s.browse.results.len(),
+        3,
+        "all listed until it's switched on"
+    );
+    let switch = s
+        .hits
+        .iter()
+        .find(|h| h.hit == hit::Hit::DlHideInstalled)
+        .map(|h| h.rect)
+        .expect("the filter row has the switch");
+    let k = s.window_h / crate::render::VIRTUAL_HEIGHT;
+    s.mouse = (
+        f64::from((switch[0] + switch[2] / 2.0) * k),
+        f64::from((switch[1] + switch[3] / 2.0) * k),
+    );
+    s.mouse_button(true, None);
+    s.mouse_button(false, None);
+    assert!(s.cfg.download_hide_installed);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let ids = |s: &State| s.browse.results.iter().map(|r| r.id).collect::<Vec<_>>();
+    assert_eq!(ids(&s), [1, 3], "the installed set is left out");
+    assert_eq!(s.browse.cursor, 1, "the selection stays on set 3");
+    // Set 3 downloaded from the list: it stays there.
+    s.installed_sets = Some([2, 3].into());
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(ids(&s), [1, 3]);
+    // The config keeps the switch.
+    let text = s.cfg.to_text();
+    assert!(text.contains("download_hide_installed = true"), "{text}");
+}

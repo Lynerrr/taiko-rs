@@ -15442,6 +15442,12 @@ impl State {
             Hit::DlMenu(_) => self.browse.toggle_menu(browse::Menu::Sort),
             Hit::DlMenuClose => self.browse.menu = None,
             Hit::DlSortDir => self.browse.flip_sort(),
+            Hit::DlHideInstalled => {
+                self.cfg.download_hide_installed = !self.cfg.download_hide_installed;
+                self.cfg.save();
+                self.browse
+                    .set_hide_installed(self.cfg.download_hide_installed);
+            }
             Hit::DlPlay(i) => {
                 self.browse.cursor = i;
                 if let Some(set) = self.browse.selected().cloned() {
