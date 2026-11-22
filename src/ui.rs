@@ -369,6 +369,8 @@ pub struct Select {
     /// Selections come faster than the list gets to them (`draw`): the banner's picture of
     /// where it's going isn't read ahead.
     hold_pictures: bool,
+    /// On the move as last drawn (`flying`).
+    flying: bool,
     /// Where the list was scrolled last frame, and how fast it's going (units a ms, smoothed):
     /// the cards' pictures ahead of it are read first.
     seen_scroll: Option<f32>,
@@ -566,6 +568,9 @@ const PICTURE_SETTLE_MS: f32 = 60.0;
 /// smoothed over this long.
 const CARD_AHEAD_MS: f32 = 400.0;
 const CARD_AHEAD_TAU: f32 = 80.0;
+/// How fast the list goes (units a ms) for it to be on the move (`Select::flying`): a row and a
+/// half a second.
+const FLYING_SPEED: f32 = 0.05;
 
 /// The list as a wave about the middle of its view: a card's left edge goes in by
 /// `list_wave` of how far its middle is from the view's (none in the middle, `WAVE_MAX` at the
@@ -722,6 +727,7 @@ impl Select {
             thumb: 0.0,
             scrubbing: None,
             hold_pictures: false,
+            flying: false,
             seen_scroll: None,
             scroll_speed: 0.0,
             parallax: [0.0; 2],
@@ -1902,6 +1908,13 @@ impl Select {
         } else {
             (SONG_ROW_H, DIFF_ROW_H, SECTION_ROW_H)
         }
+    }
+
+    /// The list on the move as last drawn: held or flown by the pointer, gliding, a run of
+    /// selections faster than it gets to them, or still coasting. Work made ahead (the picture
+    /// copies) waits meanwhile, leaving the CPU to the list and the pictures it brings in.
+    pub fn flying(&self) -> bool {
+        self.flying
     }
 
     /// How wide this list is on a `screen_w` wide screen (its units), at its share.
@@ -3164,6 +3177,11 @@ impl Select {
         };
         self.hold_pictures =
             self.scrubbing.is_some() || self.drag.is_some() || self.free.is_some() || rushed;
+        // Left where it was moved by hand (`free`) it's at rest, whatever the banner waits for.
+        self.flying = self.scrubbing.is_some()
+            || self.drag.is_some()
+            || rushed
+            || self.scroll_speed.abs() > FLYING_SPEED;
         // On its way to a new selection: the cards where it's going are read meanwhile, so
         // they come in with their pictures, and the banner's picture of the set it lands on
         // (not while selections come faster than the list gets to them).

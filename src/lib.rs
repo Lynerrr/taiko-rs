@@ -12757,8 +12757,12 @@ impl State {
         }
         // So do song select's picture copies made ahead (`prewarm`): decoding a whole library's
         // backgrounds takes a core for minutes after an update, and a 2-core laptop stutters.
-        self.pictures.hold(in_song);
-        self.card_pictures.hold(in_song);
+        // And while song select's list is on the move: the cards and the banner coming in need
+        // what CPU a small machine has.
+        let browsing = self.scene.is_select() && !self.on_menu() && self.select.flying();
+        self.hasher.take_in(&self.library);
+        self.pictures.hold(in_song || browsing);
+        self.card_pictures.hold(in_song || browsing);
         self.refresh_play_offset();
         self.follow_map_skin();
         if self.volume_save_at.is_some_and(|at| now >= at) {

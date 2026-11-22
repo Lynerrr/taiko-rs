@@ -2,3 +2,4 @@
 
 pub(crate) mod jobs;
 pub(crate) mod system;
+pub(crate) mod workers;

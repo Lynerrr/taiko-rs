@@ -16,6 +16,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use crate::render::{PICTURE_CELL, PICTURE_SLOTS};
+use crate::services::workers::{self, Ticket};
 
 /// Larger files are left alone (a picture this big is a mistake, and a slow one).
 const MAX_BYTES: u64 = 24 * 1024 * 1024;
@@ -102,15 +103,17 @@ impl Image {
     }
 }
 
-type Loaded = (PathBuf, String, Result<Image, String>);
+/// A picture read (none: called off before its turn, see `workers::Ticket`).
+type Loaded = (PathBuf, String, Option<Result<Image, String>>);
 
 pub struct Pictures {
     dir: Option<PathBuf>,
     slots: Arc<HashMap<String, (u32, f32)>>,
     /// What each slot holds, by slot.
     held: Vec<Option<String>>,
-    /// Being read, or unreadable (and not asked again for this folder).
-    pending: Vec<String>,
+    /// Being read (each with the ticket that calls it off), or unreadable (and not asked again
+    /// for this folder).
+    pending: HashMap<String, Ticket>,
     failed: Vec<String>,
     /// When the failed ones are tried again (a file put in the folder later, or fixed).
     retry_at: Instant,
@@ -136,7 +139,7 @@ impl Default for Pictures {
             dir: None,
             slots: Arc::default(),
             held: vec![None; PICTURE_SLOTS as usize],
-            pending: Vec::new(),
+            pending: HashMap::new(),
             failed: Vec::new(),
             retry_at: Instant::now(),
             uploads: Vec::new(),
@@ -248,7 +251,7 @@ impl Pictures {
                     *h = None;
                 }
             }
-            self.pending.retain(cover);
+            self.pending.retain(|n, _| cover(n));
             self.arrived.retain(|(n, _)| cover(n));
             self.failed.retain(cover);
             self.playing.retain(|n, _| cover(n));
@@ -264,7 +267,11 @@ impl Pictures {
             if !ours {
                 continue;
             }
-            self.pending.retain(|n| *n != name);
+            // Called off: nothing came, and it's asked again if it's wanted again.
+            let Some(got) = got else {
+                continue;
+            };
+            self.pending.remove(&name);
             match got {
                 Ok(image) => self.arrived.push((name, image)),
                 Err(e) => {
@@ -291,14 +298,23 @@ impl Pictures {
         }
         let over = self.arrived.len().saturating_sub(PICTURE_SLOTS as usize);
         self.arrived.drain(..over);
+        // A picture read by path no longer drawn (the banner of a set the selection has left) is
+        // called off: the reading threads skip it instead of decoding it for nothing.
+        self.pending.retain(|n, ticket| {
+            let keep = !n.starts_with(PATH_PREFIX) || wanted.contains(n);
+            if !keep {
+                ticket.cancel();
+            }
+            keep
+        });
         let mut path_reads = self
             .pending
-            .iter()
+            .keys()
             .filter(|n| n.starts_with(PATH_PREFIX))
             .count();
         for name in wanted {
             if self.slots.contains_key(name)
-                || self.pending.contains(name)
+                || self.pending.contains_key(name)
                 || self.failed.contains(name)
                 || self.arrived.iter().any(|(n, _)| n == name)
             {
@@ -317,12 +333,15 @@ impl Pictures {
                     continue;
                 }
                 path_reads += 1;
-                self.pending.push(name.clone());
+                let ticket = Ticket::default();
+                self.pending.insert(name.clone(), ticket.clone());
                 let (tx, name) = (self.tx.clone(), name.clone());
                 let file = file.to_string_lossy().into_owned();
                 let thumbs = self.thumbs.clone();
-                std::thread::spawn(move || {
-                    let got = read_by_path(&dir, &file, thumbs.as_deref());
+                workers::run(move || {
+                    let got = ticket
+                        .wanted()
+                        .then(|| read_by_path(&dir, &file, thumbs.as_deref()));
                     let _ = tx.send((dir, name, got));
                 });
                 continue;
@@ -339,11 +358,12 @@ impl Pictures {
                 self.retry_at = Instant::now() + RETRY;
                 continue;
             }
-            self.pending.push(name.clone());
+            // A map's own pictures and the covers are read whenever they were asked for.
+            self.pending.insert(name.clone(), Ticket::default());
             let (tx, name, file) = (self.tx.clone(), name.clone(), file.to_string());
-            std::thread::spawn(move || {
+            workers::run(move || {
                 let got = read(&dir, &file);
-                let _ = tx.send((dir, name, got));
+                let _ = tx.send((dir, name, Some(got)));
             });
         }
         for (name, t) in times {
@@ -683,15 +703,11 @@ pub(crate) fn wait_turn(
     !stop.load(Ordering::Relaxed)
 }
 
-/// Puts the calling thread at the lowest priority (Linux: nice 19, for this thread alone), so
-/// work made ahead only takes the CPU the game and the desktop leave.
+/// Puts the calling thread at the lowest priority (Linux: nice 19, Windows: the lowest thread
+/// priority; this thread alone), so work made ahead only takes the CPU the game and the desktop
+/// leave.
 pub(crate) fn lower_priority() {
-    #[cfg(target_os = "linux")]
-    // SAFETY: plain syscalls on this thread's own id; a failure only leaves the priority as it was.
-    unsafe {
-        let tid = libc::gettid();
-        libc::setpriority(libc::PRIO_PROCESS, tid as libc::id_t, 19);
-    }
+    workers::set_priority(workers::Priority::Lowest);
 }
 
 #[cfg(test)]
@@ -1134,7 +1150,7 @@ mod tests {
         // Without its path given there's nothing to read: it isn't asked for or failed.
         let other = crate::render::path_picture_key(&dir.join("nope.png"));
         p.update(None, std::slice::from_ref(&other), &[], &[]);
-        assert!(!p.pending.contains(&other) && !p.failed.contains(&other));
+        assert!(!p.pending.contains_key(&other) && !p.failed.contains(&other));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

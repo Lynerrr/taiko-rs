@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::render::{CARD_ASPECT, CARD_CELL, CARD_SLOTS, path_picture_key};
+use crate::services::workers::{self, Ticket};
 
 /// Larger files are left alone, as `pictures` does.
 const MAX_BYTES: u64 = 24 * 1024 * 1024;
@@ -29,8 +30,9 @@ const CARD_VERSION: u32 = 1;
 /// How often the colours found are handed on to the canvas (a copy of the whole map each time).
 const COLOURS_EVERY: Duration = Duration::from_millis(250);
 
-/// A strip read: `CARD_CELL` premultiplied RGBA.
-type Read = (String, Result<Vec<u8>, String>);
+/// A strip read: `CARD_CELL` premultiplied RGBA (none: called off before its turn, see
+/// `workers::Ticket`).
+type Read = (String, Option<Result<Vec<u8>, String>>);
 
 /// The average colours found, by picture key, and whether any came since they were handed on.
 #[derive(Default)]
@@ -58,7 +60,8 @@ pub struct CardPictures {
     held: Vec<Option<String>>,
     used: Vec<u64>,
     frame: u64,
-    pending: Vec<String>,
+    /// Being read, each with the ticket that calls it off.
+    pending: HashMap<String, Ticket>,
     /// Unreadable, and when they're tried again.
     failed: HashMap<String, Instant>,
     /// Read and waiting for a slot.
@@ -85,7 +88,7 @@ impl Default for CardPictures {
             held: vec![None; CARD_SLOTS as usize],
             used: vec![0; CARD_SLOTS as usize],
             frame: 0,
-            pending: Vec::new(),
+            pending: HashMap::new(),
             failed: HashMap::new(),
             arrived: Vec::new(),
             uploads: Vec::new(),
@@ -214,6 +217,15 @@ impl CardPictures {
             .take(CARD_SLOTS as usize)
             .collect();
         let keep: HashSet<&str> = order.iter().map(|w| w.0.as_str()).collect();
+        // The strips of cards scrolled away while they waited their turn are called off: the
+        // reading threads skip them instead of decoding pictures long gone by.
+        self.pending.retain(|key, ticket| {
+            let wanted = keep.contains(key.as_str());
+            if !wanted {
+                ticket.cancel();
+            }
+            wanted
+        });
         for w in &order {
             if let Some(&slot) = self.slots.get(&w.0) {
                 self.used[slot as usize] = self.frame;
@@ -237,17 +249,18 @@ impl CardPictures {
                 break;
             }
             if self.slots.contains_key(key)
-                || self.pending.contains(key)
+                || self.pending.contains_key(key)
                 || self.failed.contains_key(key)
                 || self.arrived.iter().any(|(k, _)| k == key)
             {
                 continue;
             }
-            self.pending.push(key.clone());
+            let ticket = Ticket::default();
+            self.pending.insert(key.clone(), ticket.clone());
             let (tx, key, path) = (self.tx.clone(), key.clone(), path.clone());
             let (dir, found) = (self.dir.clone(), self.found.clone());
-            std::thread::spawn(move || {
-                let got = read(&path, dir.as_deref(), &found);
+            workers::run(move || {
+                let got = ticket.wanted().then(|| read(&path, dir.as_deref(), &found));
                 let _ = tx.send((key, got));
             });
         }
@@ -518,7 +531,7 @@ mod tests {
         p.update(&wanted);
         assert_eq!(p.pending.len(), MAX_READS, "only a few read at once");
         assert!(
-            p.pending.contains(&wanted[MAX_READS + 2].0),
+            p.pending.contains_key(&wanted[MAX_READS + 2].0),
             "the drawn one among them"
         );
         let until = Instant::now() + Duration::from_secs(20);
