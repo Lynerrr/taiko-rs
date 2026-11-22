@@ -172,6 +172,18 @@ impl Screen for Download {
 
     fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _frame: &Frame) -> Option<Scene> {
         let installed = state.installed_sets.take().unwrap_or_default();
+        state
+            .browse
+            .set_hide_installed(state.cfg.download_hide_installed);
+        {
+            let custom = &state.select.custom_folder;
+            state
+                .browse
+                .drop_installed(&|set: &download::SetInfo| match set.custom {
+                    Some(_) => custom.values().any(|&id| id == set.id),
+                    None => installed.contains(&set.id),
+                });
+        }
         let dir = state.songs_dir.display().to_string();
         let lw = Select::list_width(canvas.width, state.cfg.song_list_share);
         state.preview.size = preview::PREVIEW_SIZE.1;
@@ -195,6 +207,11 @@ impl Screen for Download {
         let x = 24.0 + lw + 12.0;
         let pw = if phone { 0.0 } else { canvas.width - x - 24.0 };
         let stars = state.browse.selected_stars();
+        // Song select's pp (its full-combo chips, the simulator's) is of its own map: a set to
+        // download has none here. The simulator stays open for song select, out of sight.
+        state.preview.potential = None;
+        state.preview.sim_pp = None;
+        let sim = state.preview.sim.take();
         // Song select's flag doesn't carry over: the mark of the set selected here.
         state.preview.epic = state
             .browse
@@ -227,6 +244,7 @@ impl Screen for Download {
                 None => {}
             }
         }
+        state.preview.sim = sim;
         None
     }
 }

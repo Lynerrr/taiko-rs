@@ -169,6 +169,8 @@ pub enum Hit {
     DlMenuClose,
     /// Flips the download tab's order.
     DlSortDir,
+    /// Shows or leaves out the sets already installed (`Config::download_hide_installed`).
+    DlHideInstalled,
     /// Plays result `i`, which is installed.
     DlPlay(usize),
     /// Stops download `i` (`App::downloads`).

@@ -2,394 +2,394 @@
 basics             great 64 ok 0 miss 0 | combo 64 max 64 | score 500000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 502800 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 502820 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 290858 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 288614 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 == NF (NoFail) x0.500
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 440479 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 435165 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 502800 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 502820 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 290858 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 288614 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == HT (HalfTime) x0.300
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 264287 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -5.31 ur 294.74 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 261099 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -5.31 ur 294.74 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 301680 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 301692 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 174515 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 173168 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == DC (Daycore) x0.300
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 264287 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -5.31 ur 294.74 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 261099 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -5.31 ur 294.74 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 301680 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 301692 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 174515 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 173168 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == HA (Half) x0.500
-basics             great 29 ok 3 miss 0 | combo 32 max 32 | score 440479 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -4.72 ur 209.73 | hp 1.0000 | failed false
+basics             great 29 ok 3 miss 0 | combo 32 max 32 | score 434873 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -4.72 ur 209.73 | hp 1.0000 | failed false
 big-notes          great 20 ok 0 miss 0 | combo 20 max 20 | score 501400 | rolls 0 swells 0 strong 8 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 9 ok 0 miss 0 | combo 9 max 9 | score 502820 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 71 ok 0 miss 9 | combo 3 max 8 | score 290943 | rolls 0 swells 0 strong 0 | acc 88.7500 | err 0.00 ur 0.00 | hp 0.9703 | failed false
+stream             great 71 ok 0 miss 9 | combo 3 max 8 | score 288100 | rolls 0 swells 0 strong 0 | acc 88.7500 | err 0.00 ur 0.00 | hp 0.9703 | failed false
 == NB (NoFinishers) x0.900
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 792862 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 783297 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 900000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 905076 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 523544 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 519504 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == HR (HardRock) x1.060
-basics             great 46 ok 18 miss 0 | combo 64 max 64 | score 725707 | rolls 0 swells 0 strong 0 | acc 85.9375 | err -3.98 ur 221.05 | hp 0.9761 | failed false
+basics             great 46 ok 18 miss 0 | combo 64 max 64 | score 687131 | rolls 0 swells 0 strong 0 | acc 85.9375 | err -3.98 ur 221.05 | hp 0.9761 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.7197 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.7197 | failed false
 == SD (SuddenDeath) x1.000
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 880958 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 870330 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1005600 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1005640 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 8 ok 0 miss 1 | combo 0 max 8 | score 32176 | rolls 0 swells 0 strong 0 | acc 88.8889 | err 0.00 ur 0.00 | hp 0.0501 | failed true
+stream             great 8 ok 0 miss 1 | combo 0 max 8 | score 31912 | rolls 0 swells 0 strong 0 | acc 88.8889 | err 0.00 ur 0.00 | hp 0.0501 | failed true
 == PF (Perfect) x1.000
-basics             great 0 ok 1 miss 0 | combo 1 max 1 | score 1808 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 34.86 ur 0.00 | hp 0.0076 | failed true
+basics             great 0 ok 1 miss 0 | combo 1 max 1 | score 1387 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 34.86 ur 0.00 | hp 0.0076 | failed true
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1005600 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1005640 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 8 ok 0 miss 1 | combo 0 max 8 | score 32176 | rolls 0 swells 0 strong 0 | acc 88.8889 | err 0.00 ur 0.00 | hp 0.0501 | failed true
+stream             great 8 ok 0 miss 1 | combo 0 max 8 | score 31912 | rolls 0 swells 0 strong 0 | acc 88.8889 | err 0.00 ur 0.00 | hp 0.0501 | failed true
 == DT (DoubleTime) x1.120
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 986673 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -2.66 ur 147.37 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 974770 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -2.66 ur 147.37 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1126272 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1126317 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 651522 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 646494 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == NC (Nightcore) x1.120
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 986673 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -2.66 ur 147.37 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 974770 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -2.66 ur 147.37 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1126272 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1126317 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 651522 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 646494 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == HD (Hidden) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == FL (Flashlight) x1.120
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 986673 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 974770 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1126272 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1126317 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 651522 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 646494 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == PR (Precise) x1.060
-basics             great 46 ok 18 miss 0 | combo 64 max 64 | score 725707 | rolls 0 swells 0 strong 0 | acc 85.9375 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 46 ok 18 miss 0 | combo 64 max 64 | score 687131 | rolls 0 swells 0 strong 0 | acc 85.9375 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == GN (GreatOrNothing) x1.040
-basics             great 58 ok 0 miss 6 | combo 1 max 23 | score 686722 | rolls 0 swells 0 strong 0 | acc 90.6250 | err -3.03 ur 201.44 | hp 1.0000 | failed false
+basics             great 58 ok 0 miss 6 | combo 1 max 23 | score 681470 | rolls 0 swells 0 strong 0 | acc 90.6250 | err -3.03 ur 201.44 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == RX (Relax) x1.000
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 880958 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 870330 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1005600 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1005640 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 581716 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 577227 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == AT (Autoplay) x1.000
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 880958 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 870330 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1005600 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1005640 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 581716 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 577227 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SW (Swap) x1.000
-basics             great 0 ok 0 miss 64 | combo 0 max 0 | score 53873 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-big-notes          great 0 ok 0 miss 40 | combo 0 max 0 | score 62438 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-rolls-and-swells   great 0 ok 0 miss 14 | combo 0 max 0 | score 99365 | rolls 59 swells 2 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-stream             great 0 ok 0 miss 160 | combo 0 max 0 | score 42254 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+basics             great 0 ok 0 miss 64 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+big-notes          great 0 ok 0 miss 40 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+rolls-and-swells   great 0 ok 0 miss 14 | combo 0 max 0 | score 5640 | rolls 59 swells 2 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+stream             great 0 ok 0 miss 160 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
 == RD (Random) x1.040
-basics             great 23 ok 4 miss 37 | combo 0 max 3 | score 82990 | rolls 0 swells 0 strong 0 | acc 39.0625 | err 0.09 ur 250.03 | hp 0.2322 | failed true
-big-notes          great 25 ok 0 miss 15 | combo 0 max 7 | score 228001 | rolls 0 swells 0 strong 13 | acc 62.5000 | err 0.00 ur 0.00 | hp 0.6592 | failed false
-rolls-and-swells   great 8 ok 0 miss 6 | combo 1 max 4 | score 218404 | rolls 59 swells 2 strong 0 | acc 57.1429 | err 0.00 ur 0.00 | hp 0.7782 | failed false
-stream             great 64 ok 0 miss 96 | combo 0 max 4 | score 74104 | rolls 0 swells 0 strong 0 | acc 40.0000 | err 0.00 ur 0.00 | hp 0.0036 | failed true
+basics             great 23 ok 4 miss 37 | combo 0 max 3 | score 48849 | rolls 0 swells 0 strong 0 | acc 39.0625 | err 0.09 ur 250.03 | hp 0.2322 | failed true
+big-notes          great 25 ok 0 miss 15 | combo 0 max 7 | score 203651 | rolls 0 swells 0 strong 13 | acc 62.5000 | err 0.00 ur 0.00 | hp 0.6592 | failed false
+rolls-and-swells   great 8 ok 0 miss 6 | combo 1 max 4 | score 176630 | rolls 59 swells 2 strong 0 | acc 57.1429 | err 0.00 ur 0.00 | hp 0.7782 | failed false
+stream             great 64 ok 0 miss 96 | combo 0 max 4 | score 47738 | rolls 0 swells 0 strong 0 | acc 40.0000 | err 0.00 ur 0.00 | hp 0.0036 | failed true
 == CS (ConstantSpeed) x0.900
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 792862 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 783297 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 905040 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 905076 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 523544 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 519504 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == AL (Alternate) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == WU (WindUp) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.00 ur 180.10 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.00 ur 180.10 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == WD (WindDown) x0.850
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 748814 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -4.84 ur 256.37 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 739781 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -4.84 ur 256.37 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 854760 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 854794 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 494459 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 490643 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == AB (AllBig) x1.020
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 898577 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 887737 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1025712 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1025753 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 593350 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 588772 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == AC (Accel) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == BR (Brake) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == WV (Wave) x1.020
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 898577 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 887737 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1025712 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1025753 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 593350 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 588772 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == PU (Pulse) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == ST (Stutter) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == CH (SvChaos) x1.080
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 951435 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 939956 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1086048 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1086091 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 628253 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 623405 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == CC (Crescendo) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == DR (Drop) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == GB (Gearbox) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == RL (Roulette) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == AS (AntiSv) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == HS (HyperSv) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == EV (Even) x1.080
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 951435 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 939956 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1086048 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1086091 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 628253 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 623405 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SL (Split) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SG (Swing) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == LF (Leapfrog) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == PN (Panic) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == MC (Mercy) x0.900
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 792862 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 783297 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 905040 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 905076 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 523544 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 519504 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == LG (LagSpike) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == MW (Moonwalk) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SR (SnapSpeed) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SU (Sudden) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == BL (Blink) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == BO (Blackout) x1.100
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 969054 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 957363 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1106160 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1106204 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 639888 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 634950 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SP (Spotlight) x1.100
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 969054 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 957363 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1106160 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1106204 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 639888 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 634950 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == CL (Colorless) x1.100
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 969054 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 957363 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1106160 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1106204 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 639888 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 634950 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == MM (Memory) x1.100
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 969054 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 957363 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1106160 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1106204 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 639888 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 634950 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == DY (Decoy) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == PY (Party) x1.020
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 898577 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 887737 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1025712 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1025753 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 593350 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 588772 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == OT (Overtime) x1.000
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 880958 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 870330 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1005600 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1005640 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 581716 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 577227 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == LI (Liar) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == RA (Radar) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == EC (Echo) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == ZZ (Zigzag) x1.020
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 898577 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 887737 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1025712 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1025753 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 593350 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 588772 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == UT (UTurn) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SI (Spiral) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == LP (Loop) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == EB (Elbow) x1.020
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 898577 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 887737 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1025712 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1025753 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 593350 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 588772 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SS (Shapeshift) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SK (Snake) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == MZ (Maze) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == MR (Mirror) x1.020
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 898577 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 887737 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1025712 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1025753 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 593350 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 588772 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == TL (Tilt) x1.020
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 898577 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 887737 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1025712 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1025753 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 593350 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 588772 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SN (Spin) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == MN (Mania) x1.020
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 898577 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 887737 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1025712 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1025753 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 593350 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 588772 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == BA (BarrelRoll) x1.020
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 898577 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 887737 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1025712 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1025753 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 593350 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 588772 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == FF (FlipFlop) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == XF (Crossfire) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == SH (Shatter) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == CK (Cracked) x1.020
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 898577 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 887737 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1025712 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1025753 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 593350 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 588772 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == CR (Crumble) x1.040
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 916196 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 905143 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1045824 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1045866 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 604985 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 600316 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == PT (Portal) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == MV (Multiverse) x1.120
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 986673 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 974770 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1126272 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1126317 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 651522 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 646494 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == TC (Tact) x1.060
-basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 933815 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
+basics             great 58 ok 6 miss 0 | combo 64 max 64 | score 922550 | rolls 0 swells 0 strong 0 | acc 95.3125 | err -3.98 ur 221.05 | hp 1.0000 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1065978 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 616619 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 611861 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
 == OV (OdOverride) x1.000
-basics             great 30 ok 34 miss 0 | combo 64 max 64 | score 496812 | rolls 0 swells 0 strong 0 | acc 73.4375 | err -3.98 ur 221.05 | hp 0.8847 | failed false
+basics             great 30 ok 34 miss 0 | combo 64 max 64 | score 429769 | rolls 0 swells 0 strong 0 | acc 73.4375 | err -3.98 ur 221.05 | hp 0.8847 | failed false
 big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1005600 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1005640 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 581716 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false
+stream             great 143 ok 0 miss 17 | combo 7 max 8 | score 577227 | rolls 0 swells 0 strong 0 | acc 89.3750 | err 0.00 ur 0.00 | hp 0.9034 | failed false

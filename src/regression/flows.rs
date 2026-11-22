@@ -870,6 +870,8 @@ struct Updating {
     /// The pp total its profile of the player says, and how many times it was asked for it.
     profile_pp: f64,
     profiles: usize,
+    /// The total its answer to a play says (100 when not set).
+    answer_pp: Option<f64>,
 }
 
 /// What `score_server` does with the first play sent to it.
@@ -958,7 +960,7 @@ fn score_server(first_play: FirstPlay) -> (String, std::sync::Arc<std::sync::Mut
                     }
                     Request::SubmitScore { play, .. } => {
                         let key = play.operation_key.clone();
-                        let first = {
+                        let (first, answer_pp) = {
                             let mut seen = seen.lock().unwrap();
                             // Answered with 100 pp, settled at 140 once its replay is played
                             // back (the real server does that just after answering).
@@ -971,7 +973,7 @@ fn score_server(first_play: FirstPlay) -> (String, std::sync::Arc<std::sync::Mut
                             {
                                 seen.stored.insert(k.clone());
                             }
-                            first
+                            (first, seen.answer_pp.unwrap_or(100.0))
                         };
                         match first_play {
                             // Stored, then gone before answering: the old copy stops and
@@ -995,7 +997,7 @@ fn score_server(first_play: FirstPlay) -> (String, std::sync::Arc<std::sync::Mut
                             &Reply::Submitted {
                                 relax: false,
                                 map_rank: Some(1),
-                                pp: 100.0,
+                                pp: answer_pp,
                                 rank: Some(7),
                                 medals: Vec::new(),
                             },
@@ -1211,6 +1213,54 @@ fn the_own_pp_total_follows_the_server_after_a_play_settles() {
     );
 }
 
+/// The server answers a play before its pp counts (the replay is checked just after), so the
+/// answer's total is the one from before the play. The results show "..." for the change, and
+/// the gain once the settled total comes in, instead of "none" (Discord: "PP Change not
+/// showing the increase").
+#[test]
+fn the_results_show_the_pp_gain_once_the_server_settles_the_play() {
+    let (server, seen) = score_server(FirstPlay::Kept);
+    {
+        let mut seen = seen.lock().unwrap();
+        seen.profile_pp = 50.0;
+        seen.answer_pp = Some(50.0);
+    }
+    let songs = Songs::new("results-pp-settles", &[maps::basics()]);
+    let mut s = play_to_server(server, &songs);
+    // Tests keep no replay files: the results of a play just made have one.
+    s.scene
+        .screen_mut::<ResultsScreen>()
+        .expect("the results come after the map")
+        .results
+        .replay = Some(PathBuf::from("played.json"));
+    assert!(!s.submits.is_empty(), "the answer isn't in yet");
+    let total = |s: &State| {
+        s.scene
+            .screen_as::<ResultsScreen>()
+            .and_then(|r| r.results.total)
+    };
+    assert!(
+        poll_own_pp(&mut s, 30, &|s| total(s).is_some()),
+        "the play is sent and answered"
+    );
+    let answered = total(&s).unwrap();
+    assert_eq!(
+        (answered.before, answered.after, answered.settling),
+        (Some(50.0), 50.0, true),
+        "not counted yet: the change waits"
+    );
+    assert!(
+        poll_own_pp(&mut s, 15, &|s| total(s).is_some_and(|t| !t.settling)),
+        "the settled total comes in: {:?}",
+        total(&s)
+    );
+    let settled = total(&s).unwrap();
+    assert_eq!(
+        (settled.before, settled.after, settled.rank),
+        (Some(50.0), 140.0, Some(7))
+    );
+}
+
 /// The total changes on the server with no play from this game (a recalculation, an admin, a
 /// play on another device): the game asks again every `ME_REFRESH`.
 #[test]
@@ -1318,6 +1368,88 @@ fn play_starts_the_song_whatever_is_on_enter() {
         "Play starts the map, not {}",
         scene_name(&s)
     );
+}
+
+/// Song select's pp row (the full-combo chips, the simulator's pp) is of its own map: the
+/// download tab's panel, showing a set to download, doesn't carry it over (Discord: "Maps in
+/// the Download tab show PP info of the previously selected map in the Play tab").
+#[test]
+fn the_download_tab_shows_no_pp_of_song_selects_map() {
+    let songs = Songs::new("download-no-pp", &[maps::basics()]);
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    // What song select's map gave, the simulator open.
+    s.preview.potential = Some([321.0, 300.0, 280.0]);
+    s.preview.sim = Some(preview::PpSim {
+        accuracy: 0.98,
+        misses: 0,
+    });
+    s.preview.sim_pp = Some(250.0);
+    s.open_download();
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert!(
+        !shows(&c, "321") && !shows(&c, "250pp"),
+        "no pp of another map"
+    );
+    assert_eq!((s.preview.potential, s.preview.sim_pp), (None, None));
+    assert!(
+        s.preview.sim.is_some(),
+        "the simulator stays open for song select"
+    );
+}
+
+/// Discord idea: the download tab can leave out the maps already installed. The switch is kept
+/// in the config; a map downloaded from the list stays in it until the next search.
+#[test]
+fn the_download_tab_can_hide_the_installed_maps() {
+    let mut s = state_with(harness::config(), Vec::new());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_download();
+    let set = |id: u32| download::SetInfo {
+        id,
+        title: format!("set {id}"),
+        ..Default::default()
+    };
+    s.browse.results = vec![set(1), set(2), set(3)];
+    s.browse.cursor = 2;
+    s.installed_sets = Some([2].into());
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(
+        s.browse.results.len(),
+        3,
+        "all listed until it's switched on"
+    );
+    let switch = s
+        .hits
+        .iter()
+        .find(|h| h.hit == hit::Hit::DlHideInstalled)
+        .map(|h| h.rect)
+        .expect("the filter row has the switch");
+    let k = s.window_h / crate::render::VIRTUAL_HEIGHT;
+    s.mouse = (
+        f64::from((switch[0] + switch[2] / 2.0) * k),
+        f64::from((switch[1] + switch[3] / 2.0) * k),
+    );
+    s.mouse_button(true, None);
+    s.mouse_button(false, None);
+    assert!(s.cfg.download_hide_installed);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let ids = |s: &State| s.browse.results.iter().map(|r| r.id).collect::<Vec<_>>();
+    assert_eq!(ids(&s), [1, 3], "the installed set is left out");
+    assert_eq!(s.browse.cursor, 1, "the selection stays on set 3");
+    // Set 3 downloaded from the list: it stays there.
+    s.installed_sets = Some([2, 3].into());
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(ids(&s), [1, 3]);
+    // The config keeps the switch.
+    let text = s.cfg.to_text();
+    assert!(text.contains("download_hide_installed = true"), "{text}");
 }
 
 /// Discord ideas: the speed can be changed with the mouse in song select (a - / + beside it, as

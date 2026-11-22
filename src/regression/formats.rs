@@ -482,6 +482,7 @@ check_updates = false
 resume_delay_ms = 1500
 sort = title
 collection = own:Warm Up
+download_hide_installed = true
 kiai_effects = false
 preview_drum = false
 hide_great = false

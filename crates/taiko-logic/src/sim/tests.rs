@@ -1580,6 +1580,73 @@ fn lazer_scoring_weighs_hits_by_log4_of_the_combo_after_them() {
 }
 
 #[test]
+fn lazer_scoring_gives_nothing_for_a_miss() {
+    // Reported: the score still went up while missing every note.
+    let missing = |scoring| {
+        let mut g = Game::new(
+            beatmap::calibration_map(500.0, 0, 64),
+            Arc::new(Silence),
+            None,
+        );
+        g.set_scoring(scoring);
+        let times: Vec<f64> = g.map.notes.iter().map(|n| n.time).collect();
+        for &t in &times[..16] {
+            g.press_time(1, t, None);
+        }
+        assert_eq!(g.stats.great, 16);
+        let mut scores = vec![g.stats.score];
+        for &t in &times[16..] {
+            g.set_time(t + 200.0);
+            scores.push(g.stats.score);
+        }
+        assert_eq!(g.stats.miss, 48);
+        scores
+    };
+    let now = missing(Scoring::Lazer);
+    assert!(
+        now.windows(2).all(|w| w[1] <= w[0]),
+        "a miss never raises the score: {now:?}"
+    );
+    // Version 6 replays play back as they were scored: there a miss added to the combo part.
+    let v6 = missing(Scoring::LazerV6);
+    assert!(v6.windows(2).any(|w| w[1] > w[0]), "{v6:?}");
+    assert!(v6.last() > now.last());
+}
+
+#[test]
+fn an_ok_adds_half_a_great_to_lazer_scorings_combo_part() {
+    let all = |scoring, late: f64| {
+        let mut g = Game::new(
+            beatmap::calibration_map(500.0, 0, 64),
+            Arc::new(Silence),
+            None,
+        );
+        g.set_scoring(scoring);
+        let times: Vec<f64> = g.map.notes.iter().map(|n| n.time).collect();
+        for t in times {
+            g.press_time(1, t + late, None);
+        }
+        g.set_time(60_000.0);
+        g.stats.clone()
+    };
+    let oks = all(Scoring::Lazer, 80.0);
+    assert_eq!(oks.ok, 64);
+    // 125,000 of the combo part (half) and 750,000 · 0.5^3.6 of the accuracy part.
+    let want = 125_000.0 + 750_000.0 * 0.5f64.powf(3.6);
+    assert!(
+        (oks.score as f64 - want).abs() <= 1.0,
+        "{} vs {want}",
+        oks.score
+    );
+    let v6 = all(Scoring::LazerV6, 80.0);
+    assert!(
+        (v6.score as f64 - (want + 125_000.0)).abs() <= 1.0,
+        "{}",
+        v6.score
+    );
+}
+
+#[test]
 fn a_swell_left_alone_drains_hp_with_lazer_scoring_only() {
     let hp = |scoring| {
         let mut g = Game::new(bonus_map(), Arc::new(Silence), None);
