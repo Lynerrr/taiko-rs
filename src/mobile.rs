@@ -939,7 +939,7 @@ impl State {
         let list_y = ty + TAB_H + 8.0;
         let list_h = y + h - 8.0 - list_y;
         let relax = self.cfg.mods.relax();
-        let Some(hash) = self.select.selected().map(|i| self.library[i].hash()) else {
+        let Some(hash) = self.select.selected().and_then(|i| self.known_hash_of(i)) else {
             return;
         };
         if self.mob.board_of != Some((hash, online)) {

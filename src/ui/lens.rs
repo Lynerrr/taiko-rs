@@ -531,6 +531,9 @@ pub struct LensUi {
 const OPEN_MS: f32 = 200.0;
 pub(super) const SWITCH_MS: f32 = 260.0;
 
+/// The panel's sizes in the screen's 480; in the interface's own space (720) they're `LENS_UI`
+/// times these, and each column at least as wide as its labels (`Select::lens_layout`).
+const LENS_UI: f32 = 1.4;
 const ROW_H: f32 = 15.0;
 const COL_SORT_W: f32 = 132.0;
 const COL_ORDER_W: f32 = 112.0;
@@ -757,10 +760,110 @@ impl Select {
         }
     }
 
+    /// The sort and filter panel's sizes (`LensLayout`): its own in the screen's 480, larger in
+    /// the interface's own space (`LENS_UI`), where text comes out bigger than asked. Each
+    /// column is at least as wide as its widest label, and a row of filter blocks whose names and
+    /// counts don't fit one line goes on two.
+    fn lens_layout(&self, grid: &[Vec<Vec<LensItem>>; 3]) -> LensLayout {
+        let u = if self.in_ui_space() { LENS_UI } else { 1.0 };
+        let label_w = |labels: &mut dyn Iterator<Item = String>| {
+            labels
+                .map(|l| Canvas::text_width(7.0, &l) + 15.0 * u + 6.0)
+                .fold(0.0, f32::max)
+        };
+        let sort_w = (COL_SORT_W * u).max(label_w(
+            &mut SortMode::ALL
+                .iter()
+                .map(|s| s.name().to_string())
+                .chain(["headings: off".to_string()]),
+        ));
+        let order_w = (COL_ORDER_W * u).max(label_w(
+            &mut Order::ALL
+                .iter()
+                .map(|o| o.label().to_string())
+                .chain(["descending".to_string()]),
+        ));
+        let filter_w = COL_FILTER_W * u;
+        let (row_h, block_h, bars_h) = (ROW_H * u, BLOCK_H * u, BARS_H * u);
+        let block_gap = 4.0 * u;
+        // Each filter row's lines: one, or two where its blocks don't all fit whole on one.
+        let lines: Vec<usize> = grid[2]
+            .iter()
+            .map(|items| match items[0] {
+                LensItem::Star(_) => 1,
+                first => {
+                    let n = match first {
+                        LensItem::Status(_) => STATUSES.len(),
+                        _ => items.len(),
+                    };
+                    let widest = items
+                        .iter()
+                        .map(|&item| {
+                            let (label, count) = self.lens_block(item);
+                            block_need(label, count)
+                        })
+                        .fold(0.0, f32::max);
+                    if n > 2 && widest * n as f32 + (n - 1) as f32 * block_gap > filter_w {
+                        2
+                    } else {
+                        1
+                    }
+                }
+            })
+            .collect();
+        let (pad, gap, head_h, foot_h) = (PAD * u, GAP * u, 22.0 * u, 26.0 * u);
+        let rows_h = grid[0].len().max(grid[1].len()) as f32 * row_h;
+        let filters_h: f32 = grid[2]
+            .iter()
+            .zip(&lines)
+            .map(|(items, &n)| match items[0] {
+                LensItem::Star(_) => 10.0 * u + bars_h + 8.0 * u,
+                first => {
+                    let caption = match first {
+                        LensItem::Length(_) | LensItem::Status(_) | LensItem::Course(_) => 9.0 * u,
+                        _ => 0.0,
+                    };
+                    caption + n as f32 * block_h + (n - 1) as f32 * block_gap + 9.0 * u
+                }
+            })
+            .sum();
+        LensLayout {
+            u,
+            row_h,
+            sort_w,
+            order_w,
+            filter_w,
+            pad,
+            gap,
+            bars_h,
+            block_h,
+            block_gap,
+            head_h,
+            lines,
+            w: pad * 2.0 + sort_w + order_w + filter_w + gap * 2.0,
+            h: head_h + rows_h.max(filters_h) + foot_h,
+        }
+    }
+
+    /// A filter block's label and the count of maps it would list.
+    fn lens_block(&self, item: LensItem) -> (&'static str, Option<u32>) {
+        let facets = &self.facets;
+        match item {
+            LensItem::Length(i) => (LENGTHS[i as usize].0, Some(facets.lengths[i as usize])),
+            LensItem::Status(i) => (STATUSES[i as usize].0, Some(facets.statuses[i as usize])),
+            LensItem::Course(i) => (COURSES[i as usize].0, Some(facets.courses[i as usize])),
+            LensItem::Unplayed => ("not played yet", None),
+            _ => ("reset", None),
+        }
+    }
+
     /// The sort and filter panel, over the list from (`x`, `y`).
     pub(super) fn draw_lens(&self, c: &mut Canvas, x: f32, y: f32) {
+        use crate::style::{role, tone};
         let Some(ui) = self.lens_ui else { return };
         let grid = self.lens_grid();
+        let l = self.lens_layout(&grid);
+        let u = l.u;
         let t = progress(ui.opened, OPEN_MS);
         let ease = 1.0 - (1.0 - t).powi(3);
         let age = ui.opened.elapsed().as_secs_f32() * 1000.0;
@@ -772,45 +875,34 @@ impl Select {
                 ((age - 50.0 - k as f32 * 12.0) / 120.0).clamp(0.0, 1.0)
             }
         };
-        let rows_h = grid[0].len().max(grid[1].len()) as f32 * ROW_H;
-        let filter_rows = grid[2].len() as f32;
-        let filters_h = 14.0 + BARS_H + 22.0 + (filter_rows - 1.0) * (BLOCK_H + 18.0);
-        let w = PAD * 2.0 + COL_SORT_W + COL_ORDER_W + COL_FILTER_W + GAP * 2.0;
-        let h = 22.0 + rows_h.max(filters_h) + 26.0;
+        let (w, h) = (l.w, l.h);
         let x = x.min(c.width - w - 8.0).max(8.0);
         // The rest of the screen dims behind it.
-        c.rect(0.0, 0.0, c.width, 480.0, rgba(0x000000, 0.35 * ease));
+        c.rect(0.0, 0.0, c.width, c.height, rgba(0x000000, 0.35 * ease));
         let start = c.shapes.len();
         // Under everything else of the panel: a click between its items stays on it.
         c.hit(x, y, w, h, Hit::Lens(LensItem::Panel));
-        crate::style::panel(c, x, y, w, h);
-        c.round_rect(
-            [x + 1.0, y + 1.0],
-            [w - 2.0, h - 2.0],
-            9.0,
-            rgba(crate::style::PANEL, 1.0),
-            rgba(0, 0.0),
-            0.0,
-        );
+        // Song select's panel: its tone and a thin neutral edge (the accent is the selection's).
         c.round_rect(
             [x, y],
             [w, h],
-            10.0,
-            rgba(0, 0.0),
-            rgba(crate::style::selector_colour(), 0.85),
-            1.5,
+            crate::style::radius::CARD,
+            rgba(crate::style::PANEL_COLD, 0.98),
+            rgba(tone::EDGE, 1.0),
+            tone::LINE,
         );
         let at = ui.at;
         let mut target = None;
         let heading = |c: &mut Canvas, hx: f32, text: &str| {
-            crate::style::glitch_text(c, hx, y + 9.0, 7.0, 0x9a9ab0, text, (1.0 - t) * 2.5);
+            let hy = Canvas::text_y_mid(y + l.head_h / 2.0, 7.0);
+            crate::style::glitch_text(c, hx, hy, 7.0, 0x9a9ab0, text, (1.0 - t) * 2.5);
         };
 
         // The sort, and headings or one list.
-        let cx = x + PAD;
+        let cx = x + l.pad;
         heading(c, cx, "SORT BY");
         for (r, items) in grid[0].iter().enumerate() {
-            let ry = y + 22.0 + r as f32 * ROW_H;
+            let ry = y + l.head_h + r as f32 * l.row_h;
             let a = stagger(r);
             let (label, on) = match items[0] {
                 LensItem::Sort(i) => (
@@ -826,18 +918,18 @@ impl Select {
                     self.headings,
                 ),
             };
-            let rect = [cx, ry, COL_SORT_W, ROW_H - 1.0];
-            option_row(c, rect, &label, on, a, Hit::Lens(items[0]));
+            let rect = [cx, ry, l.sort_w, l.row_h - 1.0];
+            option_row(c, rect, &label, on, a, Hit::Lens(items[0]), u);
             if at.0 == 0 && at.1 == r {
                 target = Some(rect);
             }
         }
 
         // The order under each heading.
-        let ox = cx + COL_SORT_W + GAP;
+        let ox = cx + l.sort_w + l.gap;
         heading(c, ox, "THEN BY");
         for (r, items) in grid[1].iter().enumerate() {
-            let ry = y + 22.0 + r as f32 * ROW_H;
+            let ry = y + l.head_h + r as f32 * l.row_h;
             let a = stagger(r + 1);
             let (label, on) = match items[0] {
                 LensItem::Order(i) => (
@@ -853,50 +945,58 @@ impl Select {
                     self.tabs.desc,
                 ),
             };
-            let rect = [ox, ry, COL_ORDER_W, ROW_H - 1.0];
-            option_row(c, rect, &label, on, a, Hit::Lens(items[0]));
+            let rect = [ox, ry, l.order_w, l.row_h - 1.0];
+            option_row(c, rect, &label, on, a, Hit::Lens(items[0]), u);
             if at.0 == 1 && at.1 == r {
                 target = Some(rect);
             }
         }
 
         // The filters.
-        let fx = ox + COL_ORDER_W + GAP;
+        let fx = ox + l.order_w + l.gap;
+        let fw = l.filter_w;
         let f = &self.tabs.filters;
         heading(c, fx, "FILTER");
-        let mut fy = y + 22.0;
+        let mut fy = y + l.head_h;
         for (r, items) in grid[2].iter().enumerate() {
             let a = stagger(r + 2);
             let rstart = c.shapes.len();
             match items[0] {
                 LensItem::Star(_) => {
                     let range = stars_text(f.stars);
-                    c.text(
-                        fx,
-                        fy,
-                        6.0,
-                        rgba(0x6f6f86, 1.0),
+                    // The caption and the range shown at its right, never over each other.
+                    let range_w = Canvas::text_width(6.0, &range);
+                    let caption = [
                         "stars (click a bar, then another)",
-                    );
-                    c.text_right(fx + COL_FILTER_W, fy, 6.0, rgba(0xffffff, 1.0), &range);
-                    let by = fy + 10.0;
+                        "stars (click two bars)",
+                        "stars",
+                    ]
+                    .into_iter()
+                    .find(|s| Canvas::text_width(6.0, s) + 8.0 * u + range_w <= fw)
+                    .unwrap_or("stars");
+                    let ink = rgba(0x6f6f86, 1.0);
+                    c.text(fx, fy, 6.0, ink, caption);
+                    c.text_right(fx + fw, fy, 6.0, rgba(0xffffff, 1.0), &range);
+                    let by = fy + 10.0 * u;
                     let bars = &self.facets.stars;
                     let most = bars.iter().copied().max().unwrap_or(0).max(1) as f32;
-                    let bw = (COL_FILTER_W - 9.0 * 3.0) / 10.0;
+                    let step = 3.0 * u;
+                    let bw = (fw - 9.0 * step) / 10.0;
+                    let foot = 10.0 * u;
                     for b in 0..10u8 {
-                        let bx = fx + b as f32 * (bw + 3.0);
+                        let bx = fx + b as f32 * (bw + step);
                         let n = bars[b as usize];
                         let kept = f.stars.is_none_or(|(lo, hi)| (lo..=hi).contains(&b));
                         let col = crate::stars::color(b as f32 + 1.5);
                         let bh = if n == 0 {
                             1.5
                         } else {
-                            3.0 + (BARS_H - 14.0) * n as f32 / most
+                            3.0 + (l.bars_h - foot - 4.0 * u) * n as f32 / most
                         };
-                        let hover = c.hovered(bx, by, bw, BARS_H);
+                        let hover = c.hovered(bx, by, bw, l.bars_h);
                         c.rect(
                             bx,
-                            by + BARS_H - 10.0 - bh,
+                            by + l.bars_h - foot - bh,
                             bw,
                             bh,
                             rgba(col, if kept { 1.0 } else { 0.22 }),
@@ -906,18 +1006,18 @@ impl Select {
                         if n > 0 {
                             c.rect(
                                 bx,
-                                by + BARS_H - 10.0 - bh,
+                                by + l.bars_h - foot - bh,
                                 bw,
                                 1.0,
                                 rgba(0xffffff, if kept { 0.45 } else { 0.12 }),
                             );
                         }
                         if hover {
-                            c.rect(bx, by, bw, BARS_H - 10.0, rgba(0xffffff, 0.06));
+                            c.rect(bx, by, bw, l.bars_h - foot, rgba(0xffffff, 0.06));
                         }
                         c.text_centered(
                             bx + bw / 2.0,
-                            by + BARS_H - 8.0,
+                            Canvas::text_y_mid(by + l.bars_h - foot / 2.0, 5.0),
                             5.0,
                             rgba(if kept { 0xc8c8d8 } else { 0x55556a }, 1.0),
                             &if b == 9 {
@@ -926,12 +1026,12 @@ impl Select {
                                 (b + 1).to_string()
                             },
                         );
-                        c.hit(bx, by, bw, BARS_H, Hit::Lens(LensItem::Star(b)));
+                        c.hit(bx, by, bw, l.bars_h, Hit::Lens(LensItem::Star(b)));
                         if at.0 == 2 && at.1 == r && at.2 == b as usize {
-                            target = Some([bx - 1.0, by - 1.0, bw + 2.0, BARS_H + 2.0]);
+                            target = Some([bx - 1.0, by - 1.0, bw + 2.0, l.bars_h + 2.0]);
                         }
                     }
-                    fy += 10.0 + BARS_H + 8.0;
+                    fy += 10.0 * u + l.bars_h + 8.0 * u;
                 }
                 first => {
                     let caption = match first {
@@ -942,44 +1042,39 @@ impl Select {
                     };
                     if !caption.is_empty() {
                         c.text(fx, fy, 6.0, rgba(0x6f6f86, 1.0), caption);
-                        fy += 9.0;
+                        fy += 9.0 * u;
                     }
-                    // Status blocks as wide as with every status there, whichever are.
+                    // Status blocks as wide as with every status there, whichever are; on two
+                    // lines where one doesn't hold them whole.
+                    let lines = l.lines[r];
                     let n = match first {
                         LensItem::Status(_) => STATUSES.len(),
                         _ => items.len(),
-                    } as f32;
-                    let bw = (COL_FILTER_W - (n - 1.0) * 4.0) / n;
+                    };
+                    let per_line = n.div_ceil(lines);
+                    let bw = (fw - (per_line - 1) as f32 * l.block_gap) / per_line as f32;
                     for (k, &item) in items.iter().enumerate() {
-                        let bx = fx + k as f32 * (bw + 4.0);
-                        let facets = &self.facets;
-                        let (label, colour, on, count) = match item {
-                            LensItem::Length(i) => (
-                                LENGTHS[i as usize].0,
-                                0xc8c8d8,
-                                f.lengths & 1 << i != 0,
-                                Some(facets.lengths[i as usize]),
-                            ),
+                        let (line, col_k) = (k / per_line, k % per_line);
+                        let bx = fx + col_k as f32 * (bw + l.block_gap);
+                        let by = fy + line as f32 * (l.block_h + l.block_gap);
+                        let (label, count) = self.lens_block(item);
+                        let (colour, on) = match item {
+                            LensItem::Length(i) => (0xc8c8d8, f.lengths & 1 << i != 0),
                             LensItem::Status(i) => {
-                                let s = STATUSES[i as usize];
-                                let n = facets.statuses[i as usize];
-                                (s.0, s.1, f.statuses & 1 << i != 0, Some(n))
+                                (STATUSES[i as usize].1, f.statuses & 1 << i != 0)
                             }
-                            LensItem::Course(i) => {
-                                let s = COURSES[i as usize];
-                                let n = facets.courses[i as usize];
-                                (s.0, s.1, f.courses & 1 << i != 0, Some(n))
-                            }
-                            LensItem::Unplayed => ("not played yet", 0xc8c8d8, f.unplayed, None),
-                            _ => ("reset", crate::style::DANGER, false, None),
+                            LensItem::Course(i) => (COURSES[i as usize].1, f.courses & 1 << i != 0),
+                            LensItem::Unplayed => (0xc8c8d8, f.unplayed),
+                            _ => (crate::style::DANGER, false),
                         };
-                        let rect = [bx, fy, bw, BLOCK_H];
+                        let rect = [bx, by, bw, l.block_h];
                         block(c, rect, label, colour, on, count, Hit::Lens(item));
                         if at.0 == 2 && at.1 == r && at.2 == k {
                             target = Some(rect);
                         }
                     }
-                    fy += BLOCK_H + 9.0;
+                    let lines = items.len().div_ceil(per_line).max(1);
+                    fy += lines as f32 * l.block_h + (lines - 1) as f32 * l.block_gap + 9.0 * u;
                 }
             }
             if a < 1.0 {
@@ -987,33 +1082,54 @@ impl Select {
             }
         }
 
-        // What it all comes to.
+        // What it all comes to, and the keys at the right where there's room beside it.
         let songs = self.song_count;
-        let foot = y + h - 16.0;
-        c.rect(x + PAD, foot - 5.0, w - PAD * 2.0, 1.0, rgba(0x2a2a3a, 1.0));
-        c.text(
-            x + PAD,
-            foot,
-            7.0,
-            rgba(0xffffff, 1.0),
-            &format!(
-                "{songs} song{} in {}",
-                if songs == 1 { "" } else { "s" },
-                match self.shown_source() {
-                    Source::All => "all sources",
-                    s => s.label(),
-                }
-            ),
+        let foot = y + h - l.head_h / 2.0 - 5.0 * u;
+        c.rect(
+            x + l.pad,
+            foot - 5.0 * u,
+            w - l.pad * 2.0,
+            1.0,
+            rgba(tone::EDGE, 1.0),
         );
-        c.text_right(
-            x + w - PAD,
-            foot,
-            6.0,
-            rgba(0x6f6f86, 1.0),
+        let total = format!(
+            "{songs} song{} in {}",
+            if songs == 1 { "" } else { "s" },
+            match self.shown_source() {
+                Source::All => "all sources",
+                s => s.label(),
+            }
+        );
+        let said = c.text(x + l.pad, foot, 7.0, rgba(0xffffff, 1.0), &total);
+        let room = w - 2.0 * l.pad - said - 16.0 * u;
+        if let Some(keys) = [
             "arrows move  Enter pick  Esc or Ctrl+S close",
-        );
-        if let Some(rect) = target {
-            crate::style::selector(c, "song-lens", rect);
+            "arrows move  Enter pick  Esc close",
+            "Esc close",
+        ]
+        .into_iter()
+        .find(|s| Canvas::text_width(6.0, s) <= room)
+        {
+            c.text_right(
+                x + w - l.pad,
+                Canvas::text_y_mid(foot + Canvas::text_height(7.0) / 2.0, 6.0),
+                6.0,
+                rgba(0x6f6f86, 1.0),
+                keys,
+            );
+        }
+        // The keys' place: Play's colour (the accent), as the list's selection.
+        if let Some([tx, ty, tw, th]) = target {
+            let col = role::primary();
+            c.round_rect(
+                [tx, ty],
+                [tw, th],
+                3.0,
+                rgba(col, 0.08),
+                rgba(col, 0.0),
+                0.0,
+            );
+            crate::style::brackets_in(c, [tx - 2.0, ty - 2.0, tw + 4.0, th + 4.0], 1.0, col);
         }
 
         // Opening: the panel unrolls top down behind a line of light.
@@ -1025,7 +1141,7 @@ impl Select {
                 y + shown - 1.0,
                 w + 2.0,
                 1.5,
-                rgba(crate::style::selector_colour(), 1.0 - t),
+                rgba(role::primary(), 1.0 - t),
             );
         }
     }
@@ -1062,7 +1178,15 @@ impl Select {
     }
 
     /// The tabs over the list, one per source with maps, from (`x`, `y`) across `w`.
-    pub(crate) fn draw_source_tabs(&self, c: &mut Canvas, x: f32, y: f32, w: f32, tabs: &[Source]) {
+    /// `draw_source_tabs` as it was in 1.0 (`Select::draw_classic`).
+    pub(crate) fn draw_source_tabs_classic(
+        &self,
+        c: &mut Canvas,
+        x: f32,
+        y: f32,
+        w: f32,
+        tabs: &[Source],
+    ) {
         let tw = w / tabs.len() as f32;
         let shown = self.shown_source();
         let mut target = None;
@@ -1070,19 +1194,15 @@ impl Select {
             let tx = x + k as f32 * tw;
             let on = s == shown;
             let hover = c.hovered(tx, y, tw, SOURCE_TAB_H);
-            // Each tab a chip of its own, as the search row's field is: the raised surface,
-            // lifted under the pointer and while it's the one shown.
-            let level = if on || hover {
-                crate::style::Surface::Lifted
-            } else {
-                crate::style::Surface::Raised
-            };
-            crate::style::surface(
-                c,
-                [tx + 2.0, y + 1.0, tw - 4.0, SOURCE_TAB_H - 3.0],
-                crate::style::radius::SMALL,
-                level,
-            );
+            if hover && !on {
+                c.rect(
+                    tx + 2.0,
+                    y + 2.0,
+                    tw - 4.0,
+                    SOURCE_TAB_H - 4.0,
+                    rgba(0x262634, 0.8),
+                );
+            }
             // What the tab lists, the search and filters as they are.
             let n = self.source_listed[s.index()];
             let label = s.label();
@@ -1117,13 +1237,85 @@ impl Select {
                 target = Some([tx + 2.0, y + 1.0, tw - 4.0, SOURCE_TAB_H - 3.0]);
             }
         }
+        c.rect(
+            x,
+            y + SOURCE_TAB_H,
+            w,
+            1.0,
+            rgba(crate::style::PANEL_EDGE, 1.0),
+        );
         if let Some(rect) = target {
             crate::style::selector(c, "song-source", rect);
+        }
+    }
+
+    pub(crate) fn draw_source_tabs(&self, c: &mut Canvas, x: f32, y: f32, w: f32, tabs: &[Source]) {
+        use crate::style::{Surface, ink, radius, surface};
+        let tw = w / tabs.len() as f32;
+        let tab_h = self.source_tab_h();
+        let shown = self.shown_source();
+        for (k, &s) in tabs.iter().enumerate() {
+            let tx = x + k as f32 * tw;
+            let on = s == shown;
+            let hover = c.hovered(tx, y, tw, tab_h);
+            // Each tab a chip of its own, as the search row's buttons are: the raised surface,
+            // lifted under the pointer and while it's the one shown, which has a bar of the
+            // accent along its bottom (no brackets: those are the list's selection).
+            let level = if on || hover {
+                Surface::Lifted
+            } else {
+                Surface::Raised
+            };
+            let chip = [tx + 2.0, y + 1.0, tw - 4.0, tab_h - 3.0];
+            surface(c, chip, radius::SMALL, level);
+            if on {
+                let [cx, cy, cw, ch] = chip;
+                c.rect(
+                    cx + radius::SMALL,
+                    cy + ch - SOURCE_TAB_BAR - 1.0,
+                    cw - 2.0 * radius::SMALL,
+                    SOURCE_TAB_BAR,
+                    rgba(crate::render::accent(), 1.0),
+                );
+            }
+            // What the tab lists, the search and filters as they are.
+            let n = self.source_listed[s.index()];
+            let label = s.label();
+            let count = n.to_string();
+            let lw = Canvas::text_width(7.0, label) + 6.0 + Canvas::text_width(6.0, &count);
+            let lx = tx + (tw - lw) / 2.0;
+            let col = if on {
+                ink::PRIMARY
+            } else if hover {
+                0xc8c8d8
+            } else {
+                ink::SECONDARY
+            };
+            // In the chip's middle (text comes out centred on the line its size takes).
+            let mid = y + 1.0 + (tab_h - 3.0) / 2.0;
+            c.text(lx, mid - 3.5, 7.0, rgba(col, 1.0), label);
+            c.text(
+                lx + Canvas::text_width(7.0, label) + 6.0,
+                mid - 3.0,
+                6.0,
+                rgba(ink::CAPTION, 1.0),
+                &count,
+            );
+            c.hit(tx, y, tw, tab_h, Hit::SongSource(s.index()));
         }
     }
 }
 
 impl Select {
+    /// How tall the source tabs over the list are.
+    pub(crate) fn source_tab_h(&self) -> f32 {
+        if self.in_ui_space() {
+            SOURCE_TAB_H_UI
+        } else {
+            SOURCE_TAB_H
+        }
+    }
+
     /// Takes the source and each source's lens from the config.
     pub fn read_lenses(&mut self, cfg: &crate::config::Config) {
         let mut words = cfg.song_order.split_whitespace();
@@ -1184,27 +1376,68 @@ fn same_height(row: usize, from: usize, to: usize) -> usize {
     ((row as f32 * (to - 1) as f32 / (from - 1) as f32).round() as usize).min(to - 1)
 }
 
-/// The height of the source tabs over the list.
+/// The height of the source tabs over the list; in the interface's own space, where their
+/// text is bigger beside them (`Select::source_tab_h`).
 pub(super) const SOURCE_TAB_H: f32 = 18.0;
+const SOURCE_TAB_H_UI: f32 = 22.0;
+/// The bar of the accent along the bottom of the source tab shown.
+const SOURCE_TAB_BAR: f32 = 2.0;
 
-/// A row of the sort or order column: a square lit when it's the one on.
-fn option_row(c: &mut Canvas, [x, y, w, h]: [f32; 4], label: &str, on: bool, alpha: f32, hit: Hit) {
+/// The sort and filter panel as laid out (`Select::lens_layout`): its scale, the rows' height,
+/// the columns' widths, the room round and between them, the star bars' and the blocks' heights
+/// and the room between blocks, the headings' row, each filter row's lines, and the whole size.
+struct LensLayout {
+    u: f32,
+    row_h: f32,
+    sort_w: f32,
+    order_w: f32,
+    filter_w: f32,
+    pad: f32,
+    gap: f32,
+    bars_h: f32,
+    block_h: f32,
+    block_gap: f32,
+    head_h: f32,
+    lines: Vec<usize>,
+    w: f32,
+    h: f32,
+}
+
+/// How wide a filter block must be for its label at full size and its count beside it.
+fn block_need(label: &str, count: Option<u32>) -> f32 {
+    let count_w = count.map_or(0.0, |n| Canvas::text_width(4.5, &n.to_string()) + 3.0);
+    Canvas::text_width(6.0, label) + 9.0 + count_w
+}
+
+/// A row of the sort or order column (`u`: the panel's scale): a square in Play's colour when
+/// it's the one on.
+fn option_row(
+    c: &mut Canvas,
+    [x, y, w, h]: [f32; 4],
+    label: &str,
+    on: bool,
+    alpha: f32,
+    hit: Hit,
+    u: f32,
+) {
     let start = c.shapes.len();
     if c.hovered(x, y, w, h) {
         c.rect(x, y, w, h, rgba(0x262634, 1.0));
     }
     let sq = if on {
-        crate::style::selector_colour()
+        crate::style::role::primary()
     } else {
         0x34344a
     };
-    c.rect(x + 5.0, y + h / 2.0 - 2.5, 5.0, 5.0, rgba(sq, 1.0));
+    let s = 5.0 * u;
+    c.rect(x + 5.0 * u, y + (h - s) / 2.0, s, s, rgba(sq, 1.0));
+    let tx = x + 15.0 * u;
     c.text(
-        x + 15.0,
-        y + (h - 7.0) / 2.0,
+        tx,
+        Canvas::text_y_mid(y + h / 2.0, 7.0),
         7.0,
         rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0),
-        &Canvas::fit(7.0, w - 18.0, label),
+        &Canvas::fit(7.0, x + w - 3.0 - tx, label),
     );
     c.hit(x, y, w, h, hit);
     if alpha < 1.0 {
@@ -1246,13 +1479,14 @@ fn block(
         .map_or(0.0, |n| Canvas::text_width(4.5, n) + 3.0);
     if let Some(n) = &count {
         let dim = if n == "0" { 0x45455a } else { 0x6f6f86 };
-        c.text_right(x + w - 3.0, y + (h - 4.5) / 2.0, 4.5, rgba(dim, 1.0), n);
+        let ny = Canvas::text_y_mid(y + h / 2.0, 4.5);
+        c.text_right(x + w - 3.0, ny, 4.5, rgba(dim, 1.0), n);
     }
     let room = w - 9.0 - count_w;
     let size = Canvas::fit_size(6.0, 4.5, room, label);
     c.text(
         x + 6.0,
-        y + (h - size) / 2.0,
+        Canvas::text_y_mid(y + h / 2.0, size),
         size,
         rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0),
         &Canvas::fit(size, room, label),

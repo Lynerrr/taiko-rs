@@ -1,5 +1,5 @@
 //! Song select in the main menu's look draws with the design tokens (`style`: surfaces, ink,
-//! colour roles): its surfaces have no edge round them, the accent is only on Play and the
+//! colour roles): its surfaces have the main menu's crisp neutral edge, the accent is only on Play and the
 //! selection, and a rating's colour only on the selected difficulty. The Legacy layout keeps its
 //! own look (its goldens in `screens`).
 
@@ -8,6 +8,13 @@ use super::maps;
 use crate::hit::Hit;
 use crate::render::Shape;
 use crate::*;
+
+/// A frame, in song select's own units (`harness::in_select_units`): what's tested here is its
+/// layout, whatever the size of the space it lays itself out in.
+fn frame(s: &mut State, now: Instant) -> Canvas {
+    let c = harness::frame(s, now);
+    harness::in_select_units(c, s)
+}
 
 /// An accent nothing else on the screen is drawn in, so what's in it is the accent's.
 const ACCENT: u32 = 0x13c4a7;
@@ -55,6 +62,12 @@ fn settled(s: &mut State, now: &mut Instant) -> Canvas {
     frame(s, *now)
 }
 
+/// Where song select's point `x`, `y` (its own units) is on the window, in pixels.
+fn to_pixels(s: &State, x: f32, y: f32) -> (f64, f64) {
+    let k = s.window_h / render::VIRTUAL_HEIGHT * s.select_scale;
+    (((x + s.select_left) * k) as f64, (y * k) as f64)
+}
+
 fn same_rgb(a: [f32; 4], b: [f32; 4]) -> bool {
     a.iter().zip(b).take(3).all(|(x, y)| (x - y).abs() < 1e-4)
 }
@@ -76,6 +89,81 @@ fn inside([x, y]: [f32; 2], [rx, ry, rw, rh]: [f32; 4], slack: f32) -> bool {
 /// A rectangle or rounded box (not a letter, a skin image or a picture).
 fn plain(s: &Shape) -> bool {
     (0.0..10.0).contains(&s.params[3])
+}
+
+/// The right column's one panel: song select's cold one right of the list.
+fn column_panel(c: &Canvas, s: &State) -> Option<[f32; 4]> {
+    let lw = s.select.list_w(c.width);
+    let fill = render::rgba(style::PANEL_COLD, style::PANEL_COLD_ALPHA);
+    c.shapes
+        .iter()
+        .filter(|sh| plain(sh) && sh.fill == fill && sh.border[3] == fill[3])
+        .filter(|sh| sh.center[0] > 28.0 + lw && sh.half[1] * 2.0 > 60.0)
+        .map(rect)
+        .next()
+}
+
+/// The lines across the right column's panel parting its sections, top down.
+fn column_rules(c: &Canvas, s: &State) -> Vec<[f32; 4]> {
+    let Some([px, py, pw, ph]) = column_panel(c, s) else {
+        return Vec::new();
+    };
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let inset = crate::screens::select::song_select::COLUMN_RULE_INSET;
+    let mut found: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && sh.fill == edge)
+        .map(rect)
+        .filter(|r| {
+            (r[3] - style::tone::LINE).abs() < 0.01
+                && (r[0] - (px + inset)).abs() < 0.01
+                && (r[2] - (pw - 2.0 * inset)).abs() < 0.01
+                && r[1] > py
+                && r[1] < py + ph
+        })
+        .collect();
+    found.sort_by(|a, b| a[1].total_cmp(&b[1]));
+    found.dedup();
+    found
+}
+
+/// The right column's sections, top down: the map's details, the row of tabs and the body under
+/// it (the preview or the leaderboard), on the column's one panel. A line parts the details
+/// from the tabs, another closes the body over the lane of actions.
+fn sections(c: &Canvas, s: &State) -> Vec<[f32; 4]> {
+    let Some([px, py, pw, _]) = column_panel(c, s) else {
+        return Vec::new();
+    };
+    let half_gap = style::space::SECTION / 2.0;
+    let rules = column_rules(c, s);
+    let [first, last] = match rules[..] {
+        [first, last] => [first, last],
+        _ => return Vec::new(),
+    };
+    let tabs_y = first[1] + half_gap;
+    let body_y = tabs_y + COLUMN_TAB_H;
+    vec![
+        [px, py, pw, first[1] - half_gap - py],
+        [px, tabs_y, pw, COLUMN_TAB_H],
+        [px, body_y, pw, last[1] - half_gap - body_y],
+    ]
+}
+
+/// Song select with the right column's body on the local (`online`: the online) leaderboard.
+fn on_board(s: &mut State, now: &mut Instant, online: bool) -> Canvas {
+    settled(s, now);
+    s.click(Hit::BoardTab(online), None);
+    settled(s, now)
+}
+
+/// A badge as the mods' are (`style::badge`): a dark tint of its colour under a one-unit edge
+/// of it.
+fn badge(sh: &Shape) -> bool {
+    sh.params[0] == style::radius::SMALL
+        && sh.params[1] == 1.0
+        && (sh.border[3] - 0.9).abs() < 1e-3
+        && (sh.fill[3] - 0.92).abs() < 1e-3
 }
 
 /// A letter of the font (the test canvas draws text as plain rectangles, a pixel each, so text
@@ -130,44 +218,70 @@ fn many() -> Vec<maps::Chart> {
 }
 
 #[test]
-fn surfaces_have_no_edge_and_rows_no_lines_under_them() {
+fn surfaces_are_parted_by_tone_with_lines_only_round_what_is_pressed_or_selected() {
     let (mut s, _songs, mut now) = menu_look("select-look-edges");
     let c = settled(&mut s, &mut now);
-    // The selection's outline round the open set's card is the one strong edge; the other set
-    // cards have a faint white one each, so neighbouring pictures of like colours stay apart.
+    // The selection's outline round the open set's card and the brackets round the selected
+    // difficulty are the strong edges; a badge (a rating, the map's status) is edged in its
+    // colour, and a button has the main menu's neutral edge. Nothing else has a line round it:
+    // not the other cards, the difficulty rows, the right column's sections, the pp strip, the
+    // leaderboard's tabs and rows or the preview's lane.
     let open = open_card(&c, &s);
     let set_cards = cards(&c);
-    let faint_card_edge = |sh: &Shape| {
-        same_rgb(sh.border, render::rgba(0xffffff, 1.0))
-            && sh.border[3] <= 0.2
-            && set_cards.iter().any(|(_, r)| inside(sh.center, *r, 0.5))
+    // What a click presses: the search row's and the actions' buttons, the search, the grip
+    // (small; not a row, a card, a tab or the lane).
+    let pressed = |p: [f32; 2]| {
+        c.hits.iter().any(|h| {
+            !matches!(
+                h.hit,
+                Hit::SongRow(_)
+                    | Hit::SongHeader(_)
+                    | Hit::ScoreRow(_)
+                    | Hit::OnlineScoreRow(_)
+                    | Hit::Preview
+                    | Hit::BoardTab(false)
+                    | Hit::PpSim
+            ) && (h.rect[2] < 400.0 || h.hit == Hit::TextField)
+                // (A button, the search field, or the list's grip down its side.)
+                && (h.rect[3] < 60.0 || h.rect[2] <= 24.0)
+                && inside(p, h.rect, 0.5)
+        })
     };
+    let primary = render::rgba(style::role::primary(), 1.0);
     let edged: Vec<[f32; 4]> = c
         .shapes
         .iter()
         .filter(|sh| plain(sh) && on_select(sh, &c, &s) && !inside(sh.center, open, 1.0))
         .filter(|sh| sh.params[1] > 0.0 && sh.border[3] > 0.01)
         .filter(|sh| !same_rgb(sh.border, sh.fill) || sh.fill[3] < sh.border[3])
-        .filter(|sh| !faint_card_edge(sh))
-        // The selector's brackets round the selected difficulty: corners of one outline.
-        .filter(|sh| !same_rgb(sh.border, render::rgba(style::selector_colour(), 1.0)))
+        // The brackets round the selected difficulty.
+        .filter(|sh| !same_rgb(sh.border, primary))
+        .filter(|sh| !badge(sh))
+        .filter(|sh| !pressed(sh.center))
         .map(rect)
         .collect();
-    assert!(edged.is_empty(), "boxes with an edge round them: {edged:?}");
-    let parted = c.shapes.iter().filter(|sh| faint_card_edge(sh)).count();
     assert!(
-        parted + 1 >= set_cards.len(),
-        "every set card but the open one parted: {parted}"
+        edged.is_empty(),
+        "lines round what isn't pressed or selected: {edged:?}"
     );
-    // No line under the search row or a row of the list: rows are parted by room.
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    // The column is one panel (its sections parted by lines across it), as the list is.
+    assert!(column_panel(&c, &s).is_some(), "the column's one panel");
+    assert_eq!(
+        sections(&c, &s).len(),
+        3,
+        "its details, its tabs and the body under them"
+    );
+    // No line under a row of the list: rows are parted by room (the one line is the list's
+    // panel's, along its top above the rows).
+    let lw = s.select.list_w(c.width);
+    let first_top = set_cards.iter().map(|(_, r)| r[1]).fold(f32::MAX, f32::min);
     let lines: Vec<[f32; 4]> = c
         .shapes
         .iter()
         .filter(|sh| plain(sh) && sh.fill[3] > 0.05 && on_select(sh, &c, &s))
         .filter(|sh| sh.center[0] < 28.0 + lw)
         .map(rect)
-        .filter(|r| r[3] <= 1.6 && r[2] >= 40.0)
+        .filter(|r| r[3] <= 1.6 && r[2] >= 40.0 && r[1] >= first_top - 0.5)
         .collect();
     assert!(lines.is_empty(), "lines across the list: {lines:?}");
 }
@@ -188,6 +302,9 @@ fn the_accent_is_only_on_play_and_the_selection() {
         .map(|g| g.start);
     let set = hit_rect(&c, |h| matches!(h, Hit::SongHeader(i) if Some(*i) == start))
         .expect("the selected set's row");
+    // The column's tab shown (the preview's, at first) is selected too: a bar of the accent
+    // under its word.
+    let tab = hit_rect(&c, |h| *h == Hit::PreviewTab).expect("the Preview tab");
     let stray: Vec<[f32; 4]> = c
         .shapes
         .iter()
@@ -201,6 +318,7 @@ fn the_accent_is_only_on_play_and_the_selection() {
             !inside(sh.center, play, 10.0)
                 && !inside(sh.center, row, 6.0)
                 && !inside(sh.center, set, 6.0)
+                && !inside(sh.center, tab, 0.0)
         })
         .map(rect)
         .collect();
@@ -229,17 +347,18 @@ fn the_selected_difficulty_is_in_its_ratings_colour() {
             .any(|sh| plain(sh) && inside(sh.center, row, 0.0) && same_rgb(sh.fill, colour)),
         "the selected difficulty's pill is in its rating's colour"
     );
-    // Its chip in the details (left of the details' middle; its pill is at their right end).
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
-    let middle = (28.0 + lw + c.width) / 2.0;
+    // Its name in the details, on a badge edged in its rating's colour (left of the details'
+    // middle; the rating's own badge is at their right end).
+    let head = sections(&c, &s)[0];
+    let middle = head[0] + head[2] / 2.0;
     assert!(
-        c.shapes.iter().any(|sh| plain(sh)
-            && sh.center[0] > 28.0 + lw
+        c.shapes.iter().any(|sh| badge(sh)
+            && inside(sh.center, head, 0.0)
             && sh.center[0] < middle
-            && sh.half[1] * 2.0 >= 17.0
+            && sh.half[1] * 2.0 >= 13.0
             && on_select(sh, &c, &s)
-            && same_rgb(sh.fill, colour)),
-        "the difficulty's chip in the details is in its rating's colour"
+            && same_rgb(sh.border, colour)),
+        "the difficulty's badge in the details is in its rating's colour"
     );
 }
 
@@ -263,34 +382,61 @@ fn every_set_card_on_screen_asks_for_its_own_picture() {
 }
 
 #[test]
-fn the_open_set_slides_out_the_rest_sit_in_and_one_under_the_pointer_comes_out() {
+fn the_cards_sit_on_the_lists_wave_the_rest_dimmed_and_one_under_the_pointer_comes_out() {
     let (mut s, _songs, mut now) = menu_look("select-look-cards");
     let c = settled(&mut s, &mut now);
     let open = open_card(&c, &s);
-    assert_eq!(open[0], 24.0, "the open set's card at the list's edge");
+    let (top, bottom) = (s.select.list_top(), s.select.list_bottom());
+    // Every card where the list's wave has it for where it is, the open one too (no step out
+    // of the line for it), its right edge on the list's.
+    let lw = s.select.list_w(c.width);
+    for r in cards(&c)
+        .into_iter()
+        .map(|(_, r)| r)
+        .filter(|r| r[1] >= top && r[1] + r[3] <= bottom)
+    {
+        let wave = crate::ui::list_wave(r[1] + r[3] / 2.0, top, bottom);
+        assert!(
+            (r[0] - 24.0 - wave).abs() < 0.6,
+            "on the wave: {r:?}, {wave} in"
+        );
+        assert!(
+            (r[0] + r[2] - (24.0 + lw)).abs() < 0.01,
+            "to the list's end: {r:?}"
+        );
+    }
     let others: Vec<[f32; 4]> = cards(&c)
         .into_iter()
         .map(|(_, r)| r)
         .filter(|r| *r != open)
         .collect();
     assert!(!others.is_empty());
-    // By 12 units, and the ones far from the target bend away farther (the lane's arc).
-    assert!(
-        others.iter().all(|r| r[0] >= 36.0) && others.iter().any(|r| r[0] == 36.0),
-        "the rest sit in: {others:?}"
-    );
-    // The others are dimmed: none of their shapes is at full strength.
-    let first = others[0];
-    let strong = c
-        .shapes
+    // The others are dimmed, darker rather than see-through: none of their text is at full
+    // brightness.
+    // (One far enough off the middle to come out of the wave by all of it.)
+    let first = others
         .iter()
-        .filter(|sh| plain(sh) && inside(sh.center, first, 0.0))
-        .any(|sh| sh.fill[3] > 0.71);
-    assert!(!strong, "a set not open is dimmed");
+        .copied()
+        .find(|r| r[0] >= 24.0 + 4.0)
+        .expect("a card off the middle");
+    let ink: Vec<&Shape> = c
+        .texts
+        .iter()
+        .filter(|(r, _)| {
+            c.shapes
+                .get(r.start)
+                .is_some_and(|sh| inside(sh.center, first, 0.0))
+        })
+        .flat_map(|(r, _)| &c.shapes[r.clone()])
+        .collect();
+    assert!(!ink.is_empty(), "the set's name on its card");
+    assert!(
+        ink.iter()
+            .all(|sh| sh.fill[0].max(sh.fill[1]).max(sh.fill[2]) < 0.71),
+        "a set not open is dimmed"
+    );
     // The pointer on one: it comes out 4 units (animations are off: at once).
-    let k = (s.window_h / render::VIRTUAL_HEIGHT) as f64;
-    let (px, py) = (first[0] + first[2] / 2.0, first[1] + 10.0);
-    let (px, py) = (px as f64 * k, py as f64 * k);
+    let (px, py) = to_pixels(&s, first[0] + first[2] / 2.0, first[1] + 10.0);
     s.mouse_moved(px, py);
     s.mouse = (px, py);
     // Two frames: a frame's hits come back with the next one.
@@ -305,26 +451,48 @@ fn the_open_set_slides_out_the_rest_sit_in_and_one_under_the_pointer_comes_out()
         .map(|(_, r)| r)
         .find(|r| (r[1] - first[1]).abs() < 0.5)
         .expect("the card under the pointer");
-    assert_eq!(moved[0], first[0] - 4.0, "it comes out under the pointer");
+    assert!(
+        (moved[0] - (first[0] - 4.0)).abs() < 1e-3,
+        "it comes out under the pointer: {moved:?} from {first:?}"
+    );
+}
+
+/// The strongest fill of what's drawn of the list in `r` (its plain shapes: the card, its
+/// light, its text's plate).
+fn strongest_in(c: &Canvas, r: [f32; 4]) -> f32 {
+    c.shapes
+        .iter()
+        .filter(|sh| plain(sh) && inside(sh.center, r, 0.0))
+        .map(|sh| sh.fill[3])
+        .fold(0.0, f32::max)
 }
 
 #[test]
-fn the_last_card_fades_out_at_the_lists_bottom() {
+fn a_card_cut_by_the_lists_bottom_is_drawn_down_to_it_only_a_little_dimmed() {
     let (mut s, _songs, mut now) = menu_look_with("select-look-bottom", &many());
     let c = settled(&mut s, &mut now);
-    let [_, end] = s.select.frame_span();
-    let bottom = end - 4.0;
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let bottom = s.select.list_bottom();
+    let lw = s.select.list_w(c.width);
     let cut = cards(&c)
         .into_iter()
         .map(|(_, r)| r)
         .find(|r| r[1] < bottom && r[1] + r[3] > bottom)
         .expect("a card runs past the list's bottom");
-    // What of it is drawn just above the bottom is all but gone.
+    // The card above it, in full view: as far from the target, all but.
+    let above = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r)
+        .filter(|r| r[1] + r[3] <= cut[1] + 0.5)
+        .max_by(|a, b| a[1].total_cmp(&b[1]))
+        .expect("a card above it");
+    // What of it is drawn just above the bottom is still seen, a little dimmed: cut by the
+    // list's clip, not faded out short of it.
     let near: Vec<f32> = c
         .shapes
         .iter()
         .filter(|sh| plain(sh) && sh.center[0] > 20.0 && sh.center[0] < 28.0 + lw)
+        // The card's, not the panel the list runs down.
+        .filter(|sh| sh.half[1] * 2.0 < 100.0)
         .filter(|sh| {
             // Reaching into the last 3 units above the bottom.
             let [_, y, _, h] = rect(sh);
@@ -336,12 +504,353 @@ fn the_last_card_fades_out_at_the_lists_bottom() {
         !near.is_empty(),
         "the card at {cut:?} is drawn down to the bottom"
     );
-    assert!(near.iter().all(|a| *a < 0.3), "faded out: {near:?}");
+    let most = near.iter().copied().fold(0.0, f32::max);
+    let full = strongest_in(&c, above);
+    assert!(
+        most >= 0.55 * full && most <= full + 0.01,
+        "a little dimmed at the bottom: {most} there, {full} on the card above"
+    );
+}
+
+#[test]
+fn a_card_cut_by_the_lists_top_is_drawn_up_to_it_only_a_little_dimmed() {
+    let (mut s, _songs, mut now) = many_sets("select-look-top");
+    settled(&mut s, &mut now);
+    let (rh, _, _) = s.select.row_heights();
+    let (mut deep, mut shallow) = (0, 0);
+    // Dragged by what isn't a whole number of rows, cards come to sit across the top.
+    drag_then_wheel(&mut s, &mut now, 413.0, 12, |s, c, how| {
+        let lw = s.select.list_w(c.width);
+        let top = s.select.list_top();
+        let shown = cards(c);
+        // A card cut by the list's top takes the pointer from the top down only: its hit is
+        // the part of it under the top.
+        for (_, r) in &shown {
+            // (Not one cut by the list's bottom, nor one with only its edge left.)
+            if r[3] >= rh - 0.01 || r[1] > c.height / 2.0 || r[3] < 6.0 {
+                continue;
+            }
+            let under = rh - r[3];
+            // What of it reaches below the top, where it's seen.
+            let most = c
+                .shapes
+                .iter()
+                .filter(|sh| plain(sh) && sh.center[0] > 20.0 && sh.center[0] < 28.0 + lw)
+                .filter(|sh| sh.half[1] * 2.0 < 100.0)
+                .filter(|sh| {
+                    let [_, y, _, h] = rect(sh);
+                    y + h > top + 0.5 && sh.center[1] < r[1] + r[3] && sh.center[0] > r[0]
+                })
+                .map(|sh| sh.fill[3])
+                .fold(0.0, f32::max);
+            // The next card down, in full view.
+            let Some(next) = shown
+                .iter()
+                .map(|(_, n)| *n)
+                .filter(|n| n[1] >= r[1] + r[3] - 0.5 && n[3] >= rh - 4.5)
+                .min_by(|a, b| a[1].total_cmp(&b[1]))
+            else {
+                continue;
+            };
+            let full = strongest_in(c, next);
+            // Drawn right up to the clip, a little dimmed (and a step fainter for being
+            // farther from the target), never left out leaving a hole under the tabs.
+            assert!(
+                most >= 0.55 * full,
+                "{how}: {under} of a card cut by the top at {}: {most}, {full} on the next",
+                r[1]
+            );
+            if under > rh * 0.5 {
+                deep += 1;
+            } else {
+                shallow += 1;
+            }
+        }
+    });
+    assert!(
+        deep > 0 && shallow > 0,
+        "cards cut by the top: {deep} more than half under it, {shallow} less"
+    );
+}
+
+/// Twenty sets, the eleventh with eight difficulties, one of them selected (in the target,
+/// about the view's middle: its rows on different steps of the list's wave).
+fn a_set_of_many_difficulties(tag: &str) -> (State, Songs, Instant) {
+    let songs = Songs::new(tag, &many());
+    let first = songs.paths[10].clone();
+    let folder = first.parent().expect("its set's folder").to_path_buf();
+    let mut entries = songs.entries();
+    for k in 1..8 {
+        let path = folder.join(format!("diff-{k}.osu"));
+        std::fs::copy(&first, &path).expect("a copy of the chart");
+        let mut meta = beatmap::read_meta_file(&path).expect("its metadata");
+        meta.version = format!("Diff {k}");
+        entries.push(Entry::new(path, meta));
+    }
+    for e in &mut entries {
+        e.meta.background = Some("bg.png".into());
+    }
+    let cfg = Config {
+        main_menu: true,
+        accent: ACCENT,
+        ..harness::config()
+    };
+    let mut s = state_with(cfg, entries);
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    let row = (0..s.library.len())
+        .find(|&r| {
+            s.select
+                .row_map(r)
+                .is_some_and(|i| s.library[i].meta.version == "Diff 4")
+        })
+        .expect("the set's fourth difficulty");
+    s.select.set_cursor(row);
+    settled(&mut s, &mut now);
+    (s, songs, now)
+}
+
+#[test]
+fn an_open_sets_tree_is_one_straight_trunk_with_a_step_short_of_each_difficulty() {
+    let (mut s, _songs, mut now) = a_set_of_many_difficulties("select-look-tree");
+    let c = settled(&mut s, &mut now);
+    let (top, bottom) = (s.select.list_top(), s.select.list_bottom());
+    let open = open_card(&c, &s);
+    let cursor = s.select.cursor();
+    // The set's difficulties in full view, top down.
+    let mut diffs: Vec<(usize, [f32; 4])> = c
+        .hits
+        .iter()
+        .filter_map(|h| match h.hit {
+            Hit::SongRow(i) => Some((i, h.rect)),
+            _ => None,
+        })
+        .filter(|(_, r)| r[1] >= top && r[1] + r[3] <= bottom)
+        .collect();
+    diffs.sort_by(|a, b| a.1[1].total_cmp(&b.1[1]));
+    assert!(diffs.len() >= 6, "the set's difficulties: {diffs:?}");
+    let lefts: Vec<f32> = diffs.iter().map(|(_, r)| r[0]).collect();
+    let (least, most) = lefts
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(*x), b.max(*x)));
+    assert!(
+        most - least > 2.0,
+        "the difficulties lie on the wave, in by different amounts: {lefts:?}"
+    );
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let lines: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, edge))
+        .map(rect)
+        .filter(|r| r[0] < least && r[1] >= open[1] && r[1] <= diffs[diffs.len() - 1].1[1] + 22.0)
+        .collect();
+    // The trunk: the lines one unit wide down the indent, every one at the same x.
+    let mut trunk: Vec<[f32; 4]> = lines
+        .iter()
+        .copied()
+        .filter(|r| (r[2] - 1.0).abs() < 0.01 && r[3] > 1.5)
+        .collect();
+    trunk.sort_by(|a, b| a[1].total_cmp(&b[1]));
+    assert!(
+        trunk.len() >= diffs.len(),
+        "a piece of trunk a row: {trunk:?}"
+    );
+    let x = trunk[0][0];
+    assert!(
+        trunk.iter().all(|r| (r[0] - x).abs() < 1e-3),
+        "one straight trunk, not pieces at each row's indent: {trunk:?}"
+    );
+    // Unbroken from the set's card down to the last difficulty in view.
+    assert!(
+        trunk
+            .windows(2)
+            .all(|w| w[1][1] <= w[0][1] + w[0][3] + 0.01),
+        "no gaps down the trunk: {trunk:?}"
+    );
+    // Inside the set's card, and clear of every difficulty's left (the selection's brackets 3
+    // out from its row).
+    assert!(
+        x > open[0] + 4.0 && x < open[0] + open[2],
+        "the trunk at {x} comes down from the set's card at {open:?}"
+    );
+    let selected = diffs
+        .iter()
+        .find(|(i, _)| *i == cursor)
+        .map(|(_, r)| *r)
+        .expect("the selected difficulty in view");
+    assert!(
+        x + 1.0 < least - 3.0 - 2.0,
+        "the trunk at {x} clear of the rows from {least}"
+    );
+    // A step from the trunk into each row, stopping short of its card and the brackets.
+    for (_, r) in &diffs {
+        let step = lines
+            .iter()
+            .find(|l| {
+                (l[3] - 1.0).abs() < 0.01
+                    && (l[0] - x).abs() < 1e-3
+                    && l[1] > r[1]
+                    && l[1] < r[1] + r[3]
+            })
+            .unwrap_or_else(|| panic!("a step into the row at {r:?}: {lines:?}"));
+        let end = step[0] + step[2];
+        let brackets = r[0] - 3.0;
+        assert!(
+            end > x + 1.0 && end <= brackets - 1.9,
+            "the step into {r:?} ends at {end}, short of {brackets}"
+        );
+    }
+    assert!(selected[0] >= least);
 }
 
 /// A picture drawn (`render::Canvas::picture`): its slot is in `params[3]` below -1000.
 fn picture(s: &Shape) -> bool {
     s.params[3] <= -1000.0
+}
+
+#[test]
+fn the_banners_text_sits_on_a_plate_dark_at_its_left_lighter_across_and_gone_down_with_the_picture()
+{
+    let (mut s, _songs, mut now) = menu_look("select-look-banner-plate");
+    let i = s.select.selected().expect("a map is selected");
+    let bg = preview::background_path(&s.library[i]).expect("it names a picture");
+    s.pictures
+        .pretend_loaded(&render::path_picture_key(&bg), 16.0 / 9.0);
+    let c = settled(&mut s, &mut now);
+    let lw = s.select.list_w(c.width);
+    let dark = render::rgba(style::SURFACE_1, 1.0);
+    // Right of the list: the plate's layers, eased sweeps of the panel's tone across the banner
+    // from dark at the left to lighter at the right, each cut to its strip as the picture's
+    // layers are.
+    // Its strength at the left and at the right, its rect and its strip's.
+    type Layer = (f32, f32, [f32; 4], [f32; 4]);
+    let layers: Vec<Layer> = c
+        .shapes
+        .iter()
+        .enumerate()
+        .filter(|(_, sh)| {
+            sh.params[3] == render::SHADE_EASED
+                && sh.center[0] > 28.0 + lw
+                && same_rgb(sh.fill, dark)
+        })
+        .map(|(i, sh)| {
+            let clip = c
+                .clips
+                .iter()
+                .find(|(r, _)| r.contains(&i))
+                .map(|(_, rect)| *rect)
+                .expect("a layer is cut to its strip");
+            (sh.fill[3], sh.border[3], rect(sh), clip)
+        })
+        .collect();
+    assert!(layers.len() >= 4, "a plate in layers: {layers:?}");
+    let head = sections(&c, &s)[0];
+    for (left, right, r, _) in &layers {
+        assert!(r[2] > head[2] * 0.9, "across the banner: {r:?} in {head:?}");
+        assert!(
+            left > right && *right >= 0.0,
+            "lighter to the right: {left} to {right}"
+        );
+    }
+    let shown = |y: f32, at: fn(&Layer) -> f32| {
+        1.0 - layers
+            .iter()
+            .filter(|(_, _, _, r)| y >= r[1] && y < r[1] + r[3])
+            .map(|l| 1.0 - at(l))
+            .product::<f32>()
+    };
+    let top = layers.iter().map(|l| l.3[1]).fold(f32::MAX, f32::min);
+    let bottom = layers.iter().map(|l| l.3[1] + l.3[3]).fold(0.0, f32::max);
+    // Dense under the title at the left, open at the right end where the picture shows; the
+    // picture itself near its own brightness, not a black box.
+    let left = shown(top + 10.0, |l| l.0);
+    let right = shown(top + 10.0, |l| l.1);
+    assert!(left > 0.5, "dark under the title: {left}");
+    assert!(right < 0.05, "open at the right end: {right}");
+    // Tall, for the picture to show (on 720), its text down at its foot: the picture open over
+    // its top.
+    let tall = bottom - top;
+    assert!((165.0..=185.0).contains(&tall), "the banner {tall} tall");
+    let bright = c
+        .shapes
+        .iter()
+        .filter(|sh| picture(sh) && sh.center[0] > 28.0 + lw && sh.fill[3] > 0.0)
+        .map(|sh| sh.fill[0])
+        .fold(0.0, f32::max);
+    assert!(bright >= 0.8, "the picture shows: drawn at {bright}");
+    // The title has a soft shadow: a dark copy of it just under it, drawn first.
+    let title = s.library[i].meta.title.clone();
+    let (r, _) = c
+        .texts
+        .iter()
+        .find(|(r, t)| *t == title && !r.is_empty() && c.shapes[r.start].center[0] > 28.0 + lw)
+        .expect("the title");
+    let glyph = c.shapes[r.start];
+    assert!(
+        glyph.center[1] > top + tall * 0.5,
+        "the title in the banner's lower half: {} of {top}..{bottom}",
+        glyph.center[1]
+    );
+    let shadow = c.shapes[..r.start].iter().rev().take(r.len()).any(|sh| {
+        (sh.center[0] - glyph.center[0]).abs() < 0.01
+            && sh.center[1] > glyph.center[1]
+            && sh.fill[0] == 0.0
+            && sh.fill[3] > 0.2
+    });
+    assert!(shadow, "a shadow under the title");
+    let at_end = shown(bottom - 0.5, |l| l.0);
+    assert!(at_end < 0.1, "gone where the picture has: {at_end}");
+}
+
+#[test]
+fn the_details_sections_are_split_by_lines_of_the_panels_edge() {
+    let (mut s, _songs, mut now) = menu_look("select-look-dividers");
+    let c = settled(&mut s, &mut now);
+    let lw = s.select.list_w(c.width);
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let mut lines: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, edge) && sh.center[0] > 28.0 + lw)
+        .map(rect)
+        .filter(|r| (r[3] - style::tone::LINE).abs() < 0.01 && r[2] > 200.0)
+        .collect();
+    lines.sort_by(|a, b| a[1].total_cmp(&b[1]));
+    let [_, od] = text_at(&c, "OD").expect("the OD tile");
+    let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
+    let lane = hit_rect(&c, |h| *h == Hit::Preview).expect("the preview");
+    let between = |a: f32, b: f32| lines.iter().any(|r| r[1] > a && r[1] + r[3] < b);
+    assert!(
+        between(od - 12.0, od),
+        "over the stats: {lines:?}, OD at {od}"
+    );
+    assert!(
+        between(pp[1] - 8.0, pp[1]),
+        "over the pp: {lines:?}, {pp:?}"
+    );
+    // The preview is a section of its own, under the leaderboard's: no line needed over it.
+    let column = sections(&c, &s);
+    assert_eq!(column.len(), 3, "{column:?}");
+    assert!(inside([pp[0] + 1.0, pp[1] + 1.0], column[0], 0.0), "{pp:?}");
+    assert!(
+        inside([lane[0] + 1.0, lane[1] + 1.0], column[2], 0.0),
+        "{lane:?}"
+    );
+    // The timeline's bars stand on one, starting with it (its times are under its left end,
+    // 5 under its bars' box).
+    let all = texts_in(&c, [0.0, 0.0, c.width, c.height]);
+    let times = all
+        .iter()
+        .find(|t| t.contains(" / "))
+        .expect("the timeline's times");
+    let [tx, ty] = text_at(&c, times).expect("where they are");
+    assert!(
+        lines
+            .iter()
+            .any(|r| (r[0] - tx).abs() < 0.5 && r[1] < ty - 5.0 && r[1] > ty - 12.0),
+        "under the bars: {lines:?}, times at {tx},{ty}"
+    );
 }
 
 #[test]
@@ -352,7 +861,7 @@ fn the_details_open_on_a_banner_of_the_maps_picture_fading_out() {
     s.pictures
         .pretend_loaded(&render::path_picture_key(&bg), 16.0 / 9.0);
     let c = settled(&mut s, &mut now);
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let lw = s.select.list_w(c.width);
     // Right of the list: the banner's layers of the picture, each cut to its clip.
     let layers: Vec<(f32, [f32; 4])> = c
         .shapes
@@ -410,7 +919,7 @@ fn the_details_open_on_a_banner_of_the_maps_picture_fading_out() {
 fn don_and_kat_are_one_bar_split_in_proportion() {
     let (mut s, _songs, mut now) = menu_look("select-look-bar");
     let c = settled(&mut s, &mut now);
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let lw = s.select.list_w(c.width);
     let count = |suffix: &str| {
         c.texts
             .iter()
@@ -443,45 +952,88 @@ fn don_and_kat_are_one_bar_split_in_proportion() {
 }
 
 #[test]
-fn a_cards_shade_is_one_sweep_as_round_as_the_card_over_its_rounded_picture() {
+fn a_cards_picture_comes_in_across_it_out_of_nothing_with_nothing_over_it() {
     let (mut s, _songs, mut now) = menu_look("select-look-shade");
     let i = s.select.selected().expect("a map is selected");
-    let bg = preview::background_path(&s.library[i]).expect("it names a picture");
-    s.card_pictures
-        .pretend_loaded(&render::path_picture_key(&bg), [0.5, 0.5, 0.5]);
+    assert!(
+        preview::background_path(&s.library[i]).is_some(),
+        "it names a picture"
+    );
+    // Every card's picture in, the open one's and the others'.
+    for e in &s.library {
+        let bg = preview::background_path(e).expect("each names a picture");
+        s.card_pictures
+            .pretend_loaded(&render::path_picture_key(&bg), [0.5, 0.5, 0.5]);
+    }
     let c = settled(&mut s, &mut now);
     let open = open_card(&c, &s);
-    // The shade over the open card's picture: one shape (no seams between bands), from the
-    // card's dark surface colour under the title to lighter on the right.
+    let in_card = |r: [f32; 4]| {
+        c.shapes
+            .iter()
+            .enumerate()
+            .find(|(_, sh)| card_picture(sh) && inside(sh.center, r, 0.0))
+            .expect("the card's picture")
+    };
+    let (at, picture) = in_card(open);
+    let [px, _, pw, _] = rect(picture);
+    assert!(picture.params[0] > 0.0, "the picture as round as the card");
+    // Over the whole card (1 in), not cut anywhere: no edge of it to show.
+    assert!(
+        (px - (open[0] + 1.0)).abs() < 0.01 && (pw - (open[2] - 2.0)).abs() < 0.01,
+        "the whole card: {:?} in {open:?}",
+        rect(picture)
+    );
+    assert!(
+        !c.clips
+            .iter()
+            .any(|(r, cut)| r.contains(&at)
+                && (cut[0] > px + 1.0 || cut[0] + cut[2] < px + pw - 1.0)),
+        "not cut"
+    );
+    // It comes in across the card in its shader: none of it over the left third, under the
+    // title and artist, then eased in to the right end, a little more than half of it there on
+    // the card open.
+    let (from, rest, lit) = ui::CARD_ART;
+    assert!((0.30..=0.35).contains(&from), "{from}");
+    assert_eq!(
+        [picture.border[2], picture.border[3]],
+        [from, 1.0],
+        "from {from} across to the right end"
+    );
+    assert!((0.55..=0.60).contains(&lit), "{lit}");
+    assert!(
+        (picture.fill[3] - lit).abs() < 0.01,
+        "the open card's: {}",
+        picture.fill[3]
+    );
+    // Nothing over it: no plate, no sweep, nothing of the card's dark tone on it (which showed a
+    // seam where it ended and clashed with the card's light under the pointer).
     let dark = render::rgba(style::SURFACE_1, 1.0);
-    let shades: Vec<&Shape> = c
-        .shapes
+    let over: Vec<[f32; 4]> = c.shapes[at + 1..]
         .iter()
-        .filter(|sh| sh.params[3] == render::SHADE_ACROSS && inside(sh.center, open, 0.0))
+        .filter(|sh| inside(sh.center, open, 0.0))
+        .filter(|sh| {
+            matches!(sh.params[3], render::SHADE_EASED | render::SHADE_ACROSS)
+                || (plain(sh) && same_rgb(sh.fill, dark) && sh.fill[3] > 0.0)
+        })
+        .map(rect)
         .collect();
-    assert_eq!(shades.len(), 1, "one sweep");
-    let shade = shades[0];
-    assert!(same_rgb(shade.fill, dark) && same_rgb(shade.border, dark));
+    assert!(over.is_empty(), "nothing over the picture: {over:?}");
+    // The cards not open show less of theirs, the same way.
+    let other = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r)
+        .find(|r| *r != open)
+        .expect("another card");
+    let (_, theirs) = in_card(other);
+    assert!((0.30..=0.35).contains(&rest), "{rest}");
     assert!(
-        shade.fill[3] > 0.8 && (shade.border[3] - 0.4).abs() < 0.05,
-        "shade {} to {}",
-        shade.fill[3],
-        shade.border[3]
+        theirs.fill[3] <= rest + 1e-3 && theirs.fill[3] < picture.fill[3] - 0.15,
+        "muted where not open: {} vs {}",
+        theirs.fill[3],
+        picture.fill[3]
     );
-    // Over the picture, both as round as the card (1 in from its edge): no square corner pokes
-    // out of it.
-    let picture = c
-        .shapes
-        .iter()
-        .find(|sh| card_picture(sh) && inside(sh.center, open, 0.0))
-        .expect("the card's picture");
-    assert_eq!(rect(picture), rect(shade), "the shade covers the picture");
-    assert!(picture.params[0] > 0.0 && picture.params[0] == shade.params[0]);
-    let [_, _, w, h] = rect(picture);
-    assert!(
-        w < open[2] && h < open[3],
-        "inside the card, not a cover crop past it"
-    );
+    assert_eq!([theirs.border[2], theirs.border[3]], [from, 1.0]);
 }
 
 #[test]
@@ -637,7 +1189,7 @@ fn card_picture(s: &Shape) -> bool {
 
 /// The cards wholly in the list's view (their hits not cut by its ends): first row and where.
 fn cards_in_view(c: &Canvas, s: &State) -> Vec<(usize, [f32; 4])> {
-    let [_, end] = s.select.frame_span();
+    let end = s.select.list_bottom() + 4.0;
     cards(c)
         .into_iter()
         .filter(|(_, r)| r[1] >= s.select.list_top() && r[1] + r[3] <= end && r[3] > 25.0)
@@ -732,7 +1284,7 @@ fn rebuilding_the_list_keeps_the_cards_pictures_shown_without_fading_them_in_aga
     let before = pictures(&s, &c);
     assert!(before.len() >= 5, "cards on screen");
     assert!(
-        before.iter().all(|&(_, a)| a > 0.3),
+        before.iter().all(|&(_, a)| a > 0.5 * ui::CARD_ART.1),
         "pictures in: {before:?}"
     );
     // The list rebuilt (a library update, the search, a sort): the pictures on screen stay.
@@ -807,7 +1359,13 @@ fn a_card_shows_its_pictures_colour_until_the_picture_is_in_then_fades_it_in() {
             .copied()
             .collect()
     };
-    let coloured = |sh: &Shape| plain(sh) && same_rgb(sh.fill, [0.2, 0.6, 0.9, 1.0]);
+    // Its colour where the picture comes in, out of nothing as the picture does.
+    let coloured = |sh: &Shape| {
+        sh.params[3] == render::SHADE_EASED
+            && same_rgb(sh.border, [0.2, 0.6, 0.9, 1.0])
+            && sh.fill[3] == 0.0
+            && sh.border[3] > 0.0
+    };
     now += Duration::from_millis(16);
     let c = frame(&mut s, now);
     assert_eq!(
@@ -838,13 +1396,18 @@ fn a_card_shows_its_pictures_colour_until_the_picture_is_in_then_fades_it_in() {
             "the colour under it meanwhile"
         );
     }
-    for _ in 0..20 {
+    // Quickly: in well under a fifth of a second, scrolled to fast they ease in, not snap.
+    for _ in 0..3 {
         now += Duration::from_millis(16);
         frame(&mut s, now);
     }
     let c = frame(&mut s, now);
     let pic = in_card(&c, &card_picture);
-    assert!(pic[0].fill[3] > 0.99, "in: at full");
+    assert!(
+        (pic[0].fill[3] - ui::CARD_ART.2).abs() < 0.01,
+        "in within 150 ms: {}",
+        pic[0].fill[3]
+    );
     assert!(
         in_card(&c, &coloured).is_empty(),
         "the colour gone under it"
@@ -887,15 +1450,79 @@ fn the_selected_song_sits_in_the_target_at_one_height() {
 }
 
 #[test]
-fn cards_bend_away_from_the_target_and_fade() {
+fn cards_lie_on_one_wave_about_the_views_middle_however_the_list_is_scrolled() {
     let (mut s, _songs, mut now) = menu_look_with("select-look-arc", &many());
+    let lw = s.select.list_w(harness::WIDTH / s.select_scale.max(1e-3));
+    let check = |c: &Canvas, s: &State, how: &str| {
+        let (top, bottom) = (s.select.list_top(), s.select.list_bottom());
+        let mid = (top + bottom) / 2.0;
+        let lw = s.select.list_w(c.width);
+        // The cards in full view, nearest the view's middle first.
+        let mut shown: Vec<(f32, [f32; 4])> = cards(c)
+            .into_iter()
+            .map(|(_, r)| r)
+            .filter(|r| r[1] >= top && r[1] + r[3] <= bottom)
+            .map(|r| ((r[1] + r[3] / 2.0 - mid).abs(), r))
+            .collect();
+        shown.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert!(shown.len() >= 4, "{how}: cards in view: {shown:?}");
+        for (_, r) in &shown {
+            // Where its row's middle is.
+            let cy = r[1] + r[3] / 2.0;
+            let wave = crate::ui::list_wave(cy, top, bottom);
+            assert!(
+                (r[0] - 24.0 - wave).abs() < 0.01,
+                "{how}: on the wave: {r:?} wants {wave} in"
+            );
+            assert!(
+                (r[0] + r[2] - (24.0 + lw)).abs() < 0.01,
+                "{how}: its right edge on the list's: {r:?}"
+            );
+        }
+        // Farther from the middle, farther in; up to the wave's most at the view's edges.
+        assert!(
+            shown
+                .windows(2)
+                .all(|w| w[1].1[0] >= w[0].1[0] - 0.01 || w[1].0 < w[0].0 + 0.01),
+            "{how}: in by how far from the middle: {shown:?}"
+        );
+        let far = shown[shown.len() - 1].1[0] - 24.0;
+        assert!(
+            far > 0.25 * crate::ui::WAVE_MAX && far <= crate::ui::WAVE_MAX + 0.01,
+            "{how}: an arc, not a line: {far}"
+        );
+    };
+    assert!(lw > 0.0);
     let c = songs_on(&mut s, &mut now, 6);
+    check(&c, &s, "settled");
+    // A card at the view's middle sits against the list's left edge.
+    assert_eq!(crate::ui::list_wave(300.0, 100.0, 500.0), 0.0);
+    assert!(
+        (crate::ui::list_wave(100.0, 100.0, 500.0) - crate::ui::WAVE_MAX).abs() < 1e-4
+            && (crate::ui::list_wave(500.0, 100.0, 500.0) - crate::ui::WAVE_MAX).abs() < 1e-4,
+        "the most at both edges"
+    );
+    // Wheeled away from the selection, and held mid-drag: still on the one wave (no card left
+    // in, no step).
+    for _ in 0..3 {
+        s.wheel(-1);
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    let c = settled(&mut s, &mut now);
+    check(&c, &s, "wheeled");
+    s.select.drag_to(-90.0);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let c = frame(&mut s, now);
+    check(&c, &s, "dragged");
+    s.select.drag_end(&s.library);
+    // Farther from the selection's target, fainter.
+    let c = songs_on(&mut s, &mut now, 1);
     let t = target(&c, &s);
     let ty = t[1] + t[3] / 2.0;
-    let [_, end] = s.select.frame_span();
+    let end = s.select.list_bottom() + 4.0;
     let open = open_card(&c, &s);
-    // The closed sets in full view (not under the top's edge nor the bottom's fade), nearest
-    // to the target first.
     let mut closed: Vec<(f32, [f32; 4])> = cards(&c)
         .into_iter()
         .map(|(_, r)| r)
@@ -903,16 +1530,7 @@ fn cards_bend_away_from_the_target_and_fade() {
         .map(|r| ((r[1] + r[3] / 2.0 - ty).abs(), r))
         .collect();
     closed.sort_by(|a, b| a.0.total_cmp(&b.0));
-    assert!(closed.len() >= 4, "cards round the target: {closed:?}");
-    assert!(
-        closed.windows(2).all(|w| w[1].1[0] >= w[0].1[0]),
-        "farther, bent away farther: {closed:?}"
-    );
     let (near, far) = (closed[0].1, closed[closed.len() - 1].1);
-    assert!(
-        far[0] - near[0] > 3.0,
-        "an arc, not a line: {near:?} {far:?}"
-    );
     let strongest = |r: [f32; 4]| {
         c.shapes
             .iter()
@@ -928,16 +1546,20 @@ fn cards_bend_away_from_the_target_and_fade() {
     );
 }
 
-/// The target's flash: a soft white fill across the selected row.
-fn flashes(c: &Canvas, s: &State) -> bool {
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
-    c.shapes.iter().any(|sh| {
-        plain(sh)
-            && same_rgb(sh.fill, render::rgba(0xffffff, 1.0))
-            && sh.fill[3] > 0.02
-            && sh.fill[3] < 0.3
-            && sh.half[0] * 2.0 > lw / 2.0
-    })
+/// The target's flash: soft white fills across the selected row, more of them than it has at
+/// rest (the selected difficulty sits on a light of its own).
+fn flashes(c: &Canvas, s: &State) -> usize {
+    let lw = s.select.list_w(c.width);
+    c.shapes
+        .iter()
+        .filter(|sh| {
+            plain(sh)
+                && same_rgb(sh.fill, render::rgba(0xffffff, 1.0))
+                && sh.fill[3] > 0.02
+                && sh.fill[3] < 0.3
+                && sh.half[0] * 2.0 > lw / 2.0
+        })
+        .count()
 }
 
 #[test]
@@ -958,17 +1580,18 @@ fn a_song_landing_in_the_target_flashes_it() {
             now += Duration::from_millis(16);
             frame(&mut s, now);
         }
+        let rest = flashes(&frame(&mut s, now), &s);
         let mut seen = Vec::new();
         for _ in 0..20 {
             now += Duration::from_millis(16);
-            seen.push(flashes(&frame(&mut s, now), &s));
+            seen.push(flashes(&frame(&mut s, now), &s) > rest);
         }
         assert!(!seen.contains(&true), "nothing landed yet");
         press(&mut s, KeyCode::ArrowRight, now);
         let mut seen = Vec::new();
         for _ in 0..80 {
             now += Duration::from_millis(16);
-            seen.push(flashes(&frame(&mut s, now), &s));
+            seen.push(flashes(&frame(&mut s, now), &s) > rest);
         }
         if animations {
             let first = seen.iter().position(|f| *f).expect("a flash once it lands");
@@ -996,7 +1619,7 @@ fn text_at(c: &Canvas, s: &str) -> Option<[f32; 2]> {
 fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
     let (mut s, _songs, mut now) = menu_look("select-look-lane");
     let c = settled(&mut s, &mut now);
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let lw = s.select.list_w(c.width);
     let right_of_list = |sh: &&Shape| plain(sh) && sh.center[0] > 28.0 + lw;
     let lane_hit = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
     // The strip: a tile as the stats' are (not a dark box), as round as them.
@@ -1008,12 +1631,17 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
         .filter(|sh| {
             same_rgb(sh.fill, fill) && sh.half[0] * 2.0 > 100.0 && inside(sh.center, lane_hit, 1.0)
         })
+        // The section it's in (the column's last) isn't the lane's.
+        .filter(|sh| sh.params[0] != style::radius::CARD)
         .collect();
     let found: Vec<[f32; 4]> = strips.iter().map(|sh| rect(sh)).collect();
     assert_eq!(strips.len(), 1, "one strip: {found:?}");
     let strip = strips[0];
     assert_eq!(strip.params[0], style::radius::SMALL, "its corners round");
-    assert_eq!(strip.params[1], 0.0, "no edge round it");
+    assert!(
+        strip.params[1] == 0.0 || strip.border[3] == 0.0,
+        "no line round it: its tone apart from the panel's"
+    );
     let [left, y, w, h] = rect(strip);
     let right = left + w;
     // From the lane's start (no drum left of it, out past the details' edge), on past the lane's
@@ -1029,8 +1657,9 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
         (notes_end - right).abs() < 0.5,
         "notes to {notes_end}, the tile to {right}"
     );
-    // No lines along it or across its ends.
+    // No lines along it or across its ends (the lane's corridor in it has its own two).
     let edge = render::rgba(style::PANEL_EDGE, 1.0);
+    let [_, cy, _, ch] = s.preview.corridor().expect("the lane's corridor");
     let lines: Vec<[f32; 4]> = c
         .shapes
         .iter()
@@ -1039,6 +1668,7 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
         .map(rect)
         .filter(|r| r[1] < y + h + 2.0 && r[1] + r[3] > y - 2.0)
         .filter(|r| r[0] < right + 2.0 && r[0] + r[2] > left - 2.0)
+        .filter(|r| (r[1] - cy).abs() > 0.01 && (r[1] + r[3] - (cy + ch)).abs() > 0.01)
         .collect();
     assert!(lines.is_empty(), "lines round the lane: {lines:?}");
 }
@@ -1054,7 +1684,7 @@ fn the_timeline_is_quiet_and_its_kiai_in_gold() {
         .expect("a map with kiai");
     s.select.select_path(&s.library, &path);
     let c = settled(&mut s, &mut now);
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let lw = s.select.list_w(c.width);
     let [_, ty] = text_at(&c, "0:00 / ").expect("the timeline's time");
     // The bars: thin shapes over the timeline, its 28 units up from the time under it.
     let (top, bottom) = (ty - 5.0 - 30.0, ty - 5.0);
@@ -1067,10 +1697,47 @@ fn the_timeline_is_quiet_and_its_kiai_in_gold() {
         .filter(|(i, _)| !in_text(*i))
         .map(|(_, sh)| sh)
         .filter(|sh| plain(sh) && sh.center[0] > 28.0 + lw)
-        .filter(|sh| sh.half[0] * 2.0 < 3.0 && sh.center[1] > top && sh.center[1] < bottom)
+        .filter(|sh| sh.half[0] * 2.0 < 8.0 && sh.center[1] > top && sh.center[1] < bottom)
+        // The bins, not their top edges.
+        .filter(|sh| sh.half[1] * 2.0 > style::tone::LINE + 0.01)
         .filter(|sh| !same_rgb(sh.fill, green))
         .collect();
     assert!(bars.len() > 20, "a timeline of bars: {}", bars.len());
+    // Blocky, side by side: as wide as each other, each starting where the one before ends (no
+    // pixel of room between them), their heights in whole steps.
+    let mut bins: Vec<[f32; 4]> = bars
+        .iter()
+        .map(|sh| rect(sh))
+        .filter(|r| r[2] > 3.0)
+        .collect();
+    bins.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    assert!(bins.len() > 20, "the bins: {bins:?}");
+    for w in bins.windows(2) {
+        assert!(
+            (w[0][0] + w[0][2] - w[1][0]).abs() < 0.01,
+            "no gap between bins: {:?} {:?}",
+            w[0],
+            w[1]
+        );
+    }
+    let base = bins[0][1] + bins[0][3];
+    assert!(
+        bins.iter().all(|r| (r[1] + r[3] - base).abs() < 0.01),
+        "on one base line"
+    );
+    // Each with a crisp top: a line of its colour, stronger than it, along its top.
+    for r in &bins {
+        let fill = c.shapes.iter().find(|sh| rect(sh) == *r).expect("the bin");
+        let cap = c.shapes.iter().any(|sh| {
+            let e = rect(sh);
+            (e[0] - r[0]).abs() < 0.01
+                && (e[1] - r[1]).abs() < 0.01
+                && (e[3] - style::tone::LINE).abs() < 0.01
+                && same_rgb(sh.fill, fill.fill)
+                && sh.fill[3] > fill.fill[3]
+        });
+        assert!(cap, "a top edge on {r:?}");
+    }
     // The playhead a plain line among the bars: nothing glows round it.
     let glows: Vec<[f32; 4]> = c
         .shapes
@@ -1148,7 +1815,10 @@ fn play_is_the_menus_play_note_and_its_map_starts_at_once() {
     let (mut s, _songs, mut now) = animated("select-look-play-note");
     let c = settled(&mut s, &mut now);
     let play = hit_rect(&c, |h| matches!(h, Hit::Key(KeyCode::Enter))).expect("Play");
+    // Where the menu's note lands is on the screen: in song select's units here.
     let (at, r) = s.play_icon_at.expect("where the menu's note lands");
+    let k = s.select_scale;
+    let (at, r) = ([at[0] / k - s.select_left, at[1] / k], r / k);
     assert!(inside(at, play, 0.0) && r > 10.0, "{at:?} {r} in {play:?}");
     // The note itself: its white rim round where the flying note lands.
     let rim = c
@@ -1172,49 +1842,70 @@ fn without_animations_play_starts_the_map_at_once() {
 }
 
 #[test]
-fn mods_and_random_keep_their_place_and_the_mods_on_show_as_badges_under_them() {
+fn mods_random_and_play_are_blocks_of_one_height_and_the_mods_on_show_beside_mods() {
+    let near_rect = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.01);
     let (mut s, _songs, mut now) = menu_look("select-look-mod-badges");
     let c = settled(&mut s, &mut now);
     let mods = |c: &Canvas| hit_rect(c, |h| *h == Hit::ModsButton).expect("Mods");
     let random = |c: &Canvas| hit_rect(c, |h| matches!(h, Hit::Key(KeyCode::F2))).expect("Random");
     let play = hit_rect(&c, |h| matches!(h, Hit::Key(KeyCode::Enter))).expect("Play");
-    let fill = style::surface_fill(style::Surface::Raised);
-    let lane = c
-        .shapes
-        .iter()
-        .filter(|sh| same_rgb(sh.fill, fill) && sh.params[0] == style::radius::CARD)
-        .map(rect)
-        .find(|r| inside([play[0] + 1.0, play[1] + play[3] / 2.0], *r, 0.0))
-        .expect("the lane of actions");
-    // The two as one group in the middle of the lane left of Play: what's drawn of them (a
-    // button's hit has 6 units of slack each side) as far from the lane's start as from Play.
+    // No strip round them: the row under the column, from its left edge.
+    let lane = sections(&c, &s)[0];
+    // Mods from 8 in from the column's start, Random after it, Play at the end: one height, one
+    // middle line, each a block of its own (what's drawn is what takes the click).
     let (m, r) = (mods(&c), random(&c));
-    let before = m[0] + 6.0 - lane[0];
-    let after = play[0] - (r[0] + r[2] - 6.0);
     assert!(
-        before > 16.0 && (before - after).abs() < 1.0,
-        "{before} before Mods, {after} from Random to Play"
+        (m[0] - lane[0] - 8.0).abs() < 0.5,
+        "Mods 8 in: {m:?} in {lane:?}"
     );
-    let [_, wy] = text_at(&c, "Mods").expect("the word");
-    // Mods on: the two stay where they were across, a little higher, the badges under them.
+    for b in [m, r] {
+        assert!(
+            (b[1] - play[1]).abs() < 0.5 && (b[3] - play[3]).abs() < 0.5,
+            "as tall as Play, on its line: {b:?} {play:?}"
+        );
+        let drawn = c.shapes.iter().any(|sh| {
+            sh.params[0] == style::radius::CONTROL
+                && sh.params[1] == style::tone::LINE
+                && near_rect(rect(sh), b)
+        });
+        assert!(drawn, "a block under {b:?}");
+    }
+    assert!(
+        m[0] + m[2] < r[0] && r[0] + r[2] < play[0],
+        "in order: {m:?} {r:?} {play:?}"
+    );
+    let at_rest = |c: &Canvas, b: [f32; 4]| {
+        c.shapes.iter().any(|sh| {
+            near_rect(rect(sh), b) && same_rgb(sh.fill, render::rgba(style::tone::CONTROL, 1.0))
+        })
+    };
+    assert!(at_rest(&c, m), "Mods at rest with no mods on");
+    // Mods on: Mods and Random stay where they were (Random keeps its word), Mods is lit, and
+    // the mods' badges are a group in the room between Random and Play, on the same line.
     s.cfg.mods = crate::mods::Mods::parse("HD,HR");
     s.select.mods_label = s.cfg.mods.label();
     let c = settled(&mut s, &mut now);
     let (m2, r2) = (mods(&c), random(&c));
     assert!(
-        (m2[0] - m[0]).abs() < 0.01 && (r2[0] - r[0]).abs() < 0.01,
-        "moved across: {m:?} -> {m2:?}, {r:?} -> {r2:?}"
+        (m2[0] - m[0]).abs() < 0.01 && (m2[1] - m[1]).abs() < 0.01,
+        "{m:?} -> {m2:?}"
     );
-    assert!(m2[1] < m[1] && (m2[1] - r2[1]).abs() < 0.01, "up, together");
-    let [_, wy2] = text_at(&c, "Mods").expect("the word");
-    assert!(wy2 < wy, "the word moves up with them");
+    assert!(!at_rest(&c, m2), "Mods lit with mods on");
+    assert_eq!(r2, r, "Random where it was, whole");
+    assert!(
+        texts_in(&c, r2).iter().any(|t| t == "Random"),
+        "Random keeps its word: {:?}",
+        texts_in(&c, r2)
+    );
+    let mid = m[1] + m[3] / 2.0;
+    let mut xs = Vec::new();
     for name in ["HD", "HR"] {
         let [x, y] = text_at(&c, name).unwrap_or_else(|| panic!("{name}"));
         assert!(
-            y > wy2 + 8.0 && x >= m2[0] && x < play[0],
-            "{name} under the group: {x}, {y}"
+            x > r2[0] + r2[2] && x < play[0],
+            "{name} between Random and Play: {x}"
         );
-        assert!(y < lane[1] + lane[3] - 4.0, "{name} inside the lane: {y}");
+        assert!((y - mid).abs() < 6.0, "{name} on the line: {y} by {mid}");
         let badge = c.shapes.iter().any(|sh| {
             let [bx, by, bw, bh] = rect(sh);
             sh.params[1] > 0.0 && bx < x && bx + bw > x && by < y + 3.0 && by + bh > y + 3.0
@@ -1225,6 +1916,66 @@ fn mods_and_random_keep_their_place_and_the_mods_on_show_as_badges_under_them() 
             .iter()
             .any(|b| b.hit == Hit::ModsButton && inside([x + 2.0, y + 3.0], b.rect, 0.0));
         assert!(opens, "a click on {name} opens the mod select");
+        xs.push(x);
+    }
+    assert!((xs[1] - xs[0]).abs() > 4.0, "side by side, apart: {xs:?}");
+}
+
+#[test]
+fn many_mods_on_show_four_badges_and_a_count_of_the_rest_with_all_of_them_under_the_pointer() {
+    let (mut s, _songs, mut now) = menu_look("select-look-many-mods");
+    s.cfg.mods = crate::mods::Mods::parse("HD,HR,NF,FL,PR,SW,AL");
+    s.select.mods_label = s.cfg.mods.label();
+    let c = settled(&mut s, &mut now);
+    let random = hit_rect(&c, |h| matches!(h, Hit::Key(KeyCode::F2))).expect("Random");
+    let play = hit_rect(&c, |h| matches!(h, Hit::Key(KeyCode::Enter))).expect("Play");
+    assert!(
+        texts_in(&c, random).iter().any(|t| t == "Random"),
+        "Random whole beside many mods"
+    );
+    // The badges between Random and Play: four of them and a +2, none touching the next.
+    let row: Vec<(String, [f32; 4])> = text_boxes(&c)
+        .into_iter()
+        .filter(|(_, r)| r[0] > random[0] + random[2] && r[0] + r[2] < play[0])
+        .filter(|(_, r)| r[1] >= play[1] && r[1] + r[3] <= play[1] + play[3])
+        .collect();
+    let names: Vec<&str> = row.iter().map(|(t, _)| t.as_str()).collect();
+    let on = s.cfg.mods.iter().count();
+    assert!(on > 5, "more mods on than show: {on}");
+    assert_eq!(names.len(), 5, "four and a count: {names:?}");
+    assert_eq!(names[4], format!("+{}", on - 4), "{names:?}");
+    let badges: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| badge(sh))
+        .map(rect)
+        .filter(|r| r[0] > random[0] + random[2] && r[0] + r[2] < play[0])
+        .collect();
+    assert_eq!(badges.len(), 5, "{badges:?}");
+    let mut by_x = badges.clone();
+    by_x.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    for w in by_x.windows(2) {
+        assert!(w[1][0] - (w[0][0] + w[0][2]) >= 4.0, "apart: {by_x:?}");
+    }
+    // Under the pointer: every mod that's on, by name, over the row.
+    let first = by_x[0];
+    let (px, py) = to_pixels(&s, first[0] + first[2] / 2.0, first[1] + first[3] / 2.0);
+    s.mouse_moved(px, py);
+    s.mouse = (px, py);
+    for _ in 0..2 {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    let all: Vec<String> = c.texts.iter().map(|(_, t)| t.clone()).collect();
+    for m in s.cfg.mods.iter() {
+        assert!(
+            all.iter()
+                .any(|t| t.starts_with(m.acronym()) && t.contains(m.name())),
+            "{} in the tip: {all:?}",
+            m.name()
+        );
     }
 }
 
@@ -1252,39 +2003,37 @@ fn randoms_die_rolls_when_pressed_and_rests_on_five() {
 }
 
 #[test]
-fn nothing_in_the_details_stretches_on_the_way_to_the_leaderboard() {
-    let (mut s, _songs, mut now) = menu_look("select-look-board-slide");
-    s.cfg.animations = true;
+fn the_right_column_s_sections_stay_put_from_map_to_map() {
+    let (mut s, _songs, mut now) = menu_look("select-look-sections-stay");
     let c = settled(&mut s, &mut now);
-    let preview = |c: &Canvas| hit_rect(c, |h| *h == Hit::Preview).expect("the lane");
-    let lane = preview(&c);
-    s.mob.flip_board();
-    let mut on_the_way = 0;
-    for _ in 0..12 {
-        now += Duration::from_millis(8);
-        let c = frame(&mut s, now);
-        // Gone once the board is all there; at its place before it sets off.
-        let Some(l) = hit_rect(&c, |h| *h == Hit::Preview) else {
-            continue;
-        };
-        let t = lane[0] - l[0];
-        if t < 2.0 {
-            continue;
+    let first = sections(&c, &s);
+    assert_eq!(first.len(), 3);
+    // Every other map (titles, mappers and stats of their own), one of them with plays on its
+    // leaderboard, and the pp simulator open: the sections don't move or change size.
+    for k in 0..maps::all().len() {
+        if k == 2 {
+            for (n, name) in ["Ann", "Bo", "Cy"].iter().enumerate() {
+                let play = local_play(&s, name, 900_000 - n as u64 * 1000, 0.99);
+                s.scores.push(play);
+            }
         }
-        on_the_way += 1;
-        let shown = |r: [f32; 4]| r[0] + r[2];
-        assert!(
-            (l[2] - lane[2]).abs() < 0.5 || shown(l) >= c.width - 0.5,
-            "the lane as long on the way ({t}): {} vs {}",
-            l[2],
-            lane[2]
-        );
+        let c = settled(&mut s, &mut now);
+        assert_eq!(sections(&c, &s), first, "map {k}");
+        press(&mut s, KeyCode::ArrowRight, now);
     }
-    assert!(on_the_way > 0, "caught on the way");
+    s.click(Hit::PpSim, None);
+    let c = settled(&mut s, &mut now);
+    assert!(s.preview.sim.is_some());
+    assert_eq!(sections(&c, &s), first, "with the simulator open");
+    // On either board's tab too.
+    for online in [false, true] {
+        let c = on_board(&mut s, &mut now, online);
+        assert_eq!(sections(&c, &s), first, "on the board (online: {online})");
+    }
 }
 
 #[test]
-fn the_search_row_has_a_glass_a_quiet_hint_its_key_on_a_cap_and_the_counts_on_a_chip() {
+fn the_search_row_has_a_glass_a_quiet_hint_its_key_at_its_end_and_the_counts_on_a_chip() {
     let (mut s, _songs, mut now) = menu_look("select-look-search-row");
     s.cfg.select_info = true;
     let c = settled(&mut s, &mut now);
@@ -1310,12 +2059,14 @@ fn the_search_row_has_a_glass_a_quiet_hint_its_key_on_a_cap_and_the_counts_on_a_
         key[0] > field[0] + field[2] * 0.6 && key[0] < field[0] + field[2],
         "at the box's right end: {key:?} in {field:?}"
     );
+    // Quiet: on no cap of its own.
     let cap = c.shapes.iter().any(|sh| {
-        same_rgb(sh.fill, style::surface_fill(style::Surface::Raised))
+        plain(sh)
             && inside(key.map(|v| v + 1.0), rect(sh), 0.0)
             && rect(sh)[2] < 40.0
+            && rect(sh)[2] > 8.0
     });
-    assert!(cap, "the key sits on a cap");
+    assert!(!cap, "the key on a cap");
     // The counts on a chip of their own beside the search row, not floating at the screen's
     // right edge.
     let counts = c
@@ -1325,7 +2076,7 @@ fn the_search_row_has_a_glass_a_quiet_hint_its_key_on_a_cap_and_the_counts_on_a_
         .and_then(|(r, _)| c.shapes.get(r.start))
         .map(rect)
         .expect("the counts");
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
+    let lw = s.select.list_w(c.width);
     assert!(
         counts[0] > 24.0 + lw && counts[0] < 24.0 + lw + 30.0,
         "beside the list: {counts:?}"
@@ -1353,72 +2104,474 @@ fn the_map_s_picture_behind_song_select_is_blurred_to_a_field_of_colour() {
 }
 
 #[test]
-fn play_and_the_lane_of_actions_keep_the_screen_s_margin() {
+fn the_search_row_sits_under_the_performance_readout_its_buttons_blocks_of_one_height() {
+    let (mut s, _songs, mut now) = menu_look("select-look-under-readout");
+    let c = settled(&mut s, &mut now);
+    let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
+    let sort = hit_rect(&c, |h| *h == Hit::SortList).expect("Sort");
+    // The readout (`show_fps`) takes 6 to 22 at the top left: the row starts below it.
+    for r in [search, sort] {
+        assert!(r[1] >= 24.0, "below the readout: {r:?}");
+        assert!(
+            (r[1] + r[3] / 2.0 - (search[1] + search[3] / 2.0)).abs() < 0.5,
+            "one row: {r:?} {search:?}"
+        );
+    }
+    // No way back in it (it's under the list): the search from the row's start.
+    assert!(
+        search[0] <= 24.0 + 0.5,
+        "the search from the left: {search:?}"
+    );
+    {
+        let b = sort;
+        assert!(
+            (b[3] - style::BLOCK_H).abs() < 0.01,
+            "a block's height: {b:?}"
+        );
+        let drawn = c.shapes.iter().any(|sh| {
+            sh.params[0] == style::radius::CONTROL
+                && sh.params[1] == style::tone::LINE
+                && rect(sh).iter().zip(b).all(|(a, b)| (a - b).abs() < 0.01)
+        });
+        assert!(drawn, "a block under {b:?}");
+    }
+    // The list starts under the row's strip, not into it.
+    let top = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r[1])
+        .fold(f32::MAX, f32::min);
+    assert!(
+        top > search[1] + search[3] + 4.0,
+        "the list under the row: {top}"
+    );
+}
+
+#[test]
+fn the_way_back_is_under_the_list_at_the_bottom_left_on_the_actions_line() {
+    let (mut s, _songs, mut now) = menu_look("select-look-back-below");
+    let c = settled(&mut s, &mut now);
+    let menu = hit_rect(&c, |h| *h == Hit::ToMenu).expect("Menu");
+    let mods = hit_rect(&c, |h| *h == Hit::ModsButton).expect("Mods");
+    let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
+    let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
+    // At the bottom left, level with the list's cards, on the middle line of Mods and Play and
+    // as tall as their blocks: bigger than the search row's.
+    assert!((menu[0] - 24.0).abs() < 0.5, "at the list's left: {menu:?}");
+    let mid = |r: [f32; 4]| r[1] + r[3] / 2.0;
+    for r in [mods, play] {
+        assert!(
+            (mid(menu) - mid(r)).abs() < 0.5,
+            "on one line: {menu:?} {r:?}"
+        );
+    }
+    assert!(
+        (menu[3] - mods[3]).abs() < 0.5,
+        "as tall as Mods: {menu:?} {mods:?}"
+    );
+    assert!(menu[3] > style::BLOCK_H + 4.0, "a big target: {menu:?}");
+    assert!(menu[1] > search[1] + 200.0, "not in the search row");
+    // Under the list: its cards end above it.
+    let lowest = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r[1] + r[3])
+        .fold(0.0, f32::max);
+    assert!(
+        lowest <= menu[1] + 0.5,
+        "the cards above it: {lowest} vs {menu:?}"
+    );
+    assert!(s.select.list_bottom() <= menu[1], "the list ends above it");
+    // It goes back.
+    s.click(Hit::ToMenu, None);
+    assert!(s.on_menu(), "back to the menu");
+}
+
+#[test]
+fn play_and_the_row_of_actions_keep_the_screen_s_margin_at_the_foot_of_the_column_s_panel() {
     let (mut s, _songs, mut now) = menu_look("select-look-play-margin");
     let c = settled(&mut s, &mut now);
     let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
-    let margin = c.width - (play[0] + play[2]);
+    let column = sections(&c, &s);
+    let last = column[column.len() - 1];
+    // Under the column, level with its edges: Play ends 8 in from the right of it (the
+    // screen's margin past that: 28 in the interface's space, clear of the friends tab),
+    // under its last section.
+    let right = c.width - 28.0;
     assert!(
-        (margin - 24.0).abs() < 0.5,
-        "Play ends 24 in from the right, as the panel above it: {margin}"
+        (last[0] + last[2] - right).abs() < 0.5,
+        "the column to the margin: {last:?}"
     );
-    // And the lane under Mods and Random ends with it, both ends round.
-    let lane = c
+    assert!(
+        (right - 8.0 - (play[0] + play[2])).abs() < 0.5,
+        "Play 8 in from the margin: {play:?}"
+    );
+    assert!(play[1] > last[1] + last[3], "under the column: {play:?}");
+    // No strip of their own round the buttons: they stand at the foot of the column's one
+    // panel, under the line closing its last section, 8 up from its bottom, which is level
+    // with the list's.
+    let fill = style::surface_fill(style::Surface::Raised);
+    let strips: Vec<[f32; 4]> = c
         .shapes
         .iter()
-        .filter(|sh| plain(sh) && same_rgb(sh.fill, style::surface_fill(style::Surface::Raised)))
-        .map(|sh| (rect(sh), sh.params[0]))
-        .find(|(r, _)| (r[1] - play[1]).abs() < 0.5 && (r[3] - play[3]).abs() < 0.5)
-        .expect("the lane of actions");
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, fill))
+        .map(rect)
+        .filter(|r| inside([play[0] + 1.0, play[1] + play[3] / 2.0], *r, 0.0))
+        .filter(|r| r[2] > play[2] + 1.0)
+        .collect();
+    assert!(strips.is_empty(), "a strip round the actions: {strips:?}");
+    let panel = column_panel(&c, &s).expect("the column's panel");
+    let [_, end] = s.select.frame_span();
     assert!(
-        (lane.0[0] + lane.0[2] - (play[0] + play[2])).abs() < 0.5,
-        "{lane:?}"
+        (panel[1] + panel[3] - end).abs() < 0.5,
+        "the panel down to the list's bottom: {panel:?} to {end}"
     );
-    assert_eq!(lane.1, style::radius::CARD);
+    assert!(
+        (panel[1] + panel[3] - 8.0 - (play[1] + play[3])).abs() < 0.5,
+        "Play 8 up from its bottom: {play:?} in {panel:?}"
+    );
+    let rules = column_rules(&c, &s);
+    assert_eq!(
+        rules.len(),
+        2,
+        "a line under the details and one over the actions"
+    );
+    assert!(
+        rules[1][1] < play[1],
+        "the line over the actions: {rules:?} {play:?}"
+    );
 }
 
 #[test]
-fn the_details_sit_on_a_panel_of_their_own_and_nothing_of_them_runs_off_it() {
+fn the_right_column_s_panel_starts_level_with_the_search_row() {
+    let (mut s, _songs, mut now) = menu_look("select-look-column-top");
+    let c = settled(&mut s, &mut now);
+    let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
+    let panel = column_panel(&c, &s).expect("the column's panel");
+    assert!(
+        (panel[1] - search[1]).abs() < 0.5,
+        "no hole over the column: {panel:?}, the search at {search:?}"
+    );
+    // The details start at the panel's top.
+    assert!((sections(&c, &s)[0][1] - panel[1]).abs() < 0.01);
+}
+
+#[test]
+fn the_right_column_is_the_details_a_row_of_tabs_and_the_tab_shown_under_them() {
     let (mut s, _songs, mut now) = menu_look("select-look-right-panel");
     let c = settled(&mut s, &mut now);
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
-    let raised = style::surface_fill(style::Surface::Raised);
-    // A raised surface, as round as the cards, from beside the list to the screen's margin.
-    let panel = c
-        .shapes
-        .iter()
-        .filter(|sh| plain(sh) && same_rgb(sh.fill, raised) && sh.params[0] == style::radius::CARD)
-        .map(rect)
-        .find(|r| r[0] > 24.0 + lw && r[3] > 200.0)
-        .expect("the details' panel");
+    let column = sections(&c, &s);
+    assert_eq!(column.len(), 3, "{column:?}");
+    let [head, tabs, body] = [column[0], column[1], column[2]];
+    // One above the other, as wide as each other, to the screen's margin.
+    for r in [tabs, body] {
+        assert!(
+            (r[0] - head[0]).abs() < 0.01 && (r[2] - head[2]).abs() < 0.01,
+            "{column:?}"
+        );
+    }
+    // (28 in the interface's space: clear of the friends tab at the screen's edge.)
     assert!(
-        (panel[0] + panel[2] - (c.width - 24.0)).abs() < 0.5,
-        "{panel:?}"
+        (head[0] + head[2] - (c.width - 28.0)).abs() < 0.5,
+        "{head:?}"
     );
-    // The preview's lane ends inside it.
+    // The details as tall as what's on them, no fixed share and no empty band; the body all
+    // the rest, much the tallest.
+    assert!(body[3] > head[3], "the body has the room: {column:?}");
+    let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
+    assert!(
+        head[1] + head[3] - (pp[1] + pp[3]) < 8.0,
+        "nothing under the pp: {pp:?} in {head:?}"
+    );
+    // The title on the details; Preview, Local, Online and the website on the row of tabs.
+    let title = s.library[s.select.selected().unwrap()].meta.title.clone();
+    assert!(
+        c.texts.iter().any(|(r, t)| t.trim() == title
+            && c.shapes
+                .get(r.start)
+                .is_some_and(|sh| inside(sh.center, head, 0.0))),
+        "the title on the details"
+    );
+    let tab_hits = [
+        Hit::PreviewTab,
+        Hit::BoardTab(false),
+        Hit::BoardTab(true),
+        Hit::BoardWebsite,
+    ];
+    let mut last_x = f32::MIN;
+    for hit in tab_hits {
+        let r = hit_rect(&c, |h| *h == hit).expect("a tab");
+        assert!(inside([r[0], r[1]], tabs, 0.0), "{r:?} in {tabs:?}");
+        assert!(r[0] > last_x, "in order");
+        last_x = r[0];
+    }
+    // At first the preview: the lane in the body, no leaderboard's rows.
     let lane = hit_rect(&c, |h| *h == Hit::Preview).expect("the preview lane");
     assert!(
-        lane[0] + lane[2] <= panel[0] + panel[2],
-        "{lane:?} in {panel:?}"
+        inside([lane[0], lane[1]], body, 0.0) && lane[0] + lane[2] <= body[0] + body[2],
+        "{lane:?} in {body:?}"
+    );
+    assert!(s.board_rect.is_none(), "no board under the preview");
+    // A board's tab: the body is the board's, no lane in it; the sections stay where they were.
+    let c = on_board(&mut s, &mut now, false);
+    assert_eq!(sections(&c, &s), column);
+    assert!(hit_rect(&c, |h| *h == Hit::Preview).is_none(), "no lane");
+    assert!(
+        texts_in(&c, body)
+            .iter()
+            .any(|t| t == "No plays on this map yet"),
+        "the local board in the body"
+    );
+    // No way to a leaderboard page: it's on the screen.
+    assert!(hit_rect(&c, |h| *h == Hit::BoardPage).is_none());
+    assert!(!c.texts.iter().any(|(_, t)| t.trim() == "Leaderboard"));
+}
+
+#[test]
+fn the_tab_shown_stays_from_map_to_map_and_song_select_opens_on_the_preview() {
+    let (mut s, _songs, mut now) = menu_look("select-look-tab-kept");
+    let c = settled(&mut s, &mut now);
+    assert!(
+        hit_rect(&c, |h| *h == Hit::Preview).is_some(),
+        "Preview first"
+    );
+    on_board(&mut s, &mut now, true);
+    for _ in 0..2 {
+        press(&mut s, KeyCode::ArrowRight, now);
+        let c = settled(&mut s, &mut now);
+        assert!(
+            hit_rect(&c, |h| *h == Hit::Preview).is_none(),
+            "still the board on another map"
+        );
+        assert!(s.board_online, "the online one");
+    }
+    // Back to the preview's tab, then away from song select and back: the preview again.
+    s.click(Hit::PreviewTab, None);
+    let c = settled(&mut s, &mut now);
+    assert!(
+        hit_rect(&c, |h| *h == Hit::Preview).is_some(),
+        "the preview's tab"
+    );
+    on_board(&mut s, &mut now, false);
+    s.show_select();
+    let c = settled(&mut s, &mut now);
+    assert!(
+        hit_rect(&c, |h| *h == Hit::Preview).is_some(),
+        "song select opens on the preview"
     );
 }
 
 #[test]
-fn the_details_leave_the_plays_to_the_leaderboard_s_page() {
-    let (mut s, _songs, mut now) = menu_look("select-look-no-strip");
+fn the_preview_s_tab_gives_the_lane_room_and_the_density_graph_height() {
+    let (mut s, _songs, mut now) = menu_look("select-look-preview-tab");
+    let c = settled(&mut s, &mut now);
+    let body = sections(&c, &s)[2];
+    let [_, ly, _, lane_h] = s.preview.box_rect().expect("the lane's box");
+    // The density graph between the lane's box and its times under it: well taller than the
+    // bare timeline's 28, the lane's box taller still.
+    let [_, times] = text_at(&c, "0:00 / 0:10").expect("the timeline's times");
+    let gh = times - (ly + lane_h) - 8.0;
+    assert!(gh >= 60.0, "a graph to read: {gh}");
+    assert!(lane_h > gh, "the lane's box over it: {lane_h} vs {gh}");
+    // All within the body, near all of it used.
+    assert!(times < body[1] + body[3], "{times} in {body:?}");
+    assert!(
+        lane_h + gh > 0.6 * body[3],
+        "the body is the preview's: {lane_h}+{gh} of {body:?}"
+    );
+    // A click on it still goes fullscreen (the lane takes the click).
+    let lane = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
+    assert!(inside([lane[0], lane[1]], body, 0.0));
+}
+
+#[test]
+fn the_stats_are_one_dense_line_under_the_difficulty() {
+    let (mut s, _songs, mut now) = menu_look("select-look-stat-line");
+    let c = settled(&mut s, &mut now);
+    let head = sections(&c, &s)[0];
+    let boxes = text_boxes(&c);
+    let at = |name: &str| {
+        boxes
+            .iter()
+            .find(|(t, r)| t == name && inside([r[0], r[1]], head, 0.0))
+            .map(|(_, r)| *r)
+            .unwrap_or_else(|| panic!("{name} in the details"))
+    };
+    let caps: Vec<[f32; 4]> = ["OD", "BPM", "LENGTH", "NOTES"]
+        .iter()
+        .map(|n| at(n))
+        .collect();
+    // One line, left to right, small: no taller than the body text's line.
+    for w in caps.windows(2) {
+        assert!(
+            ((w[0][1] + w[0][3] / 2.0) - (w[1][1] + w[1][3] / 2.0)).abs() < 1.0,
+            "one line: {caps:?}"
+        );
+        assert!(w[1][0] > w[0][0] + w[0][2], "in order: {caps:?}");
+    }
+    let title = s.library[s.select.selected().unwrap()].meta.title.clone();
+    let title_h = at(&title)[3];
+    assert!(
+        caps.iter().all(|r| r[3] < title_h * 0.8),
+        "small next to the title ({title_h}): {caps:?}"
+    );
+    // No tiles under them.
+    let fill = style::surface_fill(style::Surface::Raised);
+    let tiles = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, fill) && inside(sh.center, caps[0], 2.0))
+        .count();
+    assert_eq!(tiles, 0, "no tile under OD");
+}
+
+#[test]
+fn the_stats_the_don_and_kat_bar_and_the_pp_have_air_between_them_their_text_kept_small() {
+    let (mut s, _songs, mut now) = menu_look("select-look-stat-air");
+    let c = settled(&mut s, &mut now);
+    let [head, _, body] = sections(&c, &s)[..] else {
+        panic!("three sections")
+    };
+    let boxes = text_boxes(&c);
+    let at = |want: &dyn Fn(&str) -> bool, what: &str| {
+        boxes
+            .iter()
+            .find(|(t, r)| want(t) && inside([r[0], r[1]], head, 0.0))
+            .map(|(_, r)| *r)
+            .unwrap_or_else(|| panic!("{what} in the details"))
+    };
+    let od = at(&|t| t == "OD", "OD");
+    let don = at(&|t| t.ends_with(" DON"), "the Don count");
+    let ss = at(&|t| t == "SS", "the SS pp");
+    // Room between the three lines (the stats, Don and Kat's bar, the pp), not one cramped
+    // block under the banner.
+    assert!(
+        don[1] - (od[1] + od[3]) >= 15.0,
+        "the stats over the bar: {od:?} {don:?}"
+    );
+    assert!(
+        ss[1] - (don[1] + don[3]) >= 19.0,
+        "the bar over the pp: {don:?} {ss:?}"
+    );
+    assert!(
+        ss[1] + ss[3] + 8.0 <= head[1] + head[3],
+        "room under the pp: {ss:?} in {head:?}"
+    );
+    // Still small text, not tiles.
+    assert!(
+        [od, don, ss].iter().all(|r| r[3] < 10.0),
+        "{od:?} {don:?} {ss:?}"
+    );
+    // Taken from the body under the tabs: still room for the lane and the board.
+    assert!(body[3] > 280.0, "the body under the tabs: {body:?}");
+}
+
+#[test]
+fn the_plays_are_on_the_leaderboard_section_under_the_details() {
+    let (mut s, _songs, mut now) = menu_look("select-look-board-rows");
     for (k, name) in ["Ann", "Bo"].iter().enumerate() {
         let play = local_play(&s, name, 900_000 - k as u64 * 1000, 0.99);
         s.scores.push(play);
     }
-    let c = settled(&mut s, &mut now);
-    let shown = texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT]);
+    let c = on_board(&mut s, &mut now, false);
+    let column = sections(&c, &s);
+    let board = column[2];
+    // Each play a row of its own on the board's section, best first.
+    let rows: Vec<[f32; 4]> = (0..2)
+        .map(|k| hit_rect(&c, |h| *h == Hit::ScoreRow(k)).expect("a row per play"))
+        .collect();
+    for r in &rows {
+        assert!(
+            inside([r[0], r[1]], board, 0.0) && r[1] + r[3] <= board[1] + board[3],
+            "{r:?} in {board:?}"
+        );
+    }
+    assert!(rows[0][1] < rows[1][1]);
+    for (name, r) in [("Ann", rows[0]), ("Bo", rows[1])] {
+        assert!(
+            texts_in(&c, r).iter().any(|t| t == name),
+            "{name} on its row: {:?}",
+            texts_in(&c, r)
+        );
+    }
+    // Not on the details: nothing of the board over them.
+    let head = texts_in(&c, column[0]);
+    assert!(!head.iter().any(|t| t == "Ann" || t == "Bo"), "{head:?}");
+    // Both fit: nothing pinned under them.
+    assert!(!texts_in(&c, board).iter().any(|t| t == "PB"));
+}
+
+#[test]
+fn the_players_best_is_pinned_under_the_rows_when_not_all_of_them_fit() {
+    let (mut s, _songs, mut now) = menu_look("select-look-board-pinned");
+    for k in 0..30u64 {
+        let play = local_play(&s, "Ann", 900_000 - k * 1000, 0.99 - k as f64 * 0.001);
+        s.scores.push(play);
+    }
+    let c = on_board(&mut s, &mut now, false);
+    let board = sections(&c, &s)[2];
+    let rows: Vec<[f32; 4]> = c
+        .hits
+        .iter()
+        .filter(|h| matches!(h.hit, Hit::ScoreRow(..)))
+        .map(|h| h.rect)
+        .collect();
     assert!(
-        !shown.iter().any(|t| t == "Ann" || t == "Bo"),
-        "no strip of the board under the timeline: {shown:?}"
+        rows.len() >= 6 && rows.len() < 30,
+        "five plays at least and the best: {}",
+        rows.len()
+    );
+    // The last row is the best, pinned at the section's bottom under the others, marked PB.
+    let pinned = hit_rect(&c, |h| *h == Hit::ScoreRow(rows.len() - 1)).expect("pinned");
+    assert!(
+        rows.iter().all(|r| r[1] < pinned[1] || *r == pinned),
+        "under the rest"
     );
     assert!(
-        hit_rect(&c, |h| *h == Hit::BoardPage).is_some(),
-        "the way to the board"
+        board[1] + board[3] - (pinned[1] + pinned[3]) < 12.0,
+        "at the bottom"
+    );
+    assert!(texts_in(&c, pinned).iter().any(|t| t == "PB"));
+    assert_eq!(
+        s.leaderboard.len(),
+        rows.len(),
+        "a click on each opens its play"
+    );
+    // Scrolled to the end, the best stays pinned.
+    let [bx, by, bw, bh] = s.board_rect.expect("the rows' box");
+    let k = s.window_h / render::VIRTUAL_HEIGHT;
+    s.mouse = (((bx + bw / 2.0) * k) as f64, ((by + bh / 2.0) * k) as f64);
+    s.wheel(-100);
+    let c = settled(&mut s, &mut now);
+    let again = hit_rect(&c, |h| *h == Hit::ScoreRow(rows.len() - 1)).expect("pinned");
+    assert_eq!(again, pinned);
+    assert!(texts_in(&c, again).iter().any(|t| t == "PB"));
+}
+
+#[test]
+fn an_empty_local_board_says_so_calmly_and_offers_the_online_one() {
+    let (mut s, _songs, mut now) = menu_look("select-look-board-empty");
+    let c = on_board(&mut s, &mut now, false);
+    let board = sections(&c, &s)[2];
+    let shown = texts_in(&c, board);
+    assert!(
+        shown.iter().any(|t| t == "No plays on this map yet"),
+        "{shown:?}"
+    );
+    // A button over to the online board, besides its tab.
+    let tabs: Vec<[f32; 4]> = c
+        .hits
+        .iter()
+        .filter(|h| h.hit == Hit::BoardTab(true))
+        .map(|h| h.rect)
+        .collect();
+    assert_eq!(tabs.len(), 2, "the tab and the button: {tabs:?}");
+    let button = tabs.iter().max_by(|a, b| a[1].total_cmp(&b[1])).unwrap();
+    assert!(inside([button[0], button[1]], board, 0.0));
+    assert!(
+        texts_in(&c, *button)
+            .iter()
+            .any(|t| t == "Show online scores"),
+        "{:?}",
+        texts_in(&c, *button)
     );
 }
 
@@ -1434,7 +2587,7 @@ fn a_map_whose_bpm_changes_shows_its_whole_range() {
     };
     let (mut s, _songs, mut now) = menu_look_with("select-look-bpm-range", &[chart]);
     let c = settled(&mut s, &mut now);
-    let shown = texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT]);
+    let shown = texts_in(&c, [0.0, 0.0, c.width, c.height]);
     assert!(
         shown.iter().any(|t| t == "100-250"),
         "the range whole: {shown:?}"
@@ -1452,7 +2605,7 @@ fn the_library_counts_and_the_device_line_wait_for_their_setting() {
     let (mut s, _songs, mut now) = menu_look("select-look-info");
     let shown = |s: &mut State, now: &mut Instant| {
         let c = settled(s, now);
-        texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT])
+        texts_in(&c, [0.0, 0.0, c.width, c.height])
     };
     s.status = "gpu  |  audio  |  60 Hz".into();
     let off = shown(&mut s, &mut now);
@@ -1474,33 +2627,34 @@ fn the_library_counts_and_the_device_line_wait_for_their_setting() {
 }
 
 #[test]
-fn the_full_combo_pp_is_one_button_and_the_way_to_the_board_ends_its_row() {
+fn the_full_combo_pp_is_one_button_across_its_row() {
     let (mut s, _songs, mut now) = menu_look("select-look-pp-row");
     let c = settled(&mut s, &mut now);
+    let head = sections(&c, &s)[0];
     let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
-    let way = hit_rect(&c, |h| *h == Hit::BoardPage).expect("the way to the board");
+    // The row is the button's alone (no way to a leaderboard page at its end): across the
+    // details, as far in from the section's right edge as its left.
+    assert!(hit_rect(&c, |h| *h == Hit::BoardPage).is_none());
+    let (left_in, right_in) = (pp[0] - head[0], head[0] + head[2] - (pp[0] + pp[2]));
     assert!(
-        (way[1] + way[3] / 2.0 - (pp[1] + pp[3] / 2.0)).abs() < 2.5,
-        "one row: {pp:?} {way:?}"
+        (left_in - right_in).abs() < 0.5,
+        "across the row: {pp:?} in {head:?}"
     );
-    assert!(
-        way[0] > pp[0] + pp[2],
-        "the board's way after it: {pp:?} {way:?}"
-    );
-    let lifted = |r: [f32; 4]| {
-        c.shapes.iter().any(|sh| {
-            same_rgb(sh.fill, style::surface_fill(style::Surface::Lifted))
-                && sh.params[0] == style::radius::SMALL
-                && inside([r[0] + r[2] / 2.0, r[1] + r[3] / 2.0], rect(sh), 0.0)
-        })
-    };
-    assert!(lifted(pp) && lifted(way), "both on chips alike");
+    // A block of the buttons' tone, no line round it at rest (a strip of numbers in a box read
+    // as a table's cell; the edge comes under the pointer).
+    let block = c.shapes.iter().any(|sh| {
+        same_rgb(sh.fill, render::rgba(style::tone::CONTROL, 1.0))
+            && sh.params[0] == style::radius::CONTROL
+            && sh.params[1] == 0.0
+            && inside([pp[0] + pp[2] / 2.0, pp[1] + pp[3] / 2.0], rect(sh), 0.0)
+    });
+    assert!(block, "on a block");
     let shown = texts_in(&c, pp);
     for want in ["SS", "99%", "98%"] {
         assert!(shown.iter().any(|t| t == want), "{want} on it: {shown:?}");
     }
     assert!(
-        !texts_in(&c, [0.0, 0.0, c.width, crate::render::VIRTUAL_HEIGHT])
+        !texts_in(&c, [0.0, 0.0, c.width, c.height])
             .iter()
             .any(|t| t.starts_with("click / drag")),
         "no hint under the timeline"
@@ -1573,16 +2727,9 @@ fn the_list_s_grip_sits_in_the_gap_between_the_cards_and_the_details_panel() {
         .iter()
         .map(|(_, r)| r[0] + r[2])
         .fold(0.0, f32::max);
-    let lw = ui::Select::list_width(c.width, s.cfg.song_list_share);
-    let raised = style::surface_fill(style::Surface::Raised);
-    let panel_left = c
-        .shapes
-        .iter()
-        .filter(|sh| plain(sh) && same_rgb(sh.fill, raised) && sh.params[0] == style::radius::CARD)
-        .map(rect)
-        .filter(|r| r[0] > 24.0 + lw && r[3] > 200.0)
-        .map(|r| r[0])
-        .fold(f32::MAX, f32::min);
+    let lw = s.select.list_w(c.width);
+    let panel_left = sections(&c, &s)[0][0];
+    assert!(panel_left > 24.0 + lw);
     let mid = grip[0] + grip[2] / 2.0;
     assert!(
         mid > cards_right && mid < panel_left,
@@ -1648,6 +2795,9 @@ fn the_pp_button_shows_every_number_whole_and_its_simulator_overlaps_nothing() {
         .map(|h| h.rect)
         .collect();
     assert_eq!(steps.len(), 4, "- and + for accuracy and misses");
+    // (In the details' section the button goes up into the DON / KAT bar's place, which the
+    // play's fields take.)
+    let button = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
     let row = steps[0][1];
     assert!(row >= button[1] + button[3], "under the button: {row}");
     let area = [button[0], button[1], c.width, row + steps[0][3] - button[1]];
@@ -1700,7 +2850,7 @@ fn a_song_picked_on_its_own_sends_the_old_details_out_to_the_left() {
     let (mut s, _songs, mut now) = menu_look_moving("select-look-leave");
     let before = settled(&mut s, &mut now);
     let title = s.library[s.select.selected().unwrap()].meta.title.clone();
-    let lw = ui::Select::list_width(before.width, s.cfg.song_list_share);
+    let lw = s.select.list_w(before.width);
     let (range, _) = before
         .texts
         .iter()
@@ -1785,7 +2935,7 @@ fn set_cards_carry_no_difficulty_count_over_their_pictures() {
 fn the_pp_button_leaves_values_out_rather_than_spill_out_of_a_narrow_panel() {
     let (mut s, _songs, mut now) = menu_look("select-look-pp-narrow");
     let c = settled(&mut s, &mut now);
-    let (_, widest) = ui::Select::share_range(c.width).expect("a range");
+    let (_, widest) = s.select.share_range_here(c.width).expect("a range");
     let mut fewest = 3;
     for k in 0..=8 {
         // From the list's default share to its widest (the panel's narrowest).
@@ -1805,14 +2955,14 @@ fn the_pp_button_leaves_values_out_rather_than_spill_out_of_a_narrow_panel() {
             {
                 area[3] = area[3].max(h.rect[1] + h.rect[3] - area[1]);
             }
-            let board = hit_rect(&c, |h| *h == Hit::BoardPage).expect("Leaderboard");
-            let panel_right = board[0] + board[2] + 1.0;
+            // The details' section, as far in from its right edge as the button's left.
+            let head = sections(&c, &s)[0];
+            let panel_right = head[0] + head[2] - (button[0] - head[0]) + 1.0;
             let boxes: Vec<(String, [f32; 4])> = text_boxes(&c)
                 .into_iter()
                 .filter(|(_, r)| {
                     let mid = [r[0] + r[2] / 2.0, r[1] + r[3] / 2.0];
                     inside(mid, [area[0], area[1], panel_right - area[0], area[3]], 0.0)
-                        && !inside(mid, board, 0.0)
                 })
                 .collect();
             for (t, r) in &boxes {
@@ -1849,73 +2999,34 @@ fn the_pp_button_leaves_values_out_rather_than_spill_out_of_a_narrow_panel() {
             }
         }
     }
-    assert!(fewest < 3, "the narrowest panel leaves 98% out");
+    // In the interface's own space the panel is never narrower than `PANEL_MIN_UI`: room for
+    // all three there.
+    assert_eq!(fewest, 3, "the narrowest panel shows every value");
 }
 
 #[test]
-fn the_leaderboard_chip_comes_in_with_the_pp_row_on_a_song_change() {
-    let (mut s, _songs, mut now) = menu_look_moving("select-look-board-enter");
+fn the_leaderboard_stays_in_place_on_a_song_change() {
+    let (mut s, _songs, mut now) = menu_look_moving("select-look-board-stays");
     let label = |c: &Canvas| {
-        let board = hit_rect(c, |h| *h == Hit::BoardPage).expect("Leaderboard");
+        let tab = hit_rect(c, |h| *h == Hit::BoardTab(false)).expect("the Local tab");
         let (range, _) = c
             .texts
             .iter()
-            .find(|(r, t)| {
-                t.trim() == "Leaderboard" && inside(c.shapes[r.start].center, board, 2.0)
-            })
+            .find(|(r, t)| t.trim() == "Local" && inside(c.shapes[r.start].center, tab, 2.0))
             .cloned()
             .expect("its label");
         c.shapes[range.start]
     };
     let rest = label(&settled(&mut s, &mut now));
     press(&mut s, KeyCode::ArrowRight, now);
-    // Just after the pp row starts in (260 ms on): right of its place and faint.
-    now += Duration::from_millis(16);
-    frame(&mut s, now);
-    now += Duration::from_millis(270);
-    let coming = label(&frame(&mut s, now));
-    assert!(
-        coming.center[0] > rest.center[0] + 1.0 && coming.center[0] <= rest.center[0] + 8.5,
-        "shifted right: {} vs {}",
-        coming.center[0],
-        rest.center[0]
-    );
-    assert!(coming.fill[3] < rest.fill[3] - 0.1, "fading in");
-    assert_eq!(coming.center[1], rest.center[1]);
-    let landed = label(&settled(&mut s, &mut now));
-    assert_eq!(landed.center, rest.center, "in place after");
-    assert_eq!(landed.fill[3], rest.fill[3]);
-}
-
-#[test]
-fn the_leaderboard_chip_goes_out_with_the_old_details() {
-    let (mut s, _songs, mut now) = menu_look_moving("select-look-board-leave");
-    let c = settled(&mut s, &mut now);
-    let chip = hit_rect(&c, |h| *h == Hit::BoardPage).expect("Leaderboard");
-    let (range, _) = c
-        .texts
-        .iter()
-        .find(|(r, t)| t.trim() == "Leaderboard" && inside(c.shapes[r.start].center, chip, 2.0))
-        .cloned()
-        .expect("its label");
-    let letter = c.shapes[range.start];
-    press(&mut s, KeyCode::ArrowRight, now);
-    now += Duration::from_millis(16);
-    frame(&mut s, now);
-    now += Duration::from_millis(32);
-    let going = frame(&mut s, now);
-    // The old one's first letter, a little left and fainter.
-    assert!(
-        going.shapes.iter().any(|sh| {
-            sh.half == letter.half
-                && sh.params == letter.params
-                && (sh.center[1] - letter.center[1]).abs() < 0.01
-                && sh.center[0] < letter.center[0] - 0.01
-                && sh.center[0] > letter.center[0] - 6.5
-                && sh.fill[3] < letter.fill[3]
-        }),
-        "the old chip going out with the details"
-    );
+    // While the details change, the board's tabs neither move nor fade: the section is the
+    // same, only its rows are the new map's.
+    for _ in 0..12 {
+        now += Duration::from_millis(24);
+        let l = label(&frame(&mut s, now));
+        assert_eq!(l.center, rest.center);
+        assert_eq!(l.fill[3], rest.fill[3]);
+    }
 }
 
 /// The y of the card of set `row` (its first row), if drawn.
@@ -1992,7 +3103,7 @@ fn a_set_picked_after_wheeling_glides_to_the_target_without_a_jump() {
     }
     let c = settled(&mut s, &mut now);
     // A set low on the screen, far from the target.
-    let [_, end] = s.select.frame_span();
+    let end = s.select.list_bottom() + 4.0;
     let (row, r) = cards(&c)
         .into_iter()
         .rev()
@@ -2030,29 +3141,48 @@ fn many_sets_charts() -> Vec<maps::Chart> {
 }
 
 #[test]
-fn song_select_s_routes_go_through_the_blur_and_legacy_s_do_not() {
-    let (mut s, _songs, mut now) = menu_look_moving("select-look-routes-blur");
+fn the_volume_mixer_comes_up_opaque_above_the_lane_of_actions() {
+    let (mut s, _songs, mut now) = menu_look("select-look-mixer");
+    s.volume.touch(now);
     let c = settled(&mut s, &mut now);
-    let (range, k) = c.blur.clone().expect("the routes are blurred");
-    assert_eq!(k, 1.0, "wholly, as the picture");
-    // The routes (none drawn here, without music): plain shapes, before song select's own.
-    assert!(
-        c.shapes[range.clone()].iter().all(plain),
-        "plain shapes only: the routes' notes and lines"
-    );
-    assert!(
-        c.texts
-            .iter()
-            .all(|(r, _)| r.end <= range.start || r.start >= range.end),
-        "no text of song select's in it"
-    );
-    // Legacy keeps them as they are.
-    let songs = Songs::new("select-look-routes-blur-legacy", &maps::all());
+    // The mixer's panel: the menu's tone, all but opaque (an overlay's).
+    let mixer = c
+        .shapes
+        .iter()
+        .filter(|sh| same_rgb(sh.fill, render::rgba(style::tone::PANEL, 1.0)))
+        .filter(|sh| sh.fill[3] >= 0.97)
+        .filter(|sh| sh.half[0] * 2.0 > 200.0 && sh.half[1] * 2.0 > 90.0)
+        .filter(|sh| sh.center[0] > c.width / 2.0)
+        .map(rect)
+        .next_back()
+        .expect("the mixer's panel, all but opaque");
+    let overlaps = |a: [f32; 4], b: [f32; 4]| {
+        a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+    };
+    for hit in [
+        Hit::Key(KeyCode::Enter),
+        Hit::ModsButton,
+        Hit::Key(KeyCode::F2),
+    ] {
+        let at = hit_rect(&c, |h| *h == hit).unwrap_or_else(|| panic!("{hit:?} on the lane"));
+        assert!(
+            !overlaps(mixer, at),
+            "the mixer {mixer:?} over {hit:?} at {at:?}"
+        );
+    }
+}
+
+#[test]
+fn song_select_s_routes_are_as_sharp_as_the_menu_s_in_every_layout() {
+    let (mut s, _songs, mut now) = menu_look_moving("select-look-routes-sharp");
+    let c = settled(&mut s, &mut now);
+    assert!(c.blur.is_none(), "the main menu's look: {:?}", c.blur);
+    let songs = Songs::new("select-look-routes-sharp-legacy", &maps::all());
     let mut legacy = state_with(harness::config(), songs.entries());
     let mut now = Instant::now();
     ready(&mut legacy, &mut now);
     let c = settled(&mut legacy, &mut now);
-    assert!(c.blur.is_none(), "{:?}", c.blur);
+    assert!(c.blur.is_none(), "Legacy: {:?}", c.blur);
 }
 
 #[test]
@@ -2064,11 +3194,9 @@ fn the_wheel_over_a_pp_simulator_field_steps_it() {
     let field = |c: &Canvas, f: u8| {
         hit_rect(c, |h| *h == Hit::PpSimField(f)).expect("the simulator's field")
     };
-    let k = (s.window_h / render::VIRTUAL_HEIGHT) as f64;
     let point = |s: &mut State, r: [f32; 4]| {
         // Its middle: the value, between its - and +.
-        let (px, py) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
-        s.mouse = (px as f64 * k, py as f64 * k);
+        s.mouse = to_pixels(s, r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
     };
     let before = s.preview.sim.expect("open");
     point(&mut s, field(&c, 0));
@@ -2223,70 +3351,41 @@ fn a_difficulty_rows_rating_bar_is_drawn_over_its_light_and_the_light_is_as_roun
     );
 }
 
-/// Song select's details page (bare): its box.
-fn details_page(c: &Canvas) -> [f32; 4] {
-    let fill = style::surface_fill(style::Surface::Raised);
-    c.shapes
-        .iter()
-        .filter(|sh| {
-            sh.params[0] == style::radius::CARD
-                && same_rgb(sh.fill, fill)
-                && sh.center[0] > c.width / 2.0
-                && sh.half[0] * 2.0 > 150.0
-        })
-        .map(rect)
-        .max_by(|a, b| (a[2] * a[3]).total_cmp(&(b[2] * b[3])))
-        .expect("the details page")
-}
-
 #[test]
-fn the_details_page_is_as_tall_as_what_is_on_it_and_grows_to_the_simulator() {
-    let (mut s, _songs, mut now) = menu_look_cfg("select-look-page-fit", &maps::all(), true);
-    let c = settled(&mut s, &mut now);
-    let page = details_page(&c);
-    let bottom = page[1] + page[3];
-    assert!(
-        (bottom - s.preview.panel_bottom).abs() < 0.5,
-        "the page ends under what's on it: {bottom} vs {}",
-        s.preview.panel_bottom
-    );
-    // Not the whole column down to the actions: the room under the details is left open.
-    let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
-    assert!(
-        bottom < play[1] - 30.0,
-        "the page ends at {bottom}, Play at {}",
-        play[1]
-    );
-    // The simulator makes the details taller: the page grows to them, smoothly.
-    s.click(Hit::PpSim, None);
-    now += Duration::from_millis(16);
-    frame(&mut s, now);
-    now += Duration::from_millis(16);
-    let c = frame(&mut s, now);
-    let growing = details_page(&c);
+fn the_pp_simulator_opens_within_the_details_section() {
+    let (mut s, _songs, mut now) = menu_look("select-look-sim-room");
     settled(&mut s, &mut now);
-    for _ in 0..20 {
-        now += Duration::from_millis(16);
-        frame(&mut s, now);
-    }
-    now += Duration::from_millis(16);
-    let c = frame(&mut s, now);
-    let grown = details_page(&c);
-    let (h0, h1, h2) = (page[3], growing[3], grown[3]);
-    assert!(h2 > h0 + 10.0, "taller with the simulator: {h0} -> {h2}");
-    assert!(h1 > h0 && h1 < h2, "on its way: {h0} -> {h1} -> {h2}");
+    s.click(Hit::PpSim, None);
+    let c = settled(&mut s, &mut now);
+    let head = sections(&c, &s)[0];
+    // Its fields and steps, and the button, all inside the details' section.
+    let sim: Vec<[f32; 4]> = c
+        .hits
+        .iter()
+        .filter(|h| matches!(h.hit, Hit::PpSim | Hit::PpSimStep(..) | Hit::PpSimField(..)))
+        .map(|h| h.rect)
+        .collect();
     assert!(
-        (grown[1] + grown[3] - s.preview.panel_bottom).abs() < 0.5,
-        "and as tall as its contents: {} vs {}",
-        grown[1] + grown[3],
-        s.preview.panel_bottom
+        sim.len() >= 7,
+        "the button, two fields and four steps: {sim:?}"
     );
+    for r in sim {
+        assert!(
+            r[0] >= head[0]
+                && r[1] >= head[1]
+                && r[0] + r[2] <= head[0] + head[2]
+                && r[1] + r[3] <= head[1] + head[3],
+            "{r:?} in {head:?}"
+        );
+    }
 }
 
 #[test]
-fn everything_on_the_details_page_is_within_the_preview_tiles_edges_at_any_list_width() {
+fn everything_in_the_right_column_is_within_the_preview_tiles_edges_at_any_list_width() {
     let (mut s, _songs, mut now) = menu_look("select-look-page-edges");
-    let (min, max) = ui::Select::share_range(853.3333).expect("room for both");
+    // The screen's width in song select's own units.
+    let own = harness::WIDTH / s.select_scale - 2.0 * s.select_left;
+    let (min, max) = s.select.share_range_here(own).expect("room for both");
     for (share, drum) in [min, crate::config::LIST_SHARE.2, max]
         .into_iter()
         .flat_map(|share| [(share, true), (share, false)])
@@ -2294,7 +3393,11 @@ fn everything_on_the_details_page_is_within_the_preview_tiles_edges_at_any_list_
         s.cfg.song_list_share = share;
         s.cfg.preview_drum = drum;
         let c = settled(&mut s, &mut now);
-        let page = details_page(&c);
+        let column = sections(&c, &s);
+        let page = {
+            let (first, last) = (column[0], column[column.len() - 1]);
+            [first[0], first[1], first[2], last[1] + last[3] - first[1]]
+        };
         let lane_hit = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
         let fill = style::surface_fill(style::Surface::Raised);
         let tile = c
@@ -2310,12 +3413,15 @@ fn everything_on_the_details_page_is_within_the_preview_tiles_edges_at_any_list_
             .next()
             .expect("the lane's tile");
         let (left, right) = (tile[0], tile[0] + tile[2]);
-        // Everything drawn on the page (not the page itself or the picture across its top)
-        // keeps within the lane tile's edges: nothing sticks out, not by part of a pixel.
+        // Everything drawn on the column's sections (not the sections themselves or the
+        // picture across the top) keeps within the lane tile's edges: the details, the
+        // leaderboard and the preview line up, nothing sticks out, not by part of a pixel.
         let out: Vec<[f32; 4]> = c
             .shapes
             .iter()
             .filter(|sh| inside(sh.center, page, 0.0) && sh.half[0] * 2.0 < page[2] - 1.0)
+            // (Not the screen's backdrop, taller than the page: the vignette down its side.)
+            .filter(|sh| sh.half[1] * 2.0 <= page[3] + 1.0)
             .filter(|sh| sh.fill[3] > 0.0 || sh.border[3] > 0.0)
             .map(rect)
             .filter(|r| r[0] < left - 0.01 || r[0] + r[2] > right + 0.01)
@@ -2345,9 +3451,30 @@ fn everything_on_the_details_page_is_within_the_preview_tiles_edges_at_any_list_
                 assert!(apart, "share {share}: {a:?} {ra:?} runs into {b:?} {rb:?}");
             }
         }
-        // And the details start on the same line as the lane: the title, the stats, the
-        // timeline's times.
-        for t in ["Regression", "OD", "0:00 / 0:10"] {
+        // And the details start on the same line as the lane: the title, the stats' line (OD
+        // first), the timeline's times.
+        let od = c
+            .texts
+            .iter()
+            .filter(|(_, s)| s == "OD")
+            .filter_map(|(r, _)| c.shapes.get(r.clone()))
+            .map(|g| {
+                let x0 = g.iter().map(|sh| rect(sh)[0]).fold(f32::MAX, f32::min);
+                let x1 = g
+                    .iter()
+                    .map(|sh| rect(sh)[0] + rect(sh)[2])
+                    .fold(f32::MIN, f32::max);
+                let y = rect(&g[0])[1];
+                [x0, x1, y]
+            })
+            .find(|[x0, _, y]| inside([*x0, *y], page, 0.0))
+            .expect("OD");
+        assert!(
+            od[0] >= left - 0.01 && od[0] < left + 2.0,
+            "share {share}: the stats from {}, the lane from {left}",
+            od[0]
+        );
+        for t in ["Regression", "0:00 / 0:10"] {
             let at = c
                 .texts
                 .iter()
@@ -2364,4 +3491,544 @@ fn everything_on_the_details_page_is_within_the_preview_tiles_edges_at_any_list_
             );
         }
     }
+}
+
+#[test]
+fn the_selected_difficulty_has_no_line_round_it_and_its_badge_room_inside_the_brackets() {
+    let (mut s, _songs, mut now) = menu_look("select-look-diff-brackets");
+    let c = settled(&mut s, &mut now);
+    let cursor = s.select.cursor();
+    let row = hit_rect(&c, |h| matches!(h, Hit::SongRow(r) if *r == cursor)).expect("the row");
+    // Only the brackets and a light lift mark it: nothing the row's size has a line round it.
+    let lined: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && sh.params[1] > 0.0 && !badge(sh))
+        .map(rect)
+        .filter(|r| {
+            (r[0] - row[0]).abs() < 1.0
+                && (r[2] - row[2]).abs() < 1.0
+                && inside([r[0], r[1]], row, 1.0)
+        })
+        .collect();
+    assert!(
+        lined.is_empty(),
+        "no line round the selected difficulty: {lined:?}"
+    );
+    // Its rating's badge well inside the brackets' right side (3 out from the row).
+    let badge_right = c
+        .shapes
+        .iter()
+        .filter(|sh| badge(sh) && inside(sh.center, row, 0.0))
+        .map(|sh| sh.center[0] + sh.half[0])
+        .fold(f32::MIN, f32::max);
+    assert!(badge_right > row[0], "the badge is on the row");
+    let brackets = row[0] + row[2] + 3.0;
+    assert!(
+        brackets - badge_right >= 16.0,
+        "room between the badge and the brackets: {}",
+        brackets - badge_right
+    );
+}
+
+#[test]
+fn a_board_row_s_value_and_its_age_under_it_have_room_between_them() {
+    let (mut s, _songs, mut now) = menu_look("select-look-board-gap");
+    let play = local_play(&s, "Ann", 900_000, 0.99);
+    s.scores.push(play);
+    let c = on_board(&mut s, &mut now, false);
+    let row = hit_rect(&c, |h| *h == Hit::ScoreRow(0)).expect("the row");
+    // The texts ending at the row's right end, by their ink: the value on top, its age under it.
+    let ink = |r: &std::ops::Range<usize>| {
+        c.shapes[r.clone()]
+            .iter()
+            .map(rect)
+            .fold([f32::MAX, f32::MIN, f32::MIN], |[t, b, e], g| {
+                [t.min(g[1]), b.max(g[1] + g[3]), e.max(g[0] + g[2])]
+            })
+    };
+    let mut right: Vec<([f32; 3], String)> = c
+        .texts
+        .iter()
+        .filter(|(r, _)| !r.is_empty())
+        .map(|(r, t)| (ink(r), t.clone()))
+        .filter(|([t, b, e], _)| {
+            *t >= row[1] - 0.5 && *b <= row[1] + row[3] + 0.5 && *e > row[0] + row[2] - 12.0
+        })
+        .collect();
+    right.sort_by(|a, b| a.0[0].total_cmp(&b.0[0]));
+    assert_eq!(right.len(), 2, "the value and the age: {right:?}");
+    let gap = right[1].0[0] - right[0].0[1];
+    assert!(
+        gap >= 4.0,
+        "room between {:?} and {:?}: {gap}",
+        right[0].1,
+        right[1].1
+    );
+}
+
+#[test]
+fn the_collection_button_is_on_the_search_row_once_there_are_collections() {
+    let (mut s, _songs, mut now) = menu_look("select-look-collection");
+    let c = settled(&mut s, &mut now);
+    assert!(
+        hit_rect(&c, |h| *h == Hit::CollectionPick).is_none(),
+        "none without collections"
+    );
+    s.select.collections = vec![ui::Shown {
+        name: "dans".into(),
+        own: true,
+        ..Default::default()
+    }];
+    let c = settled(&mut s, &mut now);
+    let menu = hit_rect(&c, |h| *h == Hit::ToMenu).expect("Menu");
+    let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
+    let sort = hit_rect(&c, |h| *h == Hit::SortList).expect("Sort");
+    let pick = hit_rect(&c, |h| *h == Hit::CollectionPick).expect("the collection button");
+    assert!(
+        (pick[1] + pick[3] / 2.0 - (search[1] + search[3] / 2.0)).abs() < 0.5,
+        "on the search row: {pick:?} {search:?}"
+    );
+    let _ = menu;
+    let apart = |a: [f32; 4], b: [f32; 4]| a[0] + a[2] <= b[0] + 0.5 || b[0] + b[2] <= a[0] + 0.5;
+    assert!(
+        apart(pick, search) && apart(pick, sort),
+        "{pick:?} {search:?} {sort:?}"
+    );
+    assert!(
+        pick[0] + pick[2] <= 24.0 + s.select.list_w(c.width) + 0.5,
+        "over the list: {pick:?}"
+    );
+    let texts = texts_in(&c, pick);
+    assert!(
+        texts.iter().any(|t| t == "COLLECTION"),
+        "its caption: {texts:?}"
+    );
+    // Its list opens over the screen: every row named whole, inside it, and framed in song
+    // select's palette (a thin neutral edge, the accent left to the selection).
+    s.click(Hit::CollectionPick, None);
+    let c = settled(&mut s, &mut now);
+    let rows: Vec<[f32; 4]> = c
+        .hits
+        .iter()
+        .filter(|h| matches!(h.hit, Hit::PickRow(_)))
+        .map(|h| h.rect)
+        .collect();
+    assert!(!rows.is_empty(), "the collections' list");
+    let boxes = text_boxes(&c);
+    assert!(
+        boxes.iter().any(|(t, _)| t.starts_with("dans")),
+        "named whole: {boxes:?}"
+    );
+    for (t, r) in boxes.iter().filter(|(_, r)| {
+        rows.iter()
+            .any(|row| inside([r[0], r[1] + r[3] / 2.0], *row, 0.0))
+    }) {
+        let row = rows
+            .iter()
+            .find(|row| inside([r[0], r[1] + r[3] / 2.0], **row, 0.0))
+            .unwrap();
+        assert!(
+            r[0] + r[2] <= row[0] + row[2] + 0.01,
+            "{t:?} {r:?} within {row:?}"
+        );
+    }
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let left = rows.iter().map(|r| r[0]).fold(f32::MAX, f32::min);
+    let frame = c
+        .shapes
+        .iter()
+        .rev()
+        .filter(|sh| plain(sh) && sh.params[1] > 0.0)
+        .map(|sh| (rect(sh), *sh))
+        .find(|(r, _)| r[0] < left && r[0] + r[2] > left + 100.0 && r[3] > 40.0)
+        .map(|(_, sh)| sh)
+        .expect("the list's frame");
+    assert!(
+        same_rgb(frame.border, edge),
+        "a neutral edge round the list"
+    );
+    // (Drawn over the screen in its units: one there is 1.5 in song select's.)
+    assert!(
+        frame.params[1] <= 1.5 * style::tone::LINE + 0.01,
+        "a thin one: {} {:?}",
+        frame.params[1],
+        rect(&frame)
+    );
+}
+
+#[test]
+fn the_song_list_runs_down_a_dark_panel_with_a_line_along_its_top() {
+    let (mut s, _songs, mut now) = menu_look("select-look-list-panel");
+    let c = settled(&mut s, &mut now);
+    let lw = s.select.list_w(c.width);
+    let shown = cards(&c);
+    let first_top = shown.iter().map(|(_, r)| r[1]).fold(f32::MAX, f32::min);
+    let last_bottom = shown
+        .iter()
+        .map(|(_, r)| r[1] + r[3])
+        .fold(f32::MIN, f32::max);
+    // A dark panel the whole list is on (nothing bright shows between its rows), no line round
+    // it.
+    let panel_rgb = render::rgba(style::PANEL_COLD, 1.0);
+    let panel = c
+        .shapes
+        .iter()
+        .filter(|sh| {
+            plain(sh)
+                && same_rgb(sh.fill, panel_rgb)
+                && sh.fill[3] >= 0.9
+                && (sh.params[1] == 0.0 || sh.border == sh.fill)
+        })
+        .map(rect)
+        .find(|r| r[0] <= 24.0 && r[0] + r[2] >= 24.0 + lw && r[3] > 200.0)
+        .expect("a dark panel under the list");
+    assert!(
+        panel[1] < first_top && panel[1] + panel[3] >= last_bottom - 0.5,
+        "the list on it: {panel:?}, cards {first_top}..{last_bottom}"
+    );
+    // A thin line along its top, under the search row: the rows scrolling up go under it.
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    c.shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, edge))
+        .map(rect)
+        .find(|r| {
+            (r[1] - panel[1]).abs() < 0.5
+                && (r[3] - style::tone::LINE).abs() < 0.01
+                && r[2] > lw * 0.8
+        })
+        .expect("a line along its top");
+    let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
+    assert!(
+        panel[1] >= search[1] + search[3],
+        "under the search row: {panel:?} {search:?}"
+    );
+}
+
+#[test]
+fn a_maps_picture_behind_song_select_is_under_a_dense_cold_ground_darker_at_the_edges() {
+    let (mut s, _songs, mut now) = menu_look("select-look-bg-dim");
+    s.preview.has_background = true;
+    settled(&mut s, &mut now);
+    s.preview.has_background = true;
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let c = frame(&mut s, now + Duration::from_millis(16));
+    // Over the whole screen a deep navy, not a grey: a yellow or white picture doesn't colour
+    // the screen and the room between the panels brown.
+    let ground = render::rgba(style::GROUND, 1.0);
+    let tint = c
+        .shapes
+        .iter()
+        .find(|sh| {
+            plain(sh)
+                && same_rgb(sh.fill, ground)
+                && sh.half[0] * 2.0 >= c.width - 1.0
+                && sh.half[1] * 2.0 >= render::VIRTUAL_HEIGHT - 1.0
+        })
+        .expect("the ground over the whole screen");
+    assert!(ground[2] > ground[0], "cold: {ground:?}");
+    let shown = s.bg_brightness * (1.0 - tint.fill[3]);
+    assert!(
+        s.bg_brightness > 0.0 && shown <= 0.1,
+        "a bright picture doesn't wash the screen out: {} under {}",
+        s.bg_brightness,
+        tint.fill[3]
+    );
+    // Darker still at the screen's sides: a shade from each edge in.
+    let sides = c
+        .shapes
+        .iter()
+        .filter(|sh| sh.params[3] == render::SHADE_EASED && same_rgb(sh.fill, ground))
+        .filter(|sh| sh.half[1] * 2.0 >= render::VIRTUAL_HEIGHT - 1.0)
+        .count();
+    assert_eq!(sides, 2, "a vignette down both sides");
+}
+
+#[test]
+fn the_sort_and_filter_panel_has_room_for_every_label_and_song_select_s_colours() {
+    let (mut s, _songs, mut now) = menu_look("select-look-lens");
+    settled(&mut s, &mut now);
+    assert!(s.select.in_ui_space(), "the 720 layout");
+    s.modifiers_ctrl = true;
+    press(&mut s, KeyCode::KeyS, now);
+    s.modifiers_ctrl = false;
+    assert!(s.select.lens_ui.is_some());
+    // A big library: every status there, counts of three digits.
+    s.select.facets.has_status = 0x1f;
+    s.select.facets.statuses = [837, 232, 151, 74, 28];
+    s.select.facets.lengths = [209, 745, 318, 96];
+    let c = settled(&mut s, &mut now);
+    let panel = hit_rect(&c, |h| *h == Hit::Lens(ui::LensItem::Panel)).expect("the panel");
+    // The panel's own texts: drawn over its frame (the list's are under it).
+    let over = c
+        .shapes
+        .iter()
+        .position(|sh| {
+            let r = rect(sh);
+            plain(sh)
+                && sh.params[1] > 0.0
+                && (r[0] - panel[0]).abs() < 0.5
+                && (r[2] - panel[2]).abs() < 0.5
+        })
+        .expect("the panel's frame");
+    let starts: Vec<usize> = c
+        .texts
+        .iter()
+        .filter(|(r, _)| r.start < r.end)
+        .map(|(r, _)| r.start)
+        .collect();
+    let texts: Vec<(String, [f32; 4])> = text_boxes(&c)
+        .into_iter()
+        .zip(starts)
+        .filter(|((_, r), at)| *at > over && inside([r[0], r[1]], panel, 0.0))
+        .map(|(t, _)| t)
+        .collect();
+    let has = |t: &str| texts.iter().any(|(s, _)| s == t);
+    // Every label whole: the sorts, the filters' captions and each block's name and count.
+    for t in [
+        "recently played",
+        "date added",
+        "length (minutes)",
+        "status",
+        "not played yet",
+        "reset",
+    ] {
+        assert!(has(t), "{t:?} whole: {texts:?}");
+    }
+    for (name, ..) in ui::lens::STATUSES {
+        assert!(has(name), "the {name} status named: {texts:?}");
+    }
+    for (name, _) in ui::lens::LENGTHS {
+        assert!(has(name), "the {name} length named: {texts:?}");
+    }
+    for n in ["837", "232", "151", "74", "28", "209", "745"] {
+        assert!(has(n), "the count {n}: {texts:?}");
+    }
+    // No text runs into another, and each block's text keeps within it.
+    for (i, (a, ra)) in texts.iter().enumerate() {
+        for (b, rb) in &texts[i + 1..] {
+            let apart = ra[0] + ra[2] <= rb[0]
+                || rb[0] + rb[2] <= ra[0]
+                || ra[1] + ra[3] <= rb[1]
+                || rb[1] + rb[3] <= ra[1];
+            assert!(apart, "{a:?} {ra:?} runs into {b:?} {rb:?}");
+        }
+    }
+    for h in c.hits.iter().filter(|h| {
+        matches!(
+            h.hit,
+            Hit::Lens(ui::LensItem::Status(_) | ui::LensItem::Length(_) | ui::LensItem::Sort(_))
+        )
+    }) {
+        for (t, r) in &texts {
+            if inside([r[0] + r[2] / 2.0, r[1] + r[3] / 2.0], h.rect, 0.0) {
+                assert!(
+                    r[0] >= h.rect[0] - 0.01 && r[0] + r[2] <= h.rect[0] + h.rect[2] + 0.01,
+                    "{t:?} {r:?} within its block {:?}",
+                    h.rect
+                );
+            }
+        }
+    }
+    // Song select's palette: a thin neutral edge round the panel (no yellow or gold frame), the
+    // sort picked in Play's colour.
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let frame = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && sh.params[1] > 0.0)
+        .map(|sh| (rect(sh), sh))
+        .find(|(r, _)| (r[0] - panel[0]).abs() < 0.5 && (r[2] - panel[2]).abs() < 0.5)
+        .map(|(_, sh)| *sh)
+        .expect("the panel's frame");
+    assert!(same_rgb(frame.border, edge), "a neutral edge");
+    assert!(frame.params[1] <= style::tone::LINE + 0.01, "a thin one");
+    let gold = render::rgba(0xFFD34D, 1.0);
+    assert!(
+        !c.shapes.iter().any(|sh| inside(sh.center, panel, 0.0)
+            && sh.params[1] > 0.0
+            && same_rgb(sh.border, gold)),
+        "nothing gold"
+    );
+    let accent = render::rgba(style::role::primary(), 1.0);
+    let sort = hit_rect(&c, |h| {
+        *h == Hit::Lens(ui::LensItem::Sort(
+            ui::SortMode::ALL
+                .iter()
+                .position(|&m| m == s.select.sort)
+                .unwrap(),
+        ))
+    })
+    .expect("the sort picked");
+    assert!(
+        c.shapes
+            .iter()
+            .any(|sh| inside(sh.center, sort, 0.0) && same_rgb(sh.fill, accent)),
+        "the sort picked in Play's colour"
+    );
+}
+
+#[test]
+fn the_preview_s_notes_run_along_a_corridor_as_tall_as_the_lane_not_through_empty_room() {
+    let (mut s, _songs, mut now) = menu_look("select-look-corridor");
+    let c = settled(&mut s, &mut now);
+    let [bx, by, bw, bh] = s.preview.box_rect().expect("the lane's box");
+    let corridor = s.preview.corridor().expect("a plain map's corridor");
+    let [cx, cy, cw, ch] = corridor;
+    // Across the lane's tile, in the middle of its box, a share of it: the notes' and the drum's
+    // height (the band of a play's lane at the preview's scale), not the whole box.
+    let tile = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
+    assert!(
+        (cx - tile[0]).abs() < 0.01 && cx + cw >= tile[0] + tile[2] - 0.01 && cw > 0.9 * bw,
+        "across the tile: {corridor:?} over {tile:?}"
+    );
+    assert!(cx <= bx + 0.01, "from the drum's side");
+    assert!(
+        ((cy + ch / 2.0) - (by + bh / 2.0)).abs() < 1.0,
+        "in the box's middle: {corridor:?} in {by}..{}",
+        by + bh
+    );
+    assert!(
+        ch < bh * 0.95 && ch > bh * 0.3,
+        "the lane's height: {ch} of {bh}"
+    );
+    // A step lighter than the tile, a thin line of the panels' edge along its top and bottom.
+    let lifted = style::surface_fill(style::Surface::Lifted);
+    let at = |r: [f32; 4]| (r[0] - cx).abs() < 0.01 && (r[2] - cw).abs() < 0.01;
+    assert!(
+        c.shapes.iter().any(|sh| plain(sh)
+            && same_rgb(sh.fill, lifted)
+            && at(rect(sh))
+            && (rect(sh)[3] - ch).abs() < 0.01),
+        "its fill"
+    );
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let lines: Vec<f32> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, edge) && at(rect(sh)))
+        .map(|sh| rect(sh)[1])
+        .filter(|&ly| (ly - cy).abs() < 0.01 || (ly + style::tone::LINE - (cy + ch)).abs() < 0.01)
+        .collect();
+    assert_eq!(lines.len(), 2, "a line along its top and bottom: {lines:?}");
+}
+
+#[test]
+fn the_right_column_leans_with_the_pointer_as_one_its_actions_with_it() {
+    let (mut s, _songs, mut now) = menu_look("select-look-lean");
+    s.cfg.animations = true;
+    let c = settled(&mut s, &mut now);
+    let (w, h) = (c.width, c.height);
+    let mut at = |s: &mut State, x: f32, y: f32| -> Canvas {
+        let (px, py) = to_pixels(s, x, y);
+        s.mouse_moved(px, py);
+        s.mouse = (px, py);
+        let mut c = frame(s, now);
+        for _ in 0..120 {
+            now += Duration::from_millis(16);
+            c = frame(s, now);
+        }
+        c
+    };
+    let parts = |c: &Canvas, s: &State| {
+        let hit = |want: Hit| hit_rect(c, |h| *h == want).expect("a button");
+        [
+            column_panel(c, s).expect("the column's panel"),
+            hit(Hit::ModsButton),
+            hit(Hit::Key(KeyCode::F2)),
+            hit(Hit::Key(KeyCode::Enter)),
+            hit(Hit::PreviewTab),
+        ]
+    };
+    // The pointer in the middle leans nothing; at the top left the column leans away.
+    let still = parts(&at(&mut s, w / 2.0, h / 2.0), &s);
+    let leant = parts(&at(&mut s, 30.0, 60.0), &s);
+    let moved = |a: [f32; 4], b: [f32; 4]| [b[0] - a[0], b[1] - a[1]];
+    let panel = moved(still[0], leant[0]);
+    assert!(panel[0].abs() > 0.5, "the column leans: {panel:?}");
+    // Mods, Random and Play (their hits too) and the tabs go with it, as one.
+    for (a, b) in still.iter().zip(&leant).skip(1) {
+        let d = moved(*a, *b);
+        assert!(
+            (d[0] - panel[0]).abs() < 0.01 && (d[1] - panel[1]).abs() < 0.01,
+            "{b:?} moved {d:?}, the column {panel:?}"
+        );
+    }
+}
+
+#[test]
+fn picture_copies_made_ahead_wait_while_the_list_flies_and_go_on_once_it_rests() {
+    // The copies take a core a small machine needs for the cards and banner coming into view.
+    let (mut s, _songs, mut now) = many_sets("select-look-flying");
+    settled(&mut s, &mut now);
+    let held = |s: &State| (s.pictures.held(), s.card_pictures.held());
+    assert!(!s.select.flying());
+    assert_eq!(held(&s), (false, false), "the list at rest: they go on");
+    // Dragged, then wheeled: each frame's hold follows the list as the frame before left it.
+    let mut flown = 0;
+    drag_then_wheel(&mut s, &mut now, 600.0, 12, |s, _, how| {
+        if s.select.flying() {
+            flown += 1;
+            assert_eq!(held(s), (true, true), "{how}: on the move, they wait");
+        }
+    });
+    assert!(flown > 0, "the list flew");
+    settled(&mut s, &mut now);
+    assert!(!s.select.flying(), "come to rest");
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(held(&s), (false, false), "at rest again: they go on");
+}
+
+#[test]
+fn the_autoplay_is_not_played_on_while_a_board_s_tab_hides_it() {
+    let (mut s, _songs, mut now) = menu_look("select-look-autoplay-hidden");
+    settled(&mut s, &mut now);
+    assert!(!s.preview.autoplay_hidden, "the preview's tab shows it");
+    on_board(&mut s, &mut now, false);
+    assert!(s.preview.autoplay_hidden, "the local board's tab");
+    on_board(&mut s, &mut now, true);
+    assert!(s.preview.autoplay_hidden, "the online board's tab");
+    s.click(Hit::PreviewTab, None);
+    settled(&mut s, &mut now);
+    assert!(!s.preview.autoplay_hidden, "back on the preview's tab");
+    // Legacy shows the autoplay beside its board: it plays on there.
+    on_board(&mut s, &mut now, false);
+    s.cfg.main_menu = false;
+    settled(&mut s, &mut now);
+    assert!(s.select.legacy);
+    assert!(!s.preview.autoplay_hidden, "the Legacy look");
+}
+
+#[test]
+fn a_rows_letter_and_the_board_wait_for_the_maps_hash_worked_out_off_the_frame() {
+    let (mut s, _songs, mut now) = menu_look("select-look-hash-later");
+    let i = s.select.selected().expect("a map selected");
+    // A play on it, as one made before.
+    settled(&mut s, &mut now);
+    let hash = s.library[i]
+        .known_hash()
+        .expect("worked out for its row and board");
+    assert!(!s.hasher.is_busy());
+    s.scores.push(scores::ScoreRow {
+        map_hash: hash,
+        date: 0,
+        score: 1_000_000,
+        accuracy: 1.0,
+        max_combo: 10,
+        miss: 0,
+        rate: 1.0,
+        player: "me".into(),
+        file: Default::default(),
+        mods: String::new(),
+        pp: None,
+    });
+    let c = settled(&mut s, &mut now);
+    assert!(
+        c.texts.iter().any(|(_, t)| t.trim() == "SS"),
+        "the new play's letter shows on its row"
+    );
+    assert_eq!(s.grades.get(hash), Some("SS"));
 }

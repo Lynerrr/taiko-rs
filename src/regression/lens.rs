@@ -458,6 +458,54 @@ fn the_filters_stay_across_tabs_and_count_what_they_leave() {
 }
 
 #[test]
+fn the_shown_source_tab_has_a_bar_of_the_accent_and_no_brackets_or_colour_squares() {
+    let lib = library();
+    let s = select(&lib);
+    let tabs = s.source_tabs();
+    let mut c = crate::render::Canvas {
+        width: 853.0,
+        ..Default::default()
+    };
+    s.draw_source_tabs(&mut c, 24.0, 60.0, 400.0, &tabs);
+    let accent = crate::render::rgba(crate::render::accent(), 1.0);
+    let bars: Vec<_> = c
+        .shapes
+        .iter()
+        .filter(|sh| sh.fill == accent && sh.half[1] * 2.0 <= 2.01 && sh.half[0] * 2.0 > 40.0)
+        .collect();
+    assert_eq!(bars.len(), 1, "one bar, under the shown tab");
+    let shown = c
+        .hits
+        .iter()
+        .find(|h| h.hit == crate::hit::Hit::SongSource(tabs[0].index()))
+        .map(|h| h.rect)
+        .expect("the shown tab");
+    let [bx, by] = bars[0].center;
+    assert!(
+        bx > shown[0] && bx < shown[0] + shown[2],
+        "under the shown tab"
+    );
+    assert!(by > shown[1] + shown[3] / 2.0, "along its bottom");
+    // No outline in the selector's colour (the list's brackets), no small square per source.
+    let selector = crate::render::rgba(crate::style::selector_colour(), 1.0);
+    assert!(
+        c.shapes
+            .iter()
+            .all(|sh| sh.border[..3] != selector[..3] || sh.params[1] == 0.0)
+    );
+    for tab in &tabs {
+        let col = crate::render::rgba(tab.colour(), 1.0);
+        assert!(
+            !c.shapes
+                .iter()
+                .any(|sh| sh.fill[..3] == col[..3] && sh.half[0] * 2.0 <= 6.0),
+            "no square of {}'s colour",
+            tab.label()
+        );
+    }
+}
+
+#[test]
 fn each_source_tab_sits_on_a_chip_of_its_own_the_shown_one_lifted() {
     use crate::style::{Surface, radius, surface_fill};
     let lib = library();

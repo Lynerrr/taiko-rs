@@ -130,6 +130,7 @@ struct Section {
 #[cfg(test)]
 mod list_layout_tests;
 
+mod classic;
 pub mod lens;
 pub use lens::{Facets, Filters, LensItem, LensUi, Order, Source, Tabs, Token, course_colour};
 
@@ -368,6 +369,8 @@ pub struct Select {
     /// Selections come faster than the list gets to them (`draw`): the banner's picture of
     /// where it's going isn't read ahead.
     hold_pictures: bool,
+    /// On the move as last drawn (`flying`).
+    flying: bool,
     /// Where the list was scrolled last frame, and how fast it's going (units a ms, smoothed):
     /// the cards' pictures ahead of it are read first.
     seen_scroll: Option<f32>,
@@ -379,10 +382,15 @@ pub struct Select {
     rng: u64,
     /// The song list's share of the width (`Config::song_list_share`).
     pub list_share: f32,
+    /// How tall the space it's laid out in is (`render::Canvas::begin_space`), as last drawn:
+    /// the screen's 480, or the interface's own.
+    pub height: f32,
     /// A banner takes the band under the panels (picking a map): they stop above it.
     pub banner: bool,
     /// The Legacy menu setting: tabs on top, keys spelled out at the bottom.
     pub legacy: bool,
+    /// Drawn as in 1.0 (`Config::legacy_menu`): rows, not cards (`draw_classic`).
+    pub classic: bool,
     /// The way back leads to the main menu, not to a lobby.
     pub to_menu: bool,
     /// A mod's customization is open over the top of the screen: no way back to show.
@@ -473,6 +481,7 @@ struct FreeScroll {
 /// seen gliding, not jumping three rows on (which, the cards all alike, reads as standing still).
 const WHEEL_STEP: f32 = SONG_ROW_H * 3.0;
 const WHEEL_TAU: f32 = 110.0;
+const WHEEL_TAU_CLASSIC: f32 = 45.0;
 /// How far a notch past an end of the list pushes it before it springs back.
 const WHEEL_END_BUMP: f32 = 10.0;
 /// From a list moved by hand to a song picked in it: a longer glide the farther it goes.
@@ -485,35 +494,78 @@ const LIST_ANIM_MS: f32 = 200.0;
 /// Top and bottom of the song list (virtual units): with the tabs of the Legacy menu above it,
 /// and without.
 const LIST_TOP_LEGACY: f32 = 86.0;
-const LIST_TOP: f32 = 52.0;
+const LIST_TOP: f32 = 60.0;
+/// The classic (1.0) look keeps its row and list where they were.
+const LIST_TOP_CLASSIC: f32 = 52.0;
+const SEARCH_ROW_CLASSIC: f32 = 20.0;
+/// The main menu's look: where the search row starts, and how far its strip reaches past it.
+pub(crate) const SEARCH_ROW: f32 = 28.0;
+pub(crate) const SEARCH_STRIP_PAD: f32 = 4.0;
 pub use crate::config::LIST_SHARE;
 /// The narrowest the song list and the panel beside it get (virtual units).
 const LIST_MIN: f32 = 260.0;
 const PANEL_MIN: f32 = 220.0;
+/// In the interface's own space (`Select::in_ui_space`): the narrowest the song list and the
+/// panel beside it get, and the widest the list gets (about 45% of a 16:9 screen, so the panel
+/// has room for its leaderboard).
+const LIST_MIN_UI: f32 = 360.0;
+const PANEL_MIN_UI: f32 = 420.0;
+const LIST_MAX_UI: f32 = 580.0;
 /// Height of a song's own row in the list (virtual units).
 pub const SONG_ROW_H: f32 = 34.0;
+/// A difficulty's row and a section's heading in the list.
+const DIFF_ROW_H: f32 = 22.0;
+const SECTION_ROW_H: f32 = 20.0;
+/// The rows in the interface's own space (`Select::in_ui_space`): two thirds the size of the
+/// screen's units there, its text bigger beside them (`render::TextSizes::UI`), so the rows are
+/// taller in its units for their two lines to keep apart.
+const SONG_ROW_H_UI: f32 = 44.0;
+const DIFF_ROW_H_UI: f32 = 26.0;
+const SECTION_ROW_H_UI: f32 = 24.0;
 
-/// The cards of the main menu's look: how far in a set's card sits unless it's open, how far one
-/// under the pointer comes out, how bright the sets not open are, the corners, how long a card's
+/// The cards of the main menu's look: how far one under the pointer comes out (out of the
+/// list's wave, `list_wave`), how bright the sets not open are, the corners, how long a card's
 /// picture takes to fade in, the shade over it (left, under the title, to right), how far up the
 /// list's bottom the last cards fade out, and how bright a difficulty's bar is unless selected.
-const CARD_INSET: f32 = 12.0;
 const CARD_HOVER: f32 = 4.0;
 const CARD_DIM: f32 = 0.7;
 const CARD_RADIUS: f32 = crate::style::radius::CARD;
-/// How bright the faint edge round a card is (not the open one, which has the selection's).
-const CARD_EDGE: f32 = 0.1;
+/// How bright the faint edge round a card under the pointer is (none at rest: the cards are
+/// told apart by their tone and the room between them; the open one has the selection's).
+const CARD_EDGE: f32 = 0.18;
 /// A set opening: its difficulties drop in from this far above, this many ms apart, out from
 /// the selected one both ways, the last of them at most `DIFF_CASCADE_SPAN_MS` after it (a set
 /// of many difficulties drops them in closer together, its selected one first).
 const DIFF_DROP: f32 = 8.0;
 const DIFF_CASCADE_MS: f32 = 30.0;
 const DIFF_CASCADE_SPAN_MS: f32 = 120.0;
-const COVER_FADE_MS: f32 = 200.0;
+/// How long a card's picture takes to come in once it's read (scrolled to fast, they ease in
+/// rather than snap).
+const COVER_FADE_MS: f32 = 140.0;
 /// How round a difficulty row's card is, and its light under the pointer or the selection's.
 const DIFF_ROUND: f32 = 4.0;
-const COVER_SHADE: (f32, f32) = (0.85, 0.4);
-const BOTTOM_FADE: f32 = 16.0;
+/// A card's picture: none of it from the card's left to the first value's share of its width
+/// (only the card's own tone under the title and artist), then coming in out of nothing, eased,
+/// to the right end, where as much of it shows as the second value on a card not open, the
+/// third on the open one.
+pub(crate) const CARD_ART: (f32, f32, f32) = (0.32, 0.33, 0.58);
+/// How far in from the list's right end a difficulty's rating badge ends in the main menu's look:
+/// well inside the selection's brackets.
+const DIFF_BADGE_INSET: f32 = 18.0;
+/// The open set's card: its edge in the selection's colour (muted: its brackets are the strong
+/// mark), and how strong its brackets are next to the selected difficulty's.
+const OPEN_EDGE: f32 = 0.5;
+const OPEN_BRACKETS: f32 = 0.8;
+/// Where the line joining an open set's difficulties to its card runs down (on the wave: in by
+/// the least of the set's rows' `list_wave`, one straight trunk for the whole set), and how far
+/// short of a difficulty's card its step into the row stops (clear of the selection's brackets,
+/// 3 out from the card).
+const DIFF_LINK_X: f32 = 34.0;
+const DIFF_LINK_GAP: f32 = 5.0;
+/// How much a row cut by the list's top or bottom edge dims, all of it once it's all but gone
+/// under the edge: it's cut by the list's clip, not faded out short of it (that left a hole a
+/// card tall under the source tabs).
+const EDGE_DIM: f32 = 0.35;
 const DIFF_BAR_DIM: f32 = 0.35;
 /// How long after the list has got to a new selection the banner's picture is read ahead.
 const PICTURE_SETTLE_MS: f32 = 60.0;
@@ -521,20 +573,33 @@ const PICTURE_SETTLE_MS: f32 = 60.0;
 /// smoothed over this long.
 const CARD_AHEAD_MS: f32 = 400.0;
 const CARD_AHEAD_TAU: f32 = 80.0;
+/// How fast the list goes (units a ms) for it to be on the move (`Select::flying`): a row and a
+/// half a second.
+const FLYING_SPEED: f32 = 0.05;
 
-/// The list as a lane through the selection's target brackets: the cards stay straight near the
-/// target (`ARC_STRAIGHT` of the list's height), then bend away from it along an arc, `ARC_K`
-/// units per (list height)² beyond that, at most `ARC_MAX`, and fade by up to `ARC_FADE`
-/// (all of it `ARC_FADE_REACH` of the list's height beyond the straight part). A song or
-/// difficulty landing in the target flashes it for `LAND_FLASH_MS`, its brackets opening out
-/// `LAND_FLASH_GROW` units, like a note hit on the menu's target.
+/// The list as a wave about the middle of its view: a card's left edge goes in by
+/// `list_wave` of how far its middle is from the view's (none in the middle, `WAVE_MAX` at the
+/// view's top and bottom edges, along one soft symmetric arc), its right edge staying put. Cards
+/// far from the selection's target fade by up to `ARC_FADE` (all of it `ARC_FADE_REACH` of the
+/// list's height beyond `ARC_STRAIGHT` of it from the target). A song or difficulty landing in the target flashes it
+/// for `LAND_FLASH_MS`, its brackets opening out `LAND_FLASH_GROW` units, like a note hit on
+/// the menu's target.
 const ARC_STRAIGHT: f32 = 0.12;
-const ARC_K: f32 = 64.0;
-const ARC_MAX: f32 = 24.0;
+pub(crate) const WAVE_MAX: f32 = 16.0;
 const ARC_FADE: f32 = 0.3;
 const ARC_FADE_REACH: f32 = 0.5;
 const LAND_FLASH_MS: f32 = 300.0;
 const LAND_FLASH_GROW: f32 = 6.0;
+
+/// How far in a card's left edge goes with its middle at `cy` in a list whose view runs from
+/// `top` to `bottom`: none in the view's middle, `WAVE_MAX` at its edges (and past them), on
+/// a soft arc symmetric about the middle. Tied to where the card is on the screen alone, so the
+/// cards keep one smooth curve however the list is scrolled.
+pub(crate) fn list_wave(cy: f32, top: f32, bottom: f32) -> f32 {
+    let half = ((bottom - top) / 2.0).max(1.0);
+    let d = ((cy - (top + bottom) / 2.0) / half).clamp(-1.0, 1.0);
+    WAVE_MAX * d * d
+}
 
 /// What a song's name starts with, as its heading when the list is by artist or title.
 fn initial(name: &str) -> String {
@@ -569,6 +634,10 @@ const LIST_BOTTOM_LEGACY: f32 = 440.0;
 /// Its frame (4 below) runs down to just over the status line, or stops at 436 while a
 /// banner (picking a map) takes the band under the panels.
 const LIST_BOTTOM: f32 = 454.0;
+/// The row at the column's foot in the main menu's look (song select's actions beside the list,
+/// the way back under it), and how far in from its ends its blocks are.
+pub(crate) const FOOT_ROW_H: f32 = 50.0;
+pub(crate) const FOOT_ROW_INSET: f32 = 8.0;
 const LIST_BOTTOM_BANNER: f32 = 432.0;
 
 pub enum SelectAction {
@@ -588,8 +657,10 @@ impl Select {
             .unwrap_or(0x9e37_79b9_7f4a_7c15);
         let mut s = Select {
             list_share: LIST_SHARE.2,
+            height: crate::render::VIRTUAL_HEIGHT,
             banner: false,
             legacy: false,
+            classic: false,
             to_menu: true,
             covered: false,
             show_info: false,
@@ -661,6 +732,7 @@ impl Select {
             thumb: 0.0,
             scrubbing: None,
             hold_pictures: false,
+            flying: false,
             seen_scroll: None,
             scroll_speed: 0.0,
             parallax: [0.0; 2],
@@ -1431,38 +1503,103 @@ impl Select {
     fn frame_top(&self) -> f32 {
         if self.legacy {
             LIST_TOP_LEGACY
+        } else if self.classic {
+            LIST_TOP_CLASSIC
         } else {
-            LIST_TOP
+            self.search_row() + LIST_TOP - SEARCH_ROW
         }
+    }
+
+    /// Where the row with the search starts: in the main menu's look under the performance
+    /// readout (drawn in the screen's units), however tall the space the list is laid out in.
+    pub(crate) fn search_row(&self) -> f32 {
+        if self.legacy {
+            54.0
+        } else if self.classic {
+            SEARCH_ROW_CLASSIC
+        } else {
+            SEARCH_ROW * self.height / crate::render::VIRTUAL_HEIGHT
+        }
+    }
+
+    /// How much taller than the screen's 480 the space the list is laid out in is: what's at
+    /// the bottom moves down as much.
+    fn foot(&self) -> f32 {
+        self.height - crate::render::VIRTUAL_HEIGHT
     }
 
     pub(crate) fn list_top(&self) -> f32 {
         if self.source_tabs().is_empty() {
             self.frame_top()
         } else {
-            self.frame_top() + lens::SOURCE_TAB_H + 3.0
+            self.frame_top() + self.source_tab_h() + 3.0
         }
     }
 
-    fn list_bottom(&self) -> f32 {
+    /// Where the list's column ends: the list's bottom, or under it the row with the way back.
+    fn column_end(&self) -> f32 {
         if self.legacy {
             LIST_BOTTOM_LEGACY
         } else if self.banner {
-            LIST_BOTTOM_BANNER
+            LIST_BOTTOM_BANNER + self.foot()
         } else {
-            LIST_BOTTOM
+            LIST_BOTTOM + self.foot()
         }
     }
 
-    /// The top and bottom of the song list's frame, for the panel beside it to line up with.
+    pub(crate) fn list_bottom(&self) -> f32 {
+        let below = if self.back_below() { FOOT_ROW_H } else { 0.0 };
+        self.column_end() - below
+    }
+
+    /// In the main menu's look the way back is under the list at the bottom left, on the line
+    /// of the actions beside it (Mods, Random, Play), rather than in the search row.
+    pub(crate) fn back_below(&self) -> bool {
+        self.in_ui_space() && !crate::mobile::active()
+    }
+
+    /// The way back under the list (`back_below`): a block as tall as the actions', on their
+    /// middle line.
+    fn draw_back_below(&self, c: &mut Canvas) {
+        if !self.back_below() {
+            return;
+        }
+        let back = if self.to_menu {
+            tr!("Menu", "メニュー", "Меню")
+        } else {
+            tr!("Back", "戻る", "Назад")
+        };
+        let mid = self.column_end() + 4.0 - FOOT_ROW_H / 2.0;
+        // A block's rect starts 6 left of where it's put: level with the list's cards.
+        crate::style::block_button(
+            c,
+            [24.0 + 6.0, mid],
+            &crate::style::BACK,
+            back,
+            None,
+            8.0,
+            false,
+            Hit::ToMenu,
+            FOOT_ROW_H - 2.0 * FOOT_ROW_INSET,
+        );
+    }
+
+    /// The top and bottom of the song list's frame, for the panel beside it to line up with
+    /// (in the main menu's look down to the row under it).
     pub fn frame_span(&self) -> [f32; 2] {
-        [self.frame_top() - 4.0, self.list_bottom() + 4.0]
+        [self.frame_top() - 4.0, self.column_end() + 4.0]
     }
 
     /// The wheel: moves the list `notches` on, the selection staying where it is.
     pub fn scroll_by(&mut self, notches: i32, library: &[Entry]) {
         let max = self.scroll_max;
-        let glide = self.free(library, WHEEL_TAU);
+        // 1.0's list jumped to where the wheel sent it.
+        let tau = if self.classic {
+            WHEEL_TAU_CLASSIC
+        } else {
+            WHEEL_TAU
+        };
+        let glide = self.free(library, tau);
         let goal = glide.goal + notches as f32 * WHEEL_STEP;
         // Past an end: a little push the list springs back from, so the wheel is never dead.
         let past = goal - goal.clamp(0.0, max);
@@ -1750,10 +1887,49 @@ impl Select {
     /// panel takes the rest. Neither gets too narrow to use (`LIST_MIN`, `PANEL_MIN`); a screen
     /// too narrow for both keeps the list at its usual size.
     pub fn list_width(screen_w: f32, share: f32) -> f32 {
-        match Self::share_range(screen_w) {
+        Self::list_width_in(screen_w, share, false)
+    }
+
+    /// `list_width` in the screen's units, or (`ui`) in the interface's own space, where the
+    /// list gets no wider than `LIST_MAX_UI`.
+    fn list_width_in(screen_w: f32, share: f32, ui: bool) -> f32 {
+        match Self::share_range_in(screen_w, ui) {
+            Some((min, max)) if ui => (screen_w * share.clamp(min, max)).min(LIST_MAX_UI),
             Some((min, max)) => screen_w * share.clamp(min, max),
             None => (screen_w * LIST_SHARE.2).max(300.0).min(screen_w - 48.0),
         }
+    }
+
+    /// Whether the list is laid out in the interface's own space (the main menu's look on a
+    /// computer), not the screen's 480 units.
+    pub(crate) fn in_ui_space(&self) -> bool {
+        !self.legacy && !self.classic && self.height != crate::render::VIRTUAL_HEIGHT
+    }
+
+    /// How tall a song's row, a difficulty's and a section's heading are in the list.
+    pub(crate) fn row_heights(&self) -> (f32, f32, f32) {
+        if self.in_ui_space() {
+            (SONG_ROW_H_UI, DIFF_ROW_H_UI, SECTION_ROW_H_UI)
+        } else {
+            (SONG_ROW_H, DIFF_ROW_H, SECTION_ROW_H)
+        }
+    }
+
+    /// The list on the move as last drawn: held or flown by the pointer, gliding, a run of
+    /// selections faster than it gets to them, or still coasting. Work made ahead (the picture
+    /// copies) waits meanwhile, leaving the CPU to the list and the pictures it brings in.
+    pub fn flying(&self) -> bool {
+        self.flying
+    }
+
+    /// How wide this list is on a `screen_w` wide screen (its units), at its share.
+    pub fn list_w(&self, screen_w: f32) -> f32 {
+        Self::list_width_in(screen_w, self.list_share, self.in_ui_space())
+    }
+
+    /// The shares of a `screen_w` wide screen (its units) this list can take.
+    pub fn share_range_here(&self, screen_w: f32) -> Option<(f32, f32)> {
+        Self::share_range_in(screen_w, self.in_ui_space())
     }
 
     /// Width of the preview panel beside a song list of `share` (past the margins and the gap).
@@ -1764,11 +1940,16 @@ impl Select {
     /// The shares of a `screen_w` wide screen the song list can take: within `LIST_SHARE`, and
     /// leaving the list and the panel (past the margins and the gap between them) their least.
     /// None when the screen is too narrow for both.
-    pub fn share_range(screen_w: f32) -> Option<(f32, f32)> {
+    fn share_range_in(screen_w: f32, ui: bool) -> Option<(f32, f32)> {
+        let (list_min, panel_min) = if ui {
+            (LIST_MIN_UI, PANEL_MIN_UI)
+        } else {
+            (LIST_MIN, PANEL_MIN)
+        };
         let w = screen_w.max(1.0);
         let (min, max) = (
-            LIST_SHARE.0.max(LIST_MIN / w),
-            LIST_SHARE.1.min((w - 60.0 - PANEL_MIN) / w),
+            LIST_SHARE.0.max(list_min / w),
+            LIST_SHARE.1.min((w - 60.0 - panel_min) / w),
         );
         (min <= max).then_some((min, max))
     }
@@ -2224,6 +2405,8 @@ impl Select {
         grade: &dyn Fn(&Entry) -> Option<&'static str>,
     ) {
         self.open_cursor_section();
+        self.height = c.height;
+        self.draw_back_below(c);
         let w = c.width;
         let mode = if self.show_converts {
             "taiko + converts"
@@ -2237,10 +2420,13 @@ impl Select {
             self.visible.len(),
             self.rate_label
         );
-        let lw = Self::list_width(w, self.list_share);
+        let lw = self.list_w(w);
         let legacy = self.legacy;
         // The row with the search: under the tabs, or at the top beside the way back.
-        let row = if legacy { 54.0 } else { 20.0 };
+        // Outside Legacy the row sits under the performance readout (`show_fps`, 6 to 22 at the
+        // top left), as the main menu's logo does.
+        let row = self.search_row();
+        let blocks = !self.classic;
         let mut left = 24.0;
         if legacy {
             crate::settings::tab_bar(c, 0, &summary);
@@ -2250,10 +2436,16 @@ impl Select {
             // top of the screen: it has the row's place.
             // The search row on a raised strip, no edge round it; the list's cards below it are
             // surfaces of their own, straight on the map's picture.
-            if !self.covered {
+            // The main menu's look has no strip: its buttons and the search sit on the picture.
+            if !self.covered && self.classic {
                 let (top, bottom) = (row - 6.0, self.frame_top() - 4.0);
                 let rect = [20.0, top, lw + 8.0, bottom - top];
-                crate::style::surface(c, rect, 8.0, crate::style::Surface::Raised);
+                crate::style::surface(
+                    c,
+                    rect,
+                    crate::style::radius::PANEL,
+                    crate::style::Surface::Raised,
+                );
             }
             // The way back: an arrow and where it goes, as bare as the menu's icons.
             let back = if self.to_menu {
@@ -2261,21 +2453,30 @@ impl Select {
             } else {
                 tr!("Back", "戻る", "Назад")
             };
-            left += 8.0;
-            if self.covered {
+            if self.back_below() {
+                // Under the list instead (`draw_back_below`): the search has its room.
+            } else if self.covered {
+                left += 8.0;
                 left += crate::style::icon_button_width(back, None, 8.0) + 6.0;
             } else {
+                left += 8.0;
                 let at = [left, row + 12.0];
-                let bw = crate::style::icon_button(
-                    c,
-                    at,
-                    &crate::style::BACK,
-                    back,
-                    None,
-                    8.0,
-                    false,
-                    Hit::ToMenu,
-                );
+                let (icon, hit) = (&crate::style::BACK, Hit::ToMenu);
+                let bw = if blocks {
+                    crate::style::block_button(
+                        c,
+                        at,
+                        icon,
+                        back,
+                        None,
+                        8.0,
+                        false,
+                        hit,
+                        crate::style::BLOCK_H,
+                    )
+                } else {
+                    crate::style::icon_button(c, at, icon, back, None, 8.0, false, hit)
+                };
                 left += bw + 6.0;
             }
             // On a small chip beside the search row, over the panel's side, where there is one.
@@ -2413,7 +2614,31 @@ impl Select {
                 let label = Canvas::fit(7.0, room, label);
                 let caption = Canvas::fit(5.0, room, caption);
                 let at = [bx + 6.0, row + 12.0];
-                crate::style::icon_button(c, at, icon, &label, Some(&caption), 7.0, *accent, *hit);
+                if blocks {
+                    let h = crate::style::BLOCK_H;
+                    crate::style::block_button(
+                        c,
+                        at,
+                        icon,
+                        &label,
+                        Some(&caption),
+                        7.0,
+                        *accent,
+                        *hit,
+                        h,
+                    );
+                } else {
+                    crate::style::icon_button(
+                        c,
+                        at,
+                        icon,
+                        &label,
+                        Some(&caption),
+                        7.0,
+                        *accent,
+                        *hit,
+                    );
+                }
             }
             bx -= 6.0;
         }
@@ -2433,10 +2658,15 @@ impl Select {
                 1.0,
             );
         } else {
-            // A lifted field, no edge; while typing a line of the accent under the text (the
-            // focus).
+            // A lifted field as the main menu's buttons are; while typing a line of the accent
+            // under the text (the focus).
             let field = [left, row, search_w, 24.0];
-            crate::style::surface(c, field, 6.0, crate::style::Surface::Lifted);
+            crate::style::surface(
+                c,
+                field,
+                crate::style::radius::CONTROL,
+                crate::style::Surface::Lifted,
+            );
             if self.searching {
                 c.rect(
                     left + 6.0,
@@ -2483,11 +2713,10 @@ impl Select {
             let kw = Canvas::text_width(5.0, key) + 8.0;
             if room - kw - 8.0 >= Canvas::text_width(hint_size, "search...") {
                 let kx = left + search_w - 6.0 - kw;
-                let cap = [kx, row + 6.0, kw, 12.0];
-                crate::style::surface(c, cap, 3.0, crate::style::Surface::Raised);
+                // The key alone, quiet: no cap round it.
                 c.text(
                     kx + 4.0,
-                    row + 12.0 - Canvas::text_height(5.0) / 2.0,
+                    Canvas::text_y_mid(row + 12.0, 5.0),
                     5.0,
                     rgba(crate::style::ink::CAPTION, 1.0),
                     key,
@@ -2538,7 +2767,7 @@ impl Select {
                 true,
             );
         } else if self.filter.is_empty() {
-            let y = row + 12.0 - Canvas::text_height(hint_size) / 2.0;
+            let y = Canvas::text_y_mid(row + 12.0, hint_size);
             c.text(text_x, y, hint_size, rgba(search_col, 1.0), &search);
         } else {
             c.text(text_x, row + 7.0, 10.0, rgba(search_col, 1.0), &search);
@@ -2634,10 +2863,16 @@ impl Select {
         }
 
         // Rows: one per song, plus the selected song's difficulties under it.
-        const SONG_H: f32 = SONG_ROW_H;
-        const DIFF_H: f32 = 22.0;
-        // A heading above each section's songs (what the sort groups by).
-        const SECTION_H: f32 = 20.0;
+        // A heading above each section's songs (what the sort groups by) too; taller in the
+        // interface's own space, where text is bigger next to them (`Select::row_heights`).
+        let (song_h, diff_h, section_h) = self.row_heights();
+        // How much taller than in the screen's units a song's and a difficulty's rows are: what's
+        // on them moves down as much.
+        let (sk, dk, hk) = (
+            song_h / SONG_ROW_H,
+            diff_h / DIFF_ROW_H,
+            section_h / SECTION_ROW_H,
+        );
         enum Row {
             Section(usize),
             Song(std::ops::Range<usize>),
@@ -2658,10 +2893,10 @@ impl Select {
             &self.sections,
             &section_open,
             self.headings,
-            (SONG_H, SECTION_H),
+            (song_h, section_h),
             cursor_group
                 .filter(|_| !cursor_hidden)
-                .map(|g| (g, groups[g].len() as f32 * DIFF_H))
+                .map(|g| (g, groups[g].len() as f32 * diff_h))
                 .into_iter()
                 .collect(),
         );
@@ -2671,8 +2906,8 @@ impl Select {
             (Some(si), _) if !section_open[si] => final_layout.tops[si],
             (Some(si), Some(g)) => {
                 final_layout.song_y(si, g)
-                    + SONG_H
-                    + (self.cursor - groups[g].start) as f32 * DIFF_H
+                    + song_h
+                    + (self.cursor - groups[g].start) as f32 * diff_h
             }
             _ => 0.0,
         };
@@ -2780,7 +3015,7 @@ impl Select {
                 (
                     g,
                     if f > 0.001 {
-                        groups[g].len() as f32 * DIFF_H * f
+                        groups[g].len() as f32 * diff_h * f
                     } else {
                         0.0
                     },
@@ -2801,7 +3036,7 @@ impl Select {
             &self.sections,
             &section_open,
             self.headings,
-            (SONG_H, SECTION_H),
+            (song_h, section_h),
             extras,
         );
         let mut rows: Vec<(Row, f32, f32, f32)> = Vec::new();
@@ -2812,7 +3047,7 @@ impl Select {
                 continue;
             }
             if self.headings {
-                rows.push((Row::Section(si), layout.tops[si], SECTION_H, 1.0));
+                rows.push((Row::Section(si), layout.tops[si], section_h, 1.0));
             }
             if !section_open[si] {
                 continue;
@@ -2825,8 +3060,8 @@ impl Select {
             };
             for gi in shown {
                 let g = &groups[gi];
-                rows.push((Row::Song(g.clone()), y, SONG_H, 1.0));
-                y += SONG_H;
+                rows.push((Row::Song(g.clone()), y, song_h, 1.0));
+                y += song_h;
                 let f = if Some(gi) == open_gi {
                     open_f
                 } else if Some(gi) == closing_gi {
@@ -2836,8 +3071,8 @@ impl Select {
                 };
                 if f > 0.001 {
                     for i in g.clone() {
-                        rows.push((Row::Diff(i), y, DIFF_H, f * f));
-                        y += DIFF_H * f;
+                        rows.push((Row::Diff(i), y, diff_h, f * f));
+                        y += diff_h * f;
                     }
                 }
             }
@@ -2881,8 +3116,8 @@ impl Select {
             near.sort_by(|a, b| a.0.total_cmp(&b.0));
             for (_, gi) in near {
                 let e = &library[self.visible[groups[gi].start]];
-                if let Some(bg) = crate::preview::background_path(e) {
-                    c.want_card(&bg);
+                if let Some((bg, key)) = e.cover() {
+                    c.want_card_keyed(key, bg);
                 }
             }
         }
@@ -2892,6 +3127,15 @@ impl Select {
         let frame = [20.0, frame_top - 4.0, lw + 8.0, bottom - frame_top + 8.0];
         if legacy {
             crate::style::panel(c, frame[0], frame[1], frame[2], frame[3]);
+        } else {
+            // The main menu's look: a dark panel the list runs down, as the right column's
+            // sections are but with no line round it, only a thin one along its top under the
+            // search row and the tabs. A bright picture behind doesn't show between the rows,
+            // and a row scrolling up goes under a clear edge.
+            let [px, py, pw, ph] = [20.0, top - 4.0, lw + 8.0, bottom - top + 8.0];
+            let r = crate::style::radius::CARD;
+            crate::style::cold_panel(c, [px, py, pw, ph]);
+            crate::style::rule(c, px + r, py, pw - 2.0 * r);
         }
         let tabs = self.source_tabs();
         if !tabs.is_empty() {
@@ -2938,6 +3182,11 @@ impl Select {
         };
         self.hold_pictures =
             self.scrubbing.is_some() || self.drag.is_some() || self.free.is_some() || rushed;
+        // Left where it was moved by hand (`free`) it's at rest, whatever the banner waits for.
+        self.flying = self.scrubbing.is_some()
+            || self.drag.is_some()
+            || rushed
+            || self.scroll_speed.abs() > FLYING_SPEED;
         // On its way to a new selection: the cards where it's going are read meanwhile, so
         // they come in with their pictures, and the banner's picture of the set it lands on
         // (not while selections come faster than the list gets to them).
@@ -2946,26 +3195,52 @@ impl Select {
             && let Some(g0) = cursor_group
         {
             let above = final_cursor - final_scroll;
-            let up = (above / SONG_H).ceil() as usize + 1;
-            let down = ((view - above) / SONG_H).ceil() as usize + 1;
+            let up = (above / song_h).ceil() as usize + 1;
+            let down = ((view - above) / song_h).ceil() as usize + 1;
             for g in g0.saturating_sub(up)..(g0 + down + 1).min(groups.len()) {
                 let e = &library[self.visible[groups[g].start]];
-                if let Some(bg) = crate::preview::background_path(e) {
-                    c.want_card(&bg);
+                if let Some((bg, key)) = e.cover() {
+                    c.want_card_keyed(key, bg);
                     if g == g0 && !self.hold_pictures {
-                        c.want_picture_path(&bg);
+                        c.want_picture_path(bg);
                     }
                 }
             }
         }
-        // How far a row's middle is from the target's, beyond the straight part (list heights).
-        let target_y = outline + DIFF_H / 2.0;
+        // How far a row's middle is from the target's, beyond the straight part (list heights:
+        // it fades with it), and how far in its card goes for where it is in the view
+        // (`list_wave`): the main menu's look only.
+        let target_y = outline + diff_h / 2.0;
         let away = |cy: f32| ((cy - target_y).abs() / view.max(1.0) - ARC_STRAIGHT).max(0.0);
+        let wave = |cy: f32| {
+            if legacy {
+                0.0
+            } else {
+                list_wave(cy, top, bottom)
+            }
+        };
+        // Each open set's trunk (`DIFF_LINK_X`): in by the least of its card's and its
+        // difficulties' waves, so it's inside its card and clear of every difficulty's left.
+        let mut trunks: Vec<(usize, f32)> = Vec::new();
+        for (row, ry, rh, _) in &rows {
+            let g = match row {
+                Row::Song(g) => self.group_of.get(g.start).copied(),
+                Row::Diff(i) => self.group_of.get(*i).copied(),
+                Row::Section(_) => None,
+            };
+            let Some(g) = g else { continue };
+            let dx = wave(top + ry - self.scroll + rh / 2.0);
+            match trunks.iter_mut().find(|(k, _)| *k == g) {
+                Some((_, x)) => *x = x.min(dx),
+                None => trunks.push((g, dx)),
+            }
+        }
         let mut lights = std::mem::take(&mut self.anim.card_light);
         let mut covers = std::mem::take(&mut self.anim.covers);
         for (row, ry, rh, alpha) in &rows {
             let y = top + ry - self.scroll;
-            if y + rh < top || y > bottom || *alpha < 0.02 {
+            // Drawn until wholly past an edge: the list's clip cuts the rest.
+            if y + rh <= top || y >= bottom || *alpha < 0.02 {
                 continue;
             }
             let row_start = c.shapes.len();
@@ -2997,25 +3272,25 @@ impl Select {
                         );
                     }
                     if holds_cursor {
-                        crate::style::brackets(c, [21.0, y - 3.0, lw + 6.0, rh + 3.0], 1.0);
+                        crate::style::brackets_in(
+                            c,
+                            [21.0, y - 3.0, lw + 6.0, rh + 3.0],
+                            1.0,
+                            crate::style::role::primary(),
+                        );
                     }
                     c.hit(24.0, y, lw, *rh, Hit::SectionHeader(*si));
                     let n = sec.groups.len();
-                    c.text(
-                        32.0,
-                        y + 6.0,
-                        7.0,
-                        rgba(col, 1.0),
-                        if open { "v" } else { ">" },
-                    );
+                    let ty = y + 6.0 * hk;
+                    c.text(32.0, ty, 7.0, rgba(col, 1.0), if open { "v" } else { ">" });
                     let label = fit(sec.label.clone(), 7.0, lw - 140.0);
                     let pw = Canvas::text_width(7.0, &label) + 14.0;
                     crate::style::pill(c, 44.0, y + 1.5, pw, rh - 6.0, col);
-                    c.text(51.0, y + 6.0, 7.0, rgba(0xffffff, 1.0), &label);
+                    c.text(51.0, ty, 7.0, rgba(0xffffff, 1.0), &label);
                     let count = format!("{n} song{}", if n == 1 { "" } else { "s" });
                     let after = c.text(
                         44.0 + pw + 8.0,
-                        y + 6.0,
+                        ty,
                         7.0,
                         rgba(0x8a8aa0, 1.0),
                         &fit(count, 7.0, lw - pw - 40.0),
@@ -3039,9 +3314,9 @@ impl Select {
                     }
                     // Under the pointer by where the row is, not where its card has moved to.
                     let hover = !open && c.hovered(24.0, y, lw, rh - 4.0);
-                    // The main menu's look: a card with the map's picture. The open set's card
-                    // slides out to the list's left edge, the others sit in by CARD_INSET, and
-                    // one under the pointer comes out a little and brightens.
+                    // The main menu's look: a card with the map's picture, its left edge on the
+                    // list's wave (`list_wave`) and its right edge on the list's; one under the
+                    // pointer comes out a little and brightens.
                     let light = if legacy {
                         0.0
                     } else {
@@ -3053,18 +3328,7 @@ impl Select {
                     let (x0, rw) = if legacy {
                         (24.0, lw)
                     } else {
-                        let out = if Some(g.start) == open_g {
-                            open_f
-                        } else if Some(g.start) == closing_g {
-                            closing_f
-                        } else {
-                            0.0
-                        };
-                        // Farther from the target, bent away along the lane's arc (not the open
-                        // set's card as it slides out).
-                        let e = away(y + rh / 2.0);
-                        let bend = (ARC_K * e * e).min(ARC_MAX) * (1.0 - out);
-                        let inset = (CARD_INSET * (1.0 - out) + bend - CARD_HOVER * light).max(0.0);
+                        let inset = (wave(y + rh / 2.0) - CARD_HOVER * light).max(0.0);
                         (24.0 + inset, lw - inset)
                     };
                     if legacy {
@@ -3135,29 +3399,39 @@ impl Select {
                     let title = fit(e.meta.title.clone(), 10.0, title_room);
                     if epic {
                         crate::epic::stripe(c, x0, y + 3.0, rh - 10.0, 1.0);
-                        crate::epic::text(c, tx, y + 6.0, 10.0, &title, 1.0);
+                        crate::epic::text(c, tx, y + 6.0 * sk, 10.0, &title, 1.0);
                         if open {
                             crate::epic::spark_round(c, [x0, y, rw, rh - 4.0], 1.0);
                         }
                     } else {
-                        c.text(tx, y + 6.0, 10.0, rgba(0xffffff, 1.0), &title);
+                        c.text(tx, y + 6.0 * sk, 10.0, rgba(0xffffff, 1.0), &title);
                     }
                     // A row per difficulty: which one it is, rather than who mapped the set.
                     let sub = if one {
                         format!("{}  |  {}", e.meta.artist, e.meta.version)
+                    } else if e.meta.creator.trim().is_empty() {
+                        // No mapper given (a TJA chart without MAKER): no empty "mapped by".
+                        e.meta.artist.clone()
                     } else {
                         format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator)
                     };
                     // Centred at y + 23.5, in what's left between the title (taller on a text
                     // grid) and the bottom of the box, so the two never touch.
-                    let title_bottom = 11.0 + Canvas::text_height(10.0) / 2.0;
-                    let room = 2.0 * (23.5 - title_bottom - 1.5).min(rh - 4.0 - 1.5 - 23.5);
+                    let title_bottom = 11.0 * sk + Canvas::text_height(10.0) / 2.0;
+                    let sub_mid = 23.5 * sk;
+                    let room = 2.0 * (sub_mid - title_bottom - 1.5).min(rh - 4.0 - 1.5 - sub_mid);
                     let sub_size = Canvas::fit_height(7.0, room);
+                    // On the plate the secondary ink, for it to read on a bright picture too.
+                    let sub_ink = if legacy {
+                        0x9a9ab0
+                    } else {
+                        crate::style::ink::SECONDARY
+                    };
                     c.text(
                         tx,
-                        y + 20.0 + (7.0 - sub_size) / 2.0,
+                        y + 20.0 * sk + (7.0 - sub_size) / 2.0,
                         sub_size,
-                        rgba(0x9a9ab0, 1.0),
+                        rgba(sub_ink, 1.0),
                         &fit(sub, sub_size, rw - 110.0),
                     );
                     // A newer version on osu!: click (or Ctrl+Shift+U) to get it. Under the
@@ -3168,7 +3442,7 @@ impl Select {
                             && y + rh - 4.0 <= bottom
                     });
                     let n = g.len();
-                    let diffs_y = if update.is_some() { y + 6.0 } else { y + 11.0 };
+                    let diffs_y = y + if update.is_some() { 6.0 } else { 11.0 } * sk;
                     if one {
                         // What the list is ordered by (no mods, 1.0x); the open row has the mods'.
                         let sorted_by = self
@@ -3180,7 +3454,7 @@ impl Select {
                         // A TJA course is ordered by its level, and shows it as its charter wrote it.
                         let level = e.meta.level.filter(|_| self.sort == SortMode::Difficulty);
                         // In its rating's colour only when it's the selected one (Legacy: all).
-                        crate::style::map_pill_lit(
+                        crate::style::map_badge(
                             c,
                             x0 + rw - 12.0,
                             diffs_y - 1.0,
@@ -3216,8 +3490,9 @@ impl Select {
                             &format!("{n} diff{}", if n == 1 { "" } else { "s" }),
                         );
                     }
-                    let (by, bh) = (y + 19.0, 9.0);
-                    let ty = by + (bh - Canvas::text_height(6.0)) / 2.0;
+                    let bh = (Canvas::text_height(6.0) + 3.0).max(9.0);
+                    let by = y + 19.0 * sk;
+                    let ty = Canvas::text_y_mid(by + bh / 2.0, 6.0);
                     match update {
                         Some(SetUpdate::Available) => {
                             let label = "update";
@@ -3252,38 +3527,73 @@ impl Select {
                     if selected {
                         cursor_row = drawn - 1;
                     }
+                    // On the list's wave as the sets' cards are: its left edge in by it, its right
+                    // edge on the list's (`dl`, `dw`: the row's card).
+                    let dx = wave(y + rh / 2.0);
+                    let (dl, dw) = (44.0 + dx, lw - 20.0 - dx);
                     // The main menu's look: a slimmer card, a bar of its rating's colour at its
                     // left (full on the selected one).
                     if !legacy {
+                        use crate::style::tone;
                         let [r, g, b, fa] =
                             crate::style::surface_fill(crate::style::Surface::Raised);
-                        let card = [44.0, y, lw - 20.0, rh - 3.0];
-                        let clear = rgba(0, 0.0);
+                        let card = [dl, y, dw, rh - 3.0];
+                        // No line round it (the selected one has the brackets): a tone a step
+                        // lighter than the list's panel and the room between rows part them.
+                        let fill = [r, g, b, fa * a];
                         c.round_rect(
                             [card[0], card[1]],
                             [card[2], card[3]],
                             DIFF_ROUND,
-                            [r, g, b, fa * a],
-                            clear,
+                            fill,
+                            fill,
                             0.0,
                         );
+                        // Joined to its set's card by its trunk down the indent, a step into
+                        // each row (the last one's step its corner), short of the row's card.
+                        let set = self.group_of.get(*i).copied();
+                        let last =
+                            set.is_some_and(|g| groups.get(g).is_some_and(|g| g.end == *i + 1));
+                        let mid = (y + (rh - 3.0) / 2.0).round();
+                        let link = rgba(tone::EDGE, a);
+                        let end = if last { mid + 1.0 } else { y + rh };
+                        let trunk = trunks
+                            .iter()
+                            .find(|(g, _)| Some(*g) == set)
+                            .map_or(dx, |(_, x)| *x);
+                        let link_x = (DIFF_LINK_X + trunk).round();
+                        c.rect(link_x, y - 4.0, 1.0, end - (y - 4.0), link);
+                        let step = card[0] - DIFF_LINK_GAP - link_x;
+                        if step > 0.0 {
+                            c.rect(link_x, mid, step, 1.0, link);
+                        }
                     }
-                    if selected {
+                    if selected && !legacy {
+                        // The brackets round it (`brackets`, the outline) and a light lift: no
+                        // line of its own round it.
+                        let lift = 0.07 + 0.03 * crate::style::pulse();
                         c.round_rect(
-                            [44.0, y],
-                            [lw - 20.0, rh - 3.0],
+                            [dl, y],
+                            [dw, rh - 3.0],
                             DIFF_ROUND,
-                            rgba(
-                                crate::style::selector_colour(),
-                                (0.12 + 0.05 * crate::style::pulse()) * a,
-                            ),
+                            rgba(0xffffff, lift * a),
                             rgba(0, 0.0),
                             0.0,
                         );
-                    } else if c.hovered(44.0, y, lw - 20.0, rh - 3.0) {
+                    } else if selected {
+                        let col = crate::style::selector_colour();
                         c.round_rect(
-                            [44.0, y],
-                            [lw - 20.0, rh - 3.0],
+                            [dl, y],
+                            [dw, rh - 3.0],
+                            DIFF_ROUND,
+                            rgba(col, (0.12 + 0.05 * crate::style::pulse()) * a),
+                            rgba(col, 0.0),
+                            1.0,
+                        );
+                    } else if c.hovered(dl, y, dw, rh - 3.0) {
+                        c.round_rect(
+                            [dl, y],
+                            [dw, rh - 3.0],
                             DIFF_ROUND,
                             hover_fill(a),
                             rgba(0, 0.0),
@@ -3293,25 +3603,28 @@ impl Select {
                     // The rating's bar over the light (under it, its ends stuck out past the
                     // light's round corners: a few unlit pixels at the row's left).
                     if !legacy {
-                        let bar = crate::style::role::rating(e.meta.level, stars(self.visible[*i]));
+                        let rating =
+                            crate::style::role::rating(e.meta.level, stars(self.visible[*i]));
+                        let bar = crate::style::role::rating_mark(rating);
                         let lit = if selected { 1.0 } else { DIFF_BAR_DIM };
-                        c.rect(44.0, y + 3.0, 3.0, rh - 9.0, rgba(bar, lit * a));
+                        c.rect(dl, y + 3.0, 3.0, rh - 9.0, rgba(bar, lit * a));
                     }
                     if legacy {
                         c.rect(52.0, y + rh - 2.0, lw - 36.0, 1.0, rgba(0x1d1d27, a));
                     }
-                    c.hit(44.0, y, lw - 20.0, *rh, Hit::SongRow(*i));
+                    c.hit(dl, y, dw, *rh, Hit::SongRow(*i));
                     let col = match (selected, legacy) {
                         (true, _) => crate::style::ink::PRIMARY,
                         (false, true) => 0xc8c8d8,
                         (false, false) => crate::style::ink::SECONDARY,
                     };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
+                    let inset = if legacy { 10.0 } else { DIFF_BADGE_INSET };
                     let pill = if a > 0.6 {
-                        crate::style::map_pill_lit(
+                        crate::style::map_badge(
                             c,
-                            24.0 + lw - 10.0,
-                            y + 6.0,
+                            24.0 + lw - inset,
+                            y + 6.0 * dk,
                             7.0,
                             e.meta.level,
                             stars(self.visible[*i]),
@@ -3321,20 +3634,21 @@ impl Select {
                         40.0
                     };
                     if let Some(g) = grade(e) {
-                        let right = 24.0 + lw - 18.0 - pill;
+                        let right = 24.0 + lw - inset - 8.0 - pill;
                         // SS is split into don and kat colours, like on the website.
+                        let gy = y + 5.0 * dk;
                         if g == "SS" {
-                            c.text_right(right - 1.0, y + 5.0, 9.0, rgba(0xEB452C, a), g);
-                            c.text_right(right + 1.0, y + 5.0, 9.0, rgba(0x4fb4ff, a), g);
+                            c.text_right(right - 1.0, gy, 9.0, rgba(0xEB452C, a), g);
+                            c.text_right(right + 1.0, gy, 9.0, rgba(0x4fb4ff, a), g);
                         }
-                        c.text_right(right, y + 5.0, 9.0, rgba(grade_colour(g), a), g);
+                        c.text_right(right, gy, 9.0, rgba(grade_colour(g), a), g);
                     }
                     c.text(
-                        56.0,
-                        y + 6.0,
+                        dl + 12.0,
+                        y + 6.0 * dk,
                         8.0,
                         rgba(col, a),
-                        &fit(format!("{}{convert}", e.meta.version), 8.0, lw - 170.0),
+                        &fit(format!("{}{convert}", e.meta.version), 8.0, lw - 170.0 - dx),
                     );
                 }
             }
@@ -3345,17 +3659,22 @@ impl Select {
                     && !g.contains(&self.cursor)
                 {
                     let l = lights.get(&g.start).copied().unwrap_or(0.0);
-                    c.fade_since(row_start, CARD_DIM + (1.0 - CARD_DIM) * l, 1.0);
+                    // Darker rather than see-through: through a see-through curtain the picture
+                    // under it showed.
+                    c.fade_since(row_start, 1.0, CARD_DIM + (1.0 - CARD_DIM) * l);
                 }
                 // Farther from the target, a little fainter.
                 let e = (away(y + rh / 2.0) / ARC_FADE_REACH).min(1.0);
                 if e > 0.0 {
                     c.fade_since(row_start, 1.0 - ARC_FADE * e * e, 1.0);
                 }
-                let over = (y + rh - (bottom - BOTTOM_FADE)).max(0.0);
-                let f = (1.0 - over / (rh + BOTTOM_FADE)).clamp(0.0, 1.0);
-                if f < 1.0 {
-                    c.fade_since(row_start, f * f * (3.0 - 2.0 * f), 1.0);
+                // A row going under the list's top or bottom edge is cut by the list's clip,
+                // dimming a little as it goes (eased by how much of it is cut), not faded out
+                // short of the edge.
+                let cut = ((top - y).max(0.0) + (y + rh - bottom).max(0.0)) / rh.max(1.0);
+                let f = cut.clamp(0.0, 1.0);
+                if f > 0.0 {
+                    c.fade_since(row_start, 1.0 - EDGE_DIM * f * f * (3.0 - 2.0 * f), 1.0);
                 }
             }
             // A set just opened: its difficulties drop in one after another, out from the
@@ -3412,9 +3731,13 @@ impl Select {
         // Not with its heading closed: the heading shows where the selection is instead.
         let oy = outline;
         let outline_start = c.shapes.len();
-        if !self.visible.is_empty() && !cursor_hidden && oy > top - DIFF_H && oy < bottom {
-            let target = [41.0, oy - 3.0, lw - 14.0, DIFF_H + 3.0];
-            crate::style::brackets(c, target, 1.0);
+        if !self.visible.is_empty() && !cursor_hidden && oy > top - diff_h && oy < bottom {
+            // On the list's wave, with the selected difficulty's card.
+            let dx = wave(oy + diff_h / 2.0);
+            let target = [41.0 + dx, oy - 3.0, lw - 14.0 - dx, diff_h + 3.0];
+            // In Play's colour, a kiai or not (its gold read as a stray yellow on the list).
+            let mark = crate::style::role::primary();
+            crate::style::brackets_in(c, target, 1.0, mark);
             // A song landing in it: a flash, the brackets opening out and fading.
             if let Some(t) = self
                 .anim
@@ -3435,7 +3758,7 @@ impl Select {
                     );
                     let g = LAND_FLASH_GROW * t;
                     let out = [x - g, y - g, w + 2.0 * g, h + 2.0 * g];
-                    crate::style::brackets(c, out, 1.0 - t);
+                    crate::style::brackets_in(c, out, 1.0 - t, mark);
                 } else {
                     self.anim.flash = None;
                 }
@@ -3547,7 +3870,7 @@ impl Select {
         if self.free.is_some()
             && self.scrubbing.is_none()
             && !self.visible.is_empty()
-            && (cursor_y < top - DIFF_H || cursor_y > bottom)
+            && (cursor_y < top - diff_h || cursor_y > bottom)
         {
             let label = tr!(
                 "back to the selected song",
@@ -3572,10 +3895,11 @@ impl Select {
             "Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替えと絞り込み  Ctrl+L コレクション  Tab 設定  Esc 終了",
             "Enter играть  Вверх/вниз сложность  Влево/вправо песня  Колесо или правый драг: прокрутка  F1 моды  F2 случайная  [ ] рейт  Ctrl+S сортировка и фильтры  Ctrl+L коллекция  Tab настройки  Esc выход"
         );
+        let foot = self.foot();
         if legacy {
             c.text(
                 24.0,
-                452.0,
+                452.0 + foot,
                 7.0,
                 rgba(0x6f6f86, 1.0),
                 &Canvas::fit_hints(7.0, w - 48.0, hints),
@@ -3589,7 +3913,7 @@ impl Select {
         if legacy || self.show_info {
             c.text(
                 24.0,
-                466.0 + (7.0 - status_size) / 2.0,
+                466.0 + foot + (7.0 - status_size) / 2.0,
                 status_size,
                 rgba(0x55556a, 1.0),
                 &Canvas::fit(status_size, w - 48.0, status),
@@ -3616,15 +3940,14 @@ impl Select {
         } else {
             Surface::Raised
         };
-        style::surface(c, [x, y, w, h], CARD_RADIUS, level);
-        if let Some(bg) = crate::preview::background_path(e) {
-            let key = crate::render::path_picture_key(&bg);
-            let shown = c.card_slots.contains_key(&key);
+        style::tile(c, [x, y, w, h], CARD_RADIUS, level);
+        if let Some((bg, key)) = e.cover() {
+            let shown = c.card_slots.contains_key(key);
             if !shown {
                 // Let go of to make room for others: it fades in again when it's back.
-                covers.remove(&key);
+                covers.remove(key);
             }
-            let since = covers.get(&key).copied();
+            let since = covers.get(key).copied();
             let a = match since {
                 Some(t) => crate::render::progress(t, COVER_FADE_MS),
                 None if crate::render::animations() => 0.0,
@@ -3633,75 +3956,85 @@ impl Select {
             let inner = [x + 1.0, y + 1.0, w - 2.0, h - 2.0];
             // Until its picture is in, the card shows the picture's average colour (once known),
             // and the picture fades in over it: nothing on the card pops.
-            let colour = c.card_colour(&bg);
+            let colour = c.card_colour_keyed(key);
             // Everything on the card is as round as it, 1 in.
             let round = CARD_RADIUS - 1.0;
+            // The picture comes in across the card out of nothing (`CARD_ART`): none of it under
+            // the title and artist, then up to a little of it at the right end, more on the card
+            // open (and under the pointer). One shape, faded in its shader: no edge, no plate
+            // over it to clash with the card's light.
+            let (from, rest, lit) = CARD_ART;
+            let strength = if open {
+                lit
+            } else {
+                rest + (lit - rest) * light
+            };
+            let [cx, cy, cw, ch] = inner;
+            let start = cx + cw * from;
             if let Some([r, g, b]) = colour
                 && (!shown || a < 1.0)
             {
-                let col = [r, g, b, 1.0];
-                c.round_rect(
-                    [inner[0], inner[1]],
-                    [inner[2], inner[3]],
+                // Its average colour where the picture will be, under it as it fades in.
+                let col = |s: f32| [r, g, b, s];
+                c.shade_eased(
+                    [start, cy],
+                    [cx + cw - start, ch],
                     round,
-                    col,
-                    col,
-                    0.0,
+                    col(0.0),
+                    col(strength * (1.0 - a)),
                 );
             }
-            let tint = [1.0, 1.0, 1.0, a];
-            let drawn = c.card_picture(&bg, inner, tint, round, self.card_greys);
+            let tint = [1.0, 1.0, 1.0, strength * a];
+            let come = Some([from, 1.0]);
+            let drawn = c.card_picture_keyed(key, bg, inner, tint, round, self.card_greys, come);
             if drawn && since.is_none() {
-                covers.insert(key, crate::render::frame_now());
-            }
-            if drawn || colour.is_some() {
-                // Over the colour the shade is there at once; over the bare surface it comes in
-                // with the picture.
-                let base = if colour.is_some() { 1.0 } else { a };
-                // One sweep from dark under the title to lighter on the right, as round as the
-                // card.
-                let shade = |s: f32| rgba(style::SURFACE_1, s * base);
-                let (left, right) = (shade(COVER_SHADE.0), shade(COVER_SHADE.1));
-                c.shade_across(
-                    [inner[0], inner[1]],
-                    [inner[2], inner[3]],
-                    round,
-                    left,
-                    right,
-                );
+                covers.insert(key.to_string(), crate::render::frame_now());
             }
         }
         if open {
-            // On the beat its edge and tone light a little; in a kiai the edge turns gold.
-            let kiai = style::kiai();
-            let col = crate::menu::tint(style::selector_colour(), style::KIAI_GOLD, kiai);
+            // The selection's mark, as on the difficulty in it: a light of its colour, a muted
+            // edge of it and the selector's brackets, in Play's colour. On the beat they light a
+            // little.
+            let col = style::role::primary();
             let beat = style::pulse();
             c.round_rect(
                 [x, y],
                 [w, h],
                 CARD_RADIUS,
-                rgba(col, 0.1 + 0.03 * beat),
-                rgba(col, 0.8 + 0.2 * beat),
+                rgba(col, 0.08 + 0.03 * beat),
+                rgba(col, OPEN_EDGE + 0.2 * beat),
                 1.0,
             );
+            style::brackets_in(c, [x - 3.0, y - 3.0, w + 6.0, h + 6.0], OPEN_BRACKETS, col);
         } else {
-            // A faint edge round every card, so neighbouring pictures of like colours don't run
-            // into each other; brighter under the pointer.
-            let lift = rgba(0xffffff, 0.06 * light);
-            let edge = rgba(0xffffff, CARD_EDGE + 0.08 * light);
-            c.round_rect([x, y], [w, h], CARD_RADIUS, lift, edge, 1.0);
+            // Under the pointer a little lighter, with a faint edge; at rest nothing round it.
+            if light > 0.0 {
+                let lift = rgba(0xffffff, 0.06 * light);
+                let edge = rgba(0xffffff, CARD_EDGE * light);
+                c.round_rect([x, y], [w, h], CARD_RADIUS, lift, edge, 1.0);
+            }
         }
     }
 
     /// The collection picker and the right-click menu, over everything else on the screen
     /// (call after the map panel is drawn).
     pub fn draw_popups(&self, c: &mut Canvas, library: &[Entry]) {
+        self.draw_overlays(c, library);
+        self.draw_lens_popup(c);
+    }
+
+    /// The collection or sort list and a row's menu: over the whole screen, in its units.
+    pub fn draw_overlays(&self, c: &mut Canvas, library: &[Entry]) {
         if let Some(cursor) = self.picker {
             self.draw_picker(c, cursor);
         }
         if self.menu.is_some() {
             self.draw_menu(c, library);
         }
+    }
+
+    /// The sort and filter panel, hanging from the search row (in the list's units).
+    pub fn draw_lens_popup(&self, c: &mut Canvas) {
         self.draw_lens(c, 20.0, self.frame_top() - 2.0);
     }
 }
@@ -4105,7 +4438,17 @@ pub fn draw_customization_tabs(c: &mut Canvas, tabs: &[crate::mods::Mod], open: 
         c.rect(0.0, 0.0, c.width, 49.0, rgba(0x0b0b10, 1.0));
         0.0
     } else {
-        16.0 + c.text(16.0, y + 4.0, 9.0, rgba(0xffffff, 1.0), "MOD CUSTOMIZATION") + 12.0
+        // On a plate of its own: it sits over the top of the screen under it.
+        let title = "MOD CUSTOMIZATION";
+        let tw = Canvas::text_width(9.0, title);
+        crate::style::surface(
+            c,
+            [10.0, y, tw + 12.0, h],
+            crate::style::radius::SMALL,
+            crate::style::Surface::Raised,
+        );
+        let ty = Canvas::text_y_mid(y + h / 2.0, 9.0);
+        16.0 + c.text(16.0, ty, 9.0, rgba(0xffffff, 1.0), title) + 12.0
     };
     for (i, &m) in tabs.iter().enumerate() {
         let name = m.name().to_uppercase();
@@ -4578,13 +4921,14 @@ impl Select {
         };
         let bh = (rows.len() as f32 * row + if phone { 46.0 } else { 56.0 }).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
+        // Song select's panel: its tone and a thin neutral edge (the accent is the selection's).
         c.round_rect(
             [bx, by],
             [bw, bh],
             8.0,
-            rgba(0x15151d, 0.98),
-            rgba(accent(), 0.8),
-            1.5,
+            rgba(crate::style::PANEL_COLD, 0.98),
+            rgba(crate::style::tone::EDGE, 1.0),
+            crate::style::tone::LINE,
         );
         let title_size = if phone { 12.0 } else { 9.0 };
         c.text(

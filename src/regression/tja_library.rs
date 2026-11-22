@@ -1450,3 +1450,40 @@ fn a_tja_course_using_what_isnt_played_says_so_in_its_details() {
         );
     }
 }
+
+/// A TJA chart names no mapper (no MAKER: line): song select says nothing of one, in the list or
+/// in the details, rather than an empty "mapped by".
+#[test]
+fn a_tja_course_without_a_maker_names_no_mapper() {
+    let f = Folders::new("no-maker");
+    let file = put(&f.tja, "Plain", "plain.tja", CHART);
+    let cfg = Config {
+        main_menu: true,
+        ..config()
+    };
+    let (mut s, mut now) = client(&f, cfg);
+    refresh(&mut s, &mut now);
+    let course = tja_maps::course_path(&file, taiko_logic::tja::CourseKind::Oni);
+    select_map(&mut s, now, &course);
+    let mut texts = Vec::new();
+    for _ in 0..300 {
+        std::thread::sleep(Duration::from_millis(5));
+        now += Duration::from_millis(50);
+        let c = frame(&mut s, now);
+        texts = c.texts.iter().map(|t| t.1.clone()).collect::<Vec<_>>();
+        if texts.iter().any(|t| t == "OD") {
+            break;
+        }
+    }
+    assert!(texts.iter().any(|t| t == "OD"), "the details: {texts:?}");
+    assert!(
+        texts.iter().any(|t| t.contains("Regression TJA")),
+        "the chart's shown: {texts:?}"
+    );
+    assert!(
+        !texts
+            .iter()
+            .any(|t| t.contains("mapped by") || t.trim() == "by"),
+        "no mapper named: {texts:?}"
+    );
+}

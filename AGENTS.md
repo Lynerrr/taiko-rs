@@ -35,6 +35,20 @@
   left to platform CI; do not claim a macOS lint run verifies Linux or Windows code.
 - Follow `.github/pull_request_template.md`. For player-visible changes, include the exact
   proposed `Changelog:` lines so they can be preserved when squashing.
+- A multi-step feature for `dev` goes in one branch and one pull request, split into clean,
+  logical commits (each with its own Conventional subject and `Changelog:` lines), not into a
+  chain of dependent pull requests that have to merge one after another.
+
+## Continuous integration
+
+- Never wait for CI. Don't poll GitHub Actions runs or `gh pr checks`, don't `gh run watch`,
+  and don't start background scripts that watch a pull request to merge it.
+- A task is complete once local validation (below) passes and the pull request is opened or
+  updated. CI results are read in a later session, or by a person.
+- If the pull request should merge on green, run `gh pr merge --auto --squash` and stop:
+  GitHub merges it when the required checks pass. If GitHub refuses (auto-merge is off for the
+  repository, or the target branch requires no checks), leave the pull request open; never fall
+  back to watching CI.
 
 ## Branch integration
 
@@ -68,7 +82,8 @@
 - Don't weaken a regression test to make a change pass: no deleting, ignoring or loosening
   assertions or golden files. Change the behaviour back, or update the golden output on purpose
   as described above.
-- CI enforces this. The `Pre-merge` workflow runs the suite on Linux, Windows and macOS. The
+- CI enforces this. The `Pre-merge` workflow runs the suite on Linux, Windows and macOS (on
+  Linux only for pull requests into `dev`; release pull requests into stable run all). The
   `Regression coverage` check fails a pull request that changes client code without touching
   any test, unless it carries the `no-regression-test` label with a reason in its description,
   for example a pure refactor proven by the existing tests.
@@ -82,10 +97,10 @@
 
 ## Cleaning up after yourself
 
-- Once a branch's pull request is merged or closed, remove its worktree
-  (`git worktree remove <path>`) and delete the local branch. Do it in the same session
-  that merged it. Worktrees left behind pile up and fill the disk, because each one has its
-  own `target/`.
+- Don't stay in a session waiting for a merge just to clean up. Instead, at the start of each
+  new task, remove the worktrees and local branches whose pull requests are already merged or
+  closed (`git worktree remove <path>`, `git branch -D <branch>`), and `git worktree prune`.
+  Worktrees left behind pile up and fill the disk, because each one has its own `target/`.
 - Before removing a worktree, run `git status` in it. Uncommitted work is never thrown away:
   commit and push it, or save it as a patch outside the repository first.
 - Leave alone a worktree that another session is still working in. Signs of that are a
@@ -102,9 +117,10 @@ A graph of the code (who calls what, what references what) can live in `graphify
 built locally and ignored by git: its 11 MB graph.json is rewritten on every build and would
 conflict between parallel branches. Install the tool once with `uv tool install graphifyy`.
 
-- In a checkout or worktree without `graphify-out/graph.json`, build it with
-  `graphify update .` (AST only, no API cost, about ten seconds), and run it again after
-  changing code. Never commit `graphify-out/`.
+- Run `graphify update .` (AST only, no API cost, about ten seconds) only in a checkout or
+  worktree without `graphify-out/graph.json`, or after a major structural refactor (files
+  moved, modules split or renamed). A stale graph is fine after ordinary edits.
+  Never commit `graphify-out/`.
 - For a symbol you know by name, ask the graph before grepping for its uses:
   `graphify explain "<name>"` (where it is, its callers and callees),
   `graphify affected "<name>"` (what a change to it reaches, tests included) and

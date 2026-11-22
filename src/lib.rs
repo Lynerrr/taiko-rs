@@ -185,8 +185,9 @@ use screens::play::{FAIL_RESTART_LINGER, PlayScreen, draw_spectate_all, pause_la
 use screens::preview::Preview;
 use screens::results::{ResultsScreen, results_job, results_title};
 use screens::select::leaderboard::{
-    BOARD_HEAD, BOARD_ROW, draw_divider, draw_leaderboard, draw_online_leaderboard, fetch_board,
-    misses_and_age,
+    BOARD_HEAD, BOARD_ROW, BoardLine, BoardShown, COLUMN_TAB_H, ColumnTab, draw_board_section,
+    draw_column_tabs, draw_divider, draw_leaderboard, draw_online_leaderboard, fetch_board,
+    misses_and_age, section_rows,
 };
 use screens::select::presets::{draw_preset_deleting, draw_preset_naming, preset_key};
 use screens::select::preview_chrome::{draw_analysis, draw_preview_chrome};
@@ -216,6 +217,10 @@ enum Scene {
 
 /// How slowly a new background comes in on the main menu, where it's the whole picture.
 const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
+/// How bright the map's picture behind song select in the main menu's look is, under its cold
+/// ground (`style::ground`): a white or yellow one washed the screen out round the list and the
+/// column.
+const SELECT_BG_BRIGHTNESS: f32 = 0.3;
 
 /// How long "Reset map offsets" waits for its second press.
 const RESET_CONFIRM: Duration = Duration::from_secs(4);
@@ -543,6 +548,9 @@ struct State {
     me_due: Option<Instant>,
     /// The song select leaderboard shows the server's scores, not the local ones.
     board_online: bool,
+    /// The right column's body in the main menu's look shows the preview (its Preview tab), not
+    /// the leaderboard. Kept from map to map; on again each time song select is come to.
+    column_preview: bool,
     /// A player's profile, over everything else.
     profile: Option<profile::View>,
     /// The medals screen, over everything but a medal being earned.
@@ -564,6 +572,8 @@ struct State {
     board_fetch: Option<BoardFetch>,
     /// The pp simulator's last answer: for which map, pick, speed and mods, and the pp.
     sim_pp: Option<(SimKey, Option<f64>)>,
+    /// `sim_pp` being worked out.
+    sim_pp_job: Job<(SimKey, Option<f64>)>,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
     /// Mods of the play being loaded.
@@ -589,6 +599,12 @@ struct State {
     board_for: (u64, bool, bool),
     board_max: usize,
     board_rect: Option<[f32; 4]>,
+    /// Screen units to one of song select's own (it lays itself out in a space of its own
+    /// height, `render::Canvas::begin_space`), as last drawn: 1 where it uses the screen's.
+    select_scale: f32,
+    /// How far in from the screen's left edge song select's space starts (its units): it sits
+    /// in the middle of a screen wider than it.
+    select_left: f32,
     /// A song select divider being dragged: which, where the pointer started (virtual units)
     /// and the size it had then; and the last press on one (a second soon after resets it).
     split_drag: Option<(hit::Hit, f32, f32)>,
@@ -872,6 +888,10 @@ struct State {
     stars: stars::Stars,
     /// The pp the selected map could give (song select's details).
     potentials: pp::Potentials,
+    /// Library entries' hashes, worked out off the frame for song select's letters and board.
+    hasher: library::Hasher,
+    /// Each map's best letter from the plays, for song select's rows.
+    grades: scores::Grades,
     /// Background brightness for this frame (0 hides it).
     bg_brightness: f32,
     /// The idle screen, after a while with no input.
@@ -2106,6 +2126,7 @@ impl State {
         }
         self.stop_audio();
         self.report_smoothness();
+        self.column_preview = true;
         self.scene = SongSelect::scene();
     }
 
@@ -2545,7 +2566,7 @@ impl State {
     /// except from the songs, which is what the menu is for leaving to.
     fn menu_open(&mut self, item: menu::Item) {
         // Song select is reached by moving the camera (`menu_shift`), not out of black.
-        let shifts = item == menu::Item::Play && self.cfg.animations && menu_shift::animated();
+        let shifts = item == menu::Item::Play && self.camera_moves();
         if !matches!(item, menu::Item::Exit) && !shifts {
             self.screen_fade = Some(0.0);
         }
@@ -2562,6 +2583,48 @@ impl State {
 
     /// Play on the menu: the camera moves on along its lane to song select (`shifts`), or song
     /// select is simply there.
+    /// Library entry `i`'s hash once it's known (`library::Hasher`), asked for if it isn't: what
+    /// a frame draws doesn't wait on reading the map's file for it.
+    pub(crate) fn known_hash_of(&mut self, i: usize) -> Option<u64> {
+        let hash = self.library.get(i)?.known_hash();
+        if hash.is_none() {
+            self.hasher.want(&self.library, i);
+        }
+        hash
+    }
+
+    /// Song select's letter on each row (its best play's), by the hashes known; the entries
+    /// whose hash isn't known yet go into `unknown` (library indices) to be asked for.
+    pub(crate) fn row_grade<'a>(
+        library: &'a [library::Entry],
+        grades: &'a scores::Grades,
+        unknown: &'a std::cell::RefCell<Vec<usize>>,
+    ) -> impl Fn(&library::Entry) -> Option<&'static str> + 'a {
+        move |e| match e.known_hash() {
+            Some(hash) => grades.get(hash),
+            None => {
+                if let Some(i) = library::index_in(library, e) {
+                    unknown.borrow_mut().push(i);
+                }
+                None
+            }
+        }
+    }
+
+    /// The selected map's pp at full combo (`pp::Potentials`). Asked for only once the selection
+    /// settles on it, as the preview loads it (`Preview::settling_on`): a run of selections asked
+    /// the worker about every map passed by. What's known already shows at once.
+    pub(crate) fn selected_potential(&mut self, rate: f64) -> Option<[f64; 3]> {
+        let i = self.select.selected()?;
+        let (mods, scroll) = (self.cfg.mods, self.cfg.scroll_speed);
+        let path = &self.library.get(i)?.path;
+        if self.preview.settling_on(i) {
+            self.potentials.known(path, rate, mods, scroll)
+        } else {
+            self.potentials.get(path, rate, mods, scroll)
+        }
+    }
+
     /// The pp a play picked in the simulator would give on library entry `i` at speed `rate`
     /// with the mods on (None until the map is read, or for no pp with these mods); worked out
     /// again only when any of it changes.
@@ -2576,10 +2639,23 @@ impl State {
             self.cfg.mods,
             self.cfg.scroll_speed.to_bits(),
         );
+        if let Some(done) = self.sim_pp_job.poll() {
+            self.sim_pp = Some(done);
+        }
         if let Some((k, pp)) = &self.sim_pp
             && *k == key
         {
             return *pp;
+        }
+        // Worked out on a thread of its own, one at a time (a drag on the simulator's steps
+        // asks again and again): what it gave for the same map shows meanwhile.
+        let meanwhile = self
+            .sim_pp
+            .as_ref()
+            .filter(|(k, _)| k.0 == key.0)
+            .and_then(|(_, pp)| *pp);
+        if self.sim_pp_job.is_busy() {
+            return meanwhile;
         }
         let (great, ok, miss) = sim.counts(notes);
         let play = pp::Play {
@@ -2593,13 +2669,21 @@ impl State {
             seed: 0,
             half: Default::default(),
         };
-        let pp = pp::play_pp(&e.path, &play);
-        self.sim_pp = Some((key, pp));
-        pp
+        let path = e.path.clone();
+        self.sim_pp_job = Job::spawn(move || (key, pp::play_pp(&path, &play)));
+        meanwhile
+    }
+
+    /// The camera moves between the main menu and song select (not in 1.0's look, where song
+    /// select comes up out of black as it did).
+    fn camera_moves(&self) -> bool {
+        self.cfg.animations && menu_shift::animated() && !self.cfg.legacy_menu
     }
 
     fn leave_menu_for_songs(&mut self, shifts: bool) {
         let left = self.main_menu.take();
+        // Song select opens on its preview.
+        self.column_preview = true;
         if !shifts {
             self.menu_shift = None;
             return;
@@ -2619,7 +2703,7 @@ impl State {
     /// Song select's way back to the main menu: the camera moves back along the menu's lane, the
     /// menu where it was left if the camera hadn't got all the way yet.
     fn back_to_menu(&mut self) {
-        let shifts = self.cfg.animations && menu_shift::animated();
+        let shifts = self.camera_moves();
         // Not yet all the way to song select: the menu it was leaving comes back.
         let (left, from) = match self.menu_shift.take() {
             Some(mut s) if shifts && s.into_songs => (s.menu.take(), Some(s)),
@@ -3151,7 +3235,7 @@ impl State {
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
             Item::EpilepsyWarning => on(c.epilepsy_warning),
-            Item::LegacyMenu => on(!c.main_menu),
+            Item::LegacyMenu => on(c.legacy_menu),
             Item::Letterbox => on(c.letterbox),
             Item::LetterboxSize => format!("{}x{}", c.letterbox_size.0, c.letterbox_size.1),
             Item::LetterboxX => format!("{:+.0}%", c.letterbox_pos.0),
@@ -3500,11 +3584,11 @@ impl State {
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::EpilepsyWarning => self.cfg.epilepsy_warning = !self.cfg.epilepsy_warning,
             Item::LegacyMenu => {
-                self.cfg.main_menu = !self.cfg.main_menu;
-                // Gone at once, not just from the next start.
-                if !self.cfg.main_menu {
-                    self.main_menu = None;
-                }
+                self.cfg.legacy_menu = !self.cfg.legacy_menu;
+                // 1.0's song select has the main menu: it comes back from the tabs' old layout.
+                self.cfg.main_menu = true;
+                // No camera left on its way between the looks.
+                self.menu_shift = None;
             }
             Item::MenuNotes => self.cfg.menu_notes = !self.cfg.menu_notes,
             Item::Letterbox => {
@@ -6717,6 +6801,14 @@ impl State {
         (self.mouse.0 as f32 * k, self.mouse.1 as f32 * k)
     }
 
+    /// The pointer in song select's units (`select_scale`), for what it lays out itself: the
+    /// list's drag and scroll bar, the divider beside it.
+    fn mouse_select(&self) -> (f32, f32) {
+        let (x, y) = self.mouse_virtual();
+        let k = self.select_scale.max(1e-3);
+        (x / k - self.select_left, y / k)
+    }
+
     /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
     /// Turns the volume picked on the volume overlay (Alt+wheel, Alt+Up/Down) `notches` up.
     fn turn_volume(&mut self, notches: i32) {
@@ -7064,7 +7156,7 @@ impl State {
                 self.right_scroll = true;
             }
         }
-        let (_, drag_y) = self.mouse_virtual();
+        let (_, drag_y) = self.mouse_select();
         if let Some(d) = &mut self.list_drag {
             let dy = drag_y - d.from_y;
             d.moved |= dy.abs() > DRAG_START;
@@ -7079,7 +7171,7 @@ impl State {
         }
         if self.scrollbar_drag {
             if self.scene.is_select() {
-                let (_, vy) = self.mouse_virtual();
+                let (_, vy) = self.mouse_select();
                 self.select.scroll_to(vy, &self.library);
                 return CursorIcon::NsResize;
             }
@@ -7087,7 +7179,7 @@ impl State {
         }
         if self.right_scroll {
             if self.scene.is_select() {
-                let (_, vy) = self.mouse_virtual();
+                let (_, vy) = self.mouse_select();
                 self.select.scroll_to(vy, &self.library);
                 return CursorIcon::NsResize;
             }
@@ -7104,8 +7196,11 @@ impl State {
                     self.split_click = None;
                 }
                 // Kept where the list's width still follows it.
-                if let Some((min, max)) = Select::share_range(width) {
-                    self.cfg.song_list_share = (start + (vx - from) / width).clamp(min, max);
+                // The list's share of song select's own width, in its units.
+                let own = width / self.select_scale.max(1e-3) - 2.0 * self.select_left;
+                if let Some((min, max)) = self.select.share_range_here(own) {
+                    let moved = (vx - from) / self.select_scale.max(1e-3) / own.max(1.0);
+                    self.cfg.song_list_share = (start + moved).clamp(min, max);
                 }
                 return CursorIcon::EwResize;
             }
@@ -7365,7 +7460,10 @@ impl State {
                     y,
                 })
             }
-            Some((_, y, Some(hit::Hit::SongScrollbar))) => self.select.scroll_to(y, &self.library),
+            Some((_, y, Some(hit::Hit::SongScrollbar))) => {
+                let y = y / self.select_scale.max(1e-3);
+                self.select.scroll_to(y, &self.library);
+            }
             _ => {}
         }
     }
@@ -7642,14 +7740,14 @@ impl State {
             // A row acts on release, unless the press turns into dragging the list.
             if let (true, Some(hit::Hit::SongScrollbar)) = (self.scene.is_select(), hit) {
                 self.scrollbar_drag = true;
-                self.select.scroll_to(vy, &self.library);
+                self.select.scroll_to(self.mouse_select().1, &self.library);
                 return;
             }
             if let (true, Some(h @ (hit::Hit::SongRow(_) | hit::Hit::SongHeader(_)))) =
                 (self.scene.is_select(), hit)
             {
                 self.list_drag = Some(ListDrag {
-                    from_y: vy,
+                    from_y: self.mouse_select().1,
                     hit: h,
                     moved: false,
                 });
@@ -9299,7 +9397,8 @@ impl State {
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
         // Song select's cards show every set's background: small copies made ahead read fast.
-        if self.cfg.main_menu {
+        // 1.0's look has no cards.
+        if self.cfg.main_menu && !self.cfg.legacy_menu {
             let mut seen = std::collections::HashSet::new();
             let paths: Vec<PathBuf> = self
                 .library
@@ -10696,7 +10795,10 @@ impl State {
     /// cards and the banner (they show it sharp). On the way between the menu and song select it
     /// blurs and clears with the camera. Legacy and the phone layout keep it sharp.
     pub(crate) fn background_blur(&self) -> f32 {
-        let look = !self.select.legacy && !mobile::active() && self.scene.is_select();
+        let look = !self.select.legacy
+            && !self.select.classic
+            && !mobile::active()
+            && self.scene.is_select();
         let select = match &self.menu_shift {
             Some(shift) if look => menu_shift::phases(shift.t()).cam,
             _ if look && !self.on_menu() => 1.0,
@@ -12706,12 +12808,22 @@ impl State {
             note_colours: self.cfg.note_colours,
         }));
         self.select.legacy = !self.cfg.main_menu;
+        self.select.classic = self.cfg.legacy_menu && !self.select.legacy;
         self.select.to_menu = self.mp.is_none() && !self.picking_lobby_map;
         self.select.covered = self.customization_tab().is_some();
         // A big library's first analysis waits while a song is being played.
+        let in_song = self.in_song();
         if let Some(info) = &self.mapinfo {
-            info.hold(self.in_song());
+            info.hold(in_song);
         }
+        // So do song select's picture copies made ahead (`prewarm`): decoding a whole library's
+        // backgrounds takes a core for minutes after an update, and a 2-core laptop stutters.
+        // And while song select's list is on the move: the cards and the banner coming in need
+        // what CPU a small machine has.
+        let browsing = self.scene.is_select() && !self.on_menu() && self.select.flying();
+        self.hasher.take_in(&self.library);
+        self.pictures.hold(in_song || browsing);
+        self.card_pictures.hold(in_song || browsing);
         self.refresh_play_offset();
         self.follow_map_skin();
         if self.volume_save_at.is_some_and(|at| now >= at) {
@@ -12752,13 +12864,17 @@ impl State {
         // The pictures the last frame drew, then the ones the renderer has for this one.
         self.avatars.update(&canvas.avatars_wanted);
         let picture_dir = self.picture_dir();
-        self.pictures.update(
+        // The banner first, then the cards' strips, within one frame's budget for the GPU.
+        let mut budget = UPLOAD_BUDGET;
+        self.pictures.update_within(
             picture_dir.as_deref(),
             &canvas.pictures_wanted,
             &canvas.picture_times,
             &canvas.picture_paths,
+            &mut budget,
         );
-        self.card_pictures.update(&canvas.cards_wanted);
+        self.card_pictures
+            .update_within(&canvas.cards_wanted, &mut budget);
         canvas.clear(width);
         canvas.input_editor = self
             .sync_text_input()
@@ -12858,6 +12974,13 @@ impl State {
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
             self.preview.mods = self.shown_mods();
+            // Song select's main look shows the autoplay on its Preview tab only.
+            self.preview.autoplay_hidden = self.scene.is_select()
+                && !self.on_menu()
+                && !self.select.legacy
+                && !self.select.classic
+                && !mobile::active()
+                && !self.column_preview;
             self.preview.update(
                 now,
                 entries,
@@ -12871,8 +12994,14 @@ impl State {
             self.stars.poll();
             self.stars.set_mods(self.cfg.mods, self.cfg.scroll_speed);
             let play_rate = self.play_speed().0;
-            // Song select keeps the song's notes behind it too, whichever song it's on.
-            if self.cfg.menu_notes && self.scene.is_select() {
+            // Song select keeps the song's notes behind it too, whichever song it's on (not 1.0's:
+            // only the menu has them).
+            let behind = if self.cfg.legacy_menu {
+                self.on_menu()
+            } else {
+                self.scene.is_select()
+            };
+            if self.cfg.menu_notes && behind {
                 let playing = self.preview_target();
                 self.menu_notes
                     .update(playing, &self.library, &mut self.stars, play_rate);
@@ -12900,6 +13029,11 @@ impl State {
                     } else {
                         0.5
                     }
+                }
+                // Song select in the main menu's look: darker, so a bright picture doesn't wash
+                // the screen out round the list and the column.
+                _ if self.scene.is_select() && !self.select.legacy && !self.select.classic => {
+                    SELECT_BG_BRIGHTNESS
                 }
                 Scene::Other(ref s) => s.background_dim().unwrap_or(0.35),
             };
@@ -14094,6 +14228,9 @@ impl State {
             ),
             ("the replay's music", self.replay_speed_rx.is_busy()),
             ("the live pp", live_pp),
+            ("the map hashes", self.hasher.is_busy()),
+            ("the selected map's pp", self.potentials.is_busy()),
+            ("the pp simulator", self.sim_pp_job.is_busy()),
             ("the download browser", self.browse.is_busy()),
             (
                 "the account server",
@@ -15219,7 +15356,11 @@ impl State {
                     self.toast(format!("{name} is the host now"));
                 }
             }
-            Hit::BoardTab(online) => self.board_online = online,
+            Hit::BoardTab(online) => {
+                self.board_online = online;
+                self.column_preview = false;
+            }
+            Hit::PreviewTab => self.column_preview = true,
             Hit::BoardPage => self.mob.flip_board(),
             Hit::RateOpen
             | Hit::RateClose
@@ -15526,6 +15667,11 @@ const STATUS_ROUND_SECS: u64 = 45;
 
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
+
+/// How many bytes of pictures go up to the GPU in one frame at most (song select's banner, the
+/// cards' strips and a new background): a fast scroll used to send over 13 MB in one frame, a
+/// hitch on an integrated GPU. The first thing in a frame always goes, whatever its size.
+pub(crate) const UPLOAD_BUDGET: usize = 3 << 20;
 
 /// How long the exit question takes to slide in.
 const QUIT_SLIDE_MS: f32 = 160.0;

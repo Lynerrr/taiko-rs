@@ -650,7 +650,7 @@
 "The interface's accent; any but red tints the greys too. Left/Right: presets (or #rrggbb in the config)." = "设置界面强调色。选红色以外的颜色也会为灰色界面着色。左/右切换预设；也可在配置中填写 #rrggbb。"
 "The lane the notes scroll on, and the drum's panel, are pure black: no kiai tint, no skin's lane picture." = "将音符经过的轨道和鼓面板设为纯黑，不显示气合染色或皮肤轨道图片。"
 "The language of menus, settings and messages. Song titles stay as their maps have them." = "设置菜单、设置项和消息的语言。歌曲标题仍按谱面原样显示。"
-"The old layout: straight to song select with tabs along the top, no main menu, and Esc asks to quit." = "使用旧布局：直接进入选歌界面、顶部显示标签页、不显示主菜单；按 Esc 会询问是否退出。"
+"Song select as 1.0 drew it: a list of rows, the details beside it, Mods, Random and Play under them, and no camera move from the main menu." = "按 1.0 的样式显示选歌界面：行列表，旁边是详情，下方是模组、随机和开始；从主菜单进入时没有镜头移动。"
 "The order autoplay's four keys light the drum in (kddk): 1324 puts each hand's don on the other side." = "设置自动游玩时四个鼓键的触发顺序（kddk）。1324 会对调左右手的鼓面键。"
 "The playing song's notes drift along routes behind the main menu, one for each Multiverse universe." = "当前歌曲的音符会沿着 Multiverse 各宇宙对应的路线，在主菜单后方飘动。"
 "The short guide shown on the first launch." = "重新打开首次启动时显示的简短指南。"

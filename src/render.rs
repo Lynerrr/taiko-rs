@@ -11,6 +11,67 @@ use crate::font;
 /// Virtual canvas height. Width follows the window aspect ratio.
 pub const VIRTUAL_HEIGHT: f32 = 480.0;
 
+/// How tall the interface's own space is on a desktop at `ui_scale` 1 (`Canvas::begin_space`):
+/// a unit is a pixel at 720p, 1.5 at 1080p and 2 at 1440p, where the screen's 480 units are
+/// 1.5, 2.25 and 3.
+pub const UI_SPACE_HEIGHT: f32 = 720.0;
+
+/// How tall the interface's space is at `ui_scale` (bigger `ui_scale`, fewer units, all bigger).
+pub fn ui_space_height(ui_scale: f32) -> f32 {
+    let scale = if ui_scale.is_finite() {
+        ui_scale.clamp(0.5, 2.0)
+    } else {
+        1.0
+    };
+    UI_SPACE_HEIGHT / scale
+}
+
+/// A screen drawn in a space of its own, `Canvas::begin_space` to `Canvas::end_space`: how its
+/// units map onto the screen's, and what the canvas had before it.
+#[must_use = "end_space puts the canvas back"]
+pub struct Space {
+    /// Screen units per unit of the space (480 / its height).
+    scale: f32,
+    /// How far in from the screen's left edge it starts (its units): a space narrower than the
+    /// screen sits in its middle.
+    left: f32,
+    start: usize,
+    hits: usize,
+    regions: usize,
+    width: f32,
+    height: f32,
+    left_before: f32,
+    mouse: (f32, f32),
+    grid: f32,
+    font_scale: f32,
+    text: TextSizes,
+    disc: Option<[f32; 4]>,
+}
+
+impl Space {
+    /// Screen units per unit of the space.
+    pub fn scale(&self) -> f32 {
+        self.scale
+    }
+
+    /// A point of the space on the screen (virtual units, 480 tall): for what other screens
+    /// take from this one, as the place a note flies to.
+    pub fn to_screen(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        [(x + self.left) * self.scale, y * self.scale]
+    }
+
+    /// A rect `[x, y, w, h]` of the space on the screen.
+    pub fn rect_to_screen(&self, [x, y, w, h]: [f32; 4]) -> [f32; 4] {
+        let [x, y] = self.to_screen([x, y]);
+        [x, y, w * self.scale, h * self.scale]
+    }
+
+    /// A point of the screen in the space.
+    pub fn to_space(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        [x / self.scale - self.left, y / self.scale]
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Shape {
@@ -195,6 +256,9 @@ pub(crate) const SPRITE_BASE: f32 = 10.0;
 /// A plain shape's kind (`params[3]`) for `Canvas::shade_across`: its fill sweeps from `fill`
 /// to `border` across it.
 pub const SHADE_ACROSS: f32 = 3.0;
+/// A plain shape's kind for `Canvas::shade_eased`: as `SHADE_ACROSS`, eased in and out (no edge
+/// shows where it starts or ends against something of its colour).
+pub const SHADE_EASED: f32 = 4.0;
 
 fn flip_x(sh: &mut Shape) {
     let sprite = |s: Sprite| SPRITE_BASE + s as usize as f32;
@@ -206,7 +270,7 @@ fn flip_x(sh: &mut Shape) {
     // Turned the other way in the mirror (the pieces of a bent lane: left as they were, its
     // bends came out turned against the lane and cut into it).
     sh.angle = -sh.angle;
-    if sh.params[3] == SHADE_ACROSS {
+    if sh.params[3] == SHADE_ACROSS || sh.params[3] == SHADE_EASED {
         std::mem::swap(&mut sh.fill, &mut sh.border);
     } else if (0.5..2.5).contains(&sh.params[3]) {
         sh.params[3] = 3.0 - sh.params[3];
@@ -445,6 +509,8 @@ pub struct Renderer {
     /// so it holds at half resolution). The interface stays inside it; the background, and the
     /// bars reaching the interface's edges (`Canvas::bleed`), still fill the screen.
     pub safe: Option<[u32; 4]>,
+    /// Frames are coming very fast: see `frame_latency`.
+    fast_frames: bool,
     /// The last image came Suboptimal: configure the surface again before the next.
     reconfigure: bool,
     /// The half-resolution image and its bind group for the upscale, sized for the screen.
@@ -655,6 +721,11 @@ pub struct BgImage {
     pub luma: Vec<u8>,
     /// Cb, Cr pairs for each 2x2 block (`chroma_size`).
     pub chroma: Vec<u8>,
+    /// The small blurred copies of both (`blurred_size`), for the idle screen to fade into. Made
+    /// with the image, on the thread that reads it: on the render thread they held up the frame
+    /// a new background came in on.
+    luma_blur: Vec<u8>,
+    chroma_blur: Vec<u8>,
 }
 
 impl BgImage {
@@ -693,12 +764,23 @@ impl BgImage {
                 );
             }
         }
+        let (sw, sh) = blurred_size(width, height);
+        let (cw, ch) = (cw as u32, ch as u32);
+        let luma_blur = shrink_blur(&luma, width, height, 1, sw, sh);
+        let chroma_blur = shrink_blur(&chroma, cw, ch, 2, sw, sh);
         BgImage {
             width,
             height,
             luma,
             chroma,
+            luma_blur,
+            chroma_blur,
         }
+    }
+
+    /// What it takes to send to the GPU, blurred copies and all.
+    pub fn bytes(&self) -> usize {
+        self.luma.len() + self.chroma.len() + self.luma_blur.len() + self.chroma_blur.len()
     }
 
     pub fn chroma_size(width: u32, height: u32) -> (u32, u32) {
@@ -707,10 +789,13 @@ impl BgImage {
 
     fn is_valid(&self) -> bool {
         let (cw, ch) = Self::chroma_size(self.width, self.height);
+        let (sw, sh) = blurred_size(self.width, self.height);
         self.width > 0
             && self.height > 0
             && self.luma.len() == (self.width * self.height) as usize
             && self.chroma.len() == (cw * ch * 2) as usize
+            && self.luma_blur.len() == (sw * sh) as usize
+            && self.chroma_blur.len() == (sw * sh * 2) as usize
     }
 }
 
@@ -927,9 +1012,17 @@ fn to_rgb(y: f32, cbcr: vec2<f32>) -> vec3<f32> {
 fn fs(i: V) -> @location(0) vec4<f32> {
     // params: brightness, opacity (for cross-fading into a new background), how far into its
     // blurred copy (the idle screen).
-    let sharp = to_rgb(textureSample(luma, samp, i.uv).r, textureSample(chroma, samp, i.uv).rg);
-    let soft = to_rgb(textureSample(luma_blur, samp, i.uv).r, textureSample(chroma_blur, samp, i.uv).rg);
-    let rgb = mix(sharp, soft, bg.params.z);
+    // Most of the time (a song, song select) nothing is blurred: the blurred copy's two reads are
+    // skipped then, and the picture (the whole screen, every frame) costs about half as much.
+    // The image has no mipmaps, so level 0 is what `textureSample` read too.
+    var rgb = to_rgb(textureSampleLevel(luma, samp, i.uv, 0.0).r, textureSampleLevel(chroma, samp, i.uv, 0.0).rg);
+    if bg.params.z > 0.0 {
+        let soft = to_rgb(
+            textureSampleLevel(luma_blur, samp, i.uv, 0.0).r,
+            textureSampleLevel(chroma_blur, samp, i.uv, 0.0).rg,
+        );
+        rgb = mix(rgb, soft, bg.params.z);
+    }
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * bg.params.x, bg.params.y);
 }
 "#;
@@ -1201,9 +1294,16 @@ fn shade(in: VOut) -> vec4<f32> {
         let grey = mix(in.border.x, in.border.y, across);
         let luma = dot(t.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
         t = vec4<f32>(mix(t.rgb, vec3<f32>(luma), grey), t.a);
+        // Its alpha coming in across it, eased (`border.zw`: from where to where of its width;
+        // all of it shown when the second is 0): no edge where it starts.
+        var come = 1.0;
+        if (in.border.w > 0.0) {
+            let f = clamp((across - in.border.z) / max(in.border.w - in.border.z, 1e-4), 0.0, 1.0);
+            come = f * f * (3.0 - 2.0 * f);
+        }
         let r = min(in.params.x, min(in.half.x, in.half.y));
         let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
-        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover;
+        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover * come;
     }
     if (in.params.w < -999.5) {
         // A map's picture (premultiplied), its square stretched over the quad, tinted by fill.
@@ -1298,6 +1398,11 @@ fn shade(in: VOut) -> vec4<f32> {
             // `Canvas::shade_across`: fill at the left edge, border at the right.
             let u = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
             let c = mix(in.fill, in.border, u);
+            color = vec4<f32>(c.rgb, c.a * coverage);
+        } else if (in.params.w > 3.5 && in.params.w < 4.5) {
+            // `Canvas::shade_eased`: as across, eased in and out.
+            let u = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
+            let c = mix(in.fill, in.border, smoothstep(0.0, 1.0, u));
             color = vec4<f32>(c.rgb, c.a * coverage);
         } else {
             let bw = in.params.y;
@@ -1937,6 +2042,7 @@ impl Renderer {
             pixel_scale: 1,
             letterbox: None,
             safe: None,
+            fast_frames: false,
             reconfigure: false,
             low: None,
             upscale_layout,
@@ -2247,7 +2353,7 @@ impl Renderer {
             sh,
             wgpu::TextureFormat::R8Unorm,
             1,
-            &shrink_blur(&img.luma, w, h, 1, sw, sh),
+            &img.luma_blur,
         );
         let chroma_blur = plane(
             "background chroma blurred",
@@ -2255,7 +2361,7 @@ impl Renderer {
             sh,
             wgpu::TextureFormat::Rg8Unorm,
             2,
-            &shrink_blur(&img.chroma, cw, ch, 2, sw, sh),
+            &img.chroma_blur,
         );
         // Each layer has its own uniform: its crop depends on its own aspect.
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2380,10 +2486,29 @@ impl Renderer {
             .unwrap_or(PresentChoice::Fifo);
         self.present = chosen;
         self.config.present_mode = to_wgpu(chosen);
-        // One frame in flight for the uncapped modes keeps input-to-photon latency minimal.
-        self.config.desired_maximum_frame_latency =
-            if chosen == PresentChoice::Fifo { 2 } else { 1 };
+        self.config.desired_maximum_frame_latency = self.frame_latency();
         self.configure();
+    }
+
+    /// Whether frames come fast enough to queue more of them (see `clock::FrameRate`).
+    pub fn set_fast_frames(&mut self, fast: bool) {
+        if self.fast_frames != fast {
+            self.fast_frames = fast;
+            self.config.desired_maximum_frame_latency = self.frame_latency();
+            self.configure();
+        }
+    }
+
+    /// One frame in flight for the uncapped modes keeps input-to-photon latency minimal. Very fast
+    /// frames get more: a fullscreen window's images go straight to the screen and come back late,
+    /// so with few of them each frame waits for one (8,500 fps instead of 14,000 on a 7900 XT),
+    /// while a queued frame that fast costs a fraction of a millisecond.
+    fn frame_latency(&self) -> u32 {
+        match self.present {
+            PresentChoice::Fifo => 2,
+            _ if self.fast_frames => 4,
+            _ => 1,
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -3390,6 +3515,54 @@ thread_local! {
     /// Render pixels per virtual unit when text snaps to whole pixels, else 0 (`set_text_grid`).
     static TEXT_GRID: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
     static TEXT_BIAS: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+    /// How text sizes come out in the space being drawn (`Canvas::begin_space_sized`).
+    static TEXT_SIZES: std::cell::Cell<TextSizes> = const { std::cell::Cell::new(TextSizes::SAME) };
+}
+
+/// How a space draws text (`Canvas::begin_space_sized`): text asked for at `size` comes out
+/// `k * size + b` tall, centred on the line `size` takes; widths are measured as it comes out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextSizes {
+    pub k: f32,
+    pub b: f32,
+}
+
+impl TextSizes {
+    /// Text as asked for.
+    pub const SAME: Self = Self { k: 1.0, b: 0.0 };
+    /// The interface's own space (720 tall at scale 1) for what was drawn for the screen's 480:
+    /// the rest is two thirds the size there, text less so. A caption (`style::text::CAPTION`,
+    /// 6) is 9 units, as many pixels as before; body text (8) 10.5, a heading (12) 13.5 and the
+    /// title (18) 18.
+    pub const UI: Self = Self { k: 0.75, b: 4.5 };
+
+    /// How tall text asked for at `size` comes out.
+    pub fn shown(self, size: f32) -> f32 {
+        if size > 0.0 {
+            self.k * size + self.b
+        } else {
+            size
+        }
+    }
+
+    /// The size to ask for so text comes out `shown` tall.
+    pub fn asked(self, shown: f32) -> f32 {
+        if shown > 0.0 {
+            ((shown - self.b) / self.k).max(0.0)
+        } else {
+            shown
+        }
+    }
+}
+
+/// How tall text asked for at `size` comes out where it's drawn now (`TextSizes`).
+pub fn shown_text_size(size: f32) -> f32 {
+    TEXT_SIZES.with(std::cell::Cell::get).shown(size)
+}
+
+/// The size to ask for so text comes out `shown` tall where it's drawn now.
+fn asked_text_size(shown: f32) -> f32 {
+    TEXT_SIZES.with(std::cell::Cell::get).asked(shown)
 }
 
 /// Half resolution: text is laid on a grid of `px_per_unit` render pixels per virtual unit, each
@@ -3420,8 +3593,9 @@ fn font_script() -> font::Script {
     }
 }
 
-/// One font pixel (in virtual units) of text `size` units tall.
+/// One font pixel (in virtual units) of text asked for at `size` (`shown_text_size`).
 fn font_px(size: f32) -> f32 {
+    let size = shown_text_size(size);
     let grid = TEXT_GRID.with(std::cell::Cell::get);
     if grid > 0.0 {
         let bias = TEXT_BIAS.with(std::cell::Cell::get);
@@ -3715,6 +3889,11 @@ pub struct Canvas<H> {
     /// The whole picture glitches this frame: how much (0 to 1) and a number picking how.
     pub glitch: Option<[f32; 2]>,
     pub width: f32,
+    /// How tall it is in its units: the screen's 480, or a space's (`begin_space`).
+    pub height: f32,
+    /// How far in from the screen's left edge it starts, in its units: 0, or a space narrower
+    /// than the screen's (`begin_space_in`), which sits in its middle.
+    pub left: f32,
     /// Clickable areas, in drawing order (later ones are on top).
     pub hits: Vec<HitBox<H>>,
     /// Pointer position (virtual units), for hover highlights.
@@ -3757,6 +3936,8 @@ pub struct Canvas<H> {
     /// Card pictures asked for this frame: picture key, file, and whether a card draws it now
     /// (`card_picture`) or it is only read ahead (`want_card`).
     pub cards_wanted: Vec<(String, std::path::PathBuf, bool)>,
+    /// Where each key is in `cards_wanted`.
+    pub card_index: std::collections::HashMap<String, usize>,
 }
 
 // By hand: a derive would ask `H: Default` of the hit type.
@@ -3769,6 +3950,8 @@ impl<H> Default for Canvas<H> {
             disc: Default::default(),
             glitch: Default::default(),
             width: Default::default(),
+            height: VIRTUAL_HEIGHT,
+            left: 0.0,
             hits: Default::default(),
             mouse: Default::default(),
             dt_ms: Default::default(),
@@ -3789,6 +3972,7 @@ impl<H> Default for Canvas<H> {
             card_slots: Default::default(),
             card_colours: Default::default(),
             cards_wanted: Default::default(),
+            card_index: Default::default(),
         }
     }
 }
@@ -3989,6 +4173,7 @@ impl<H> Canvas<H> {
         self.picture_paths.clear();
         self.picture_times.clear();
         self.cards_wanted.clear();
+        self.card_index.clear();
         self.disc = None;
         self.glitch = None;
         self.hits.clear();
@@ -4479,18 +4664,36 @@ impl<H> Canvas<H> {
 
     /// Song select's card picture of the map picture at `path` over all of `[x, y, w, h]`: the
     /// picture's middle strip, cut to it, tinted by `tint`, its colour going to grey across it from
-    /// `greys`' first at its left edge to the second at its right (0: all its colour). Asks for
-    /// it; false while it isn't in (nothing drawn).
+    /// `greys`' first at its left edge to the second at its right (0: all its colour). `come`:
+    /// from where to where across it (0 its left edge, 1 its right) the picture comes in out of
+    /// nothing, eased, none of it shown left of the first; None, all of it shown. Asks for it;
+    /// false while it isn't in (nothing drawn).
     pub fn card_picture(
         &mut self,
+        path: &std::path::Path,
+        rect: [f32; 4],
+        tint: [f32; 4],
+        radius: f32,
+        greys: [f32; 2],
+        come: Option<[f32; 2]>,
+    ) -> bool {
+        let key = path_picture_key(path);
+        self.card_picture_keyed(&key, path, rect, tint, radius, greys, come)
+    }
+
+    /// `card_picture`, its key (`path_picture_key`) worked out already.
+    #[allow(clippy::too_many_arguments)]
+    pub fn card_picture_keyed(
+        &mut self,
+        key: &str,
         path: &std::path::Path,
         [x, y, w, h]: [f32; 4],
         tint: [f32; 4],
         radius: f32,
         greys: [f32; 2],
+        come: Option<[f32; 2]>,
     ) -> bool {
-        let key = path_picture_key(path);
-        let slot = self.card_slots.get(&key).copied();
+        let slot = self.card_slots.get(key).copied();
         self.ask_card(key, path, true);
         let Some(slot) = slot else {
             return false;
@@ -4513,7 +4716,10 @@ impl<H> Canvas<H> {
             center: [x + w / 2.0, y + h / 2.0],
             half: [w / 2.0, h / 2.0],
             fill: tint,
-            border: [greys[0], greys[1], 0.0, 0.0],
+            border: match come {
+                Some([from, to]) => [greys[0], greys[1], from, to.max(from + 1e-3)],
+                None => [greys[0], greys[1], 0.0, 0.0],
+            },
             params: [radius, 1.0, k, -CARD_BASE - slot as f32],
             angle: 0.0,
         });
@@ -4540,22 +4746,59 @@ impl<H> Canvas<H> {
         });
     }
 
+    /// As `shade_across`, the sweep eased in and out: where it starts and ends it runs level, so
+    /// no edge shows against a plain part of its colour on either side of it (a straight sweep
+    /// meeting a plain part showed a line there).
+    pub fn shade_eased(
+        &mut self,
+        [x, y]: [f32; 2],
+        [w, h]: [f32; 2],
+        radius: f32,
+        left: [f32; 4],
+        right: [f32; 4],
+    ) {
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [w / 2.0, h / 2.0],
+            fill: left,
+            border: right,
+            params: [radius, 0.0, 0.0, SHADE_EASED],
+            angle: 0.0,
+        });
+    }
+
     /// Asks for the card picture of the map picture at `path` without drawing it, so it's in
     /// before its card comes into view.
     pub fn want_card(&mut self, path: &std::path::Path) {
-        self.ask_card(path_picture_key(path), path, false);
+        self.ask_card(&path_picture_key(path), path, false);
     }
 
-    fn ask_card(&mut self, key: String, path: &std::path::Path, drawn: bool) {
-        match self.cards_wanted.iter_mut().find(|w| w.0 == key) {
-            Some(w) => w.2 |= drawn,
-            None => self.cards_wanted.push((key, path.to_path_buf(), drawn)),
+    /// `want_card`, its key (`path_picture_key`) worked out already.
+    pub fn want_card_keyed(&mut self, key: &str, path: &std::path::Path) {
+        self.ask_card(key, path, false);
+    }
+
+    fn ask_card(&mut self, key: &str, path: &std::path::Path, drawn: bool) {
+        // Looked up by key, not along the list: it holds a hundred and more a frame.
+        match self.card_index.get(key) {
+            Some(&i) => self.cards_wanted[i].2 |= drawn,
+            None => {
+                self.card_index
+                    .insert(key.to_string(), self.cards_wanted.len());
+                self.cards_wanted
+                    .push((key.to_string(), path.to_path_buf(), drawn));
+            }
         }
     }
 
     /// The average colour of the card picture of the map picture at `path`, once known.
     pub fn card_colour(&self, path: &std::path::Path) -> Option<[f32; 3]> {
-        self.card_colours.get(&path_picture_key(path)).copied()
+        self.card_colour_keyed(&path_picture_key(path))
+    }
+
+    /// `card_colour` by its picture key (`path_picture_key`).
+    pub fn card_colour_keyed(&self, key: &str) -> Option<[f32; 3]> {
+        self.card_colours.get(key).copied()
     }
 
     /// Where an animated picture `file` is to be in its frames this frame: `since` ms into them
@@ -4611,6 +4854,106 @@ impl<H> Canvas<H> {
             params: [0.0, 0.0, 0.0, SPRITE_BASE + sprite as usize as f32],
             angle: 0.0,
         });
+    }
+
+    /// Lays out what's drawn next in a space `h` units tall (the width from the screen's aspect),
+    /// until `end_space` maps it onto the screen. The pointer is in its units meanwhile, and text
+    /// snaps to whole screen pixels of them: `h` 480 is the screen itself.
+    pub fn begin_space(&mut self, h: f32) -> Space {
+        self.begin_space_sized(h, TextSizes::SAME)
+    }
+
+    /// `begin_space`, its text coming out as `text` says (`TextSizes`).
+    pub fn begin_space_sized(&mut self, h: f32, text: TextSizes) -> Space {
+        self.begin_space_in(h, text, f32::INFINITY)
+    }
+
+    /// `begin_space_sized`, at most `max_w` of its units wide: narrower than the screen, it
+    /// sits in the screen's middle (`left` in from its left edge).
+    pub fn begin_space_in(&mut self, h: f32, text: TextSizes, max_w: f32) -> Space {
+        let scale = self.height / h.max(1.0);
+        let full = self.width / scale;
+        let left = ((full - max_w) / 2.0).max(0.0);
+        let grid = TEXT_GRID.with(std::cell::Cell::get);
+        let font_scale = crate::system_font::pixel_scale();
+        let space = Space {
+            scale,
+            left,
+            start: self.shapes.len(),
+            hits: self.hits.len(),
+            regions: self.input_regions.len(),
+            width: self.width,
+            height: self.height,
+            left_before: self.left,
+            mouse: self.mouse,
+            grid,
+            font_scale,
+            text: TEXT_SIZES.with(std::cell::Cell::get),
+            disc: self.disc,
+        };
+        TEXT_SIZES.with(|t| t.set(text));
+        self.width = full - 2.0 * left;
+        self.height = h.max(1.0);
+        self.left = left;
+        self.mouse = (self.mouse.0 / scale - left, self.mouse.1 / scale);
+        // Render pixels per unit: a unit of the space is `scale` of the screen's.
+        if grid > 0.0 {
+            TEXT_GRID.with(|g| g.set(grid * scale));
+        }
+        crate::system_font::set_pixel_scale(font_scale * scale);
+        space
+    }
+
+    /// Maps what was drawn since `begin_space` onto the screen (shapes, clicks, clips, the text
+    /// fields' places) and puts the canvas back as it was.
+    pub fn end_space(&mut self, space: Space) {
+        let k = space.scale;
+        let dx = space.left * k;
+        self.rescale_since(space.start, space.hits, space.regions, k, dx);
+        if self.disc != space.disc
+            && let Some(d) = self.disc.as_mut()
+        {
+            d[0] = d[0] * k + dx;
+            d[1] *= k;
+            d[2] *= k;
+        }
+        self.width = space.width;
+        self.height = space.height;
+        self.left = space.left_before;
+        self.mouse = space.mouse;
+        TEXT_GRID.with(|g| g.set(space.grid));
+        crate::system_font::set_pixel_scale(space.font_scale);
+        TEXT_SIZES.with(|t| t.set(space.text));
+    }
+
+    /// Scales what was drawn since shape `start` (and click `hits`, text field `regions`) `k`
+    /// times about the top left corner, then moves it `dx` right: shapes, clicks, clips and the
+    /// text fields' places.
+    pub(crate) fn rescale_since(
+        &mut self,
+        start: usize,
+        hits: usize,
+        regions: usize,
+        k: f32,
+        dx: f32,
+    ) {
+        // A space of the screen's own size (song select's Legacy layout every frame) maps
+        // everything onto itself: nothing to go through.
+        if k == 1.0 && dx == 0.0 {
+            return;
+        }
+        self.transform_since(start, [0.0, 0.0], k, dx, 0.0);
+        let map = |[x, y, w, h]: [f32; 4]| [x * k + dx, y * k, w * k, h * k];
+        // A click made before the first of those shapes isn't moved with the shapes.
+        for h in self.hits[hits..].iter_mut().filter(|h| h.shape <= start) {
+            h.rect = map(h.rect);
+        }
+        for r in &mut self.input_regions[regions..] {
+            r.rect = map(r.rect);
+            for (_, x) in &mut r.stops {
+                *x = *x * k + dx;
+            }
+        }
     }
 
     /// Scales every shape drawn since `start` about `anchor`, then moves it by (`dx`, `dy`). Radii,
@@ -4743,7 +5086,14 @@ impl<H> Canvas<H> {
     pub fn fade_between(&mut self, start: usize, end: usize, alpha: f32, dim: f32) {
         let end = end.min(self.shapes.len());
         for sh in &mut self.shapes[start.min(end)..end] {
-            for col in [&mut sh.fill, &mut sh.border] {
+            // A card's picture's `border` isn't a colour (how grey it goes, where it comes in).
+            let card = sh.params[3] < -CARD_BASE + 0.5;
+            let cols: &mut [&mut [f32; 4]] = if card {
+                &mut [&mut sh.fill]
+            } else {
+                &mut [&mut sh.fill, &mut sh.border]
+            };
+            for col in cols.iter_mut() {
                 col[0] *= dim;
                 col[1] *= dim;
                 col[2] *= dim;
@@ -4806,9 +5156,12 @@ impl<H> Canvas<H> {
         let first = self.shapes.len();
         let texts = self.texts.len();
         let mut cx = x;
-        let scale = custom::scale(size);
+        // As tall as it comes out in this space, centred on the line `size` takes.
+        let shown = shown_text_size(size);
+        let y = y + (size - shown) / 2.0;
+        let scale = custom::scale(shown);
         for ch in s.chars() {
-            if let Some(glyph) = custom::glyph_at(ch, size) {
+            if let Some(glyph) = custom::glyph_at(ch, shown) {
                 let m = glyph.metrics;
                 let raster_scale = scale * glyph.design_scale;
                 let gx = custom::snap(cx + m.xmin as f32 * raster_scale);
@@ -4974,7 +5327,7 @@ impl<H> Canvas<H> {
     fn custom_advance(size: f32, ch: char) -> f32 {
         crate::system_font::advance(ch).map_or_else(
             || (font::columns(font::index_for(ch, font_script())) + 1) as f32 * font_px(size),
-            |advance| advance * crate::system_font::scale(size),
+            |advance| advance * crate::system_font::scale(shown_text_size(size)),
         )
     }
 
@@ -5043,10 +5396,23 @@ impl<H> Canvas<H> {
         out
     }
 
+    /// The `y` to draw text of `size` at for its ink to start at `top`: text that comes out
+    /// taller than asked (`TextSizes`, a text grid) is centred on the line `size` takes, so it
+    /// starts higher than `y` by half of what it grew.
+    pub fn text_y_at(top: f32, size: f32) -> f32 {
+        top - (size - Self::text_height(size)) / 2.0
+    }
+
+    /// The `y` to draw text of `size` at for it to be centred on `mid`: `text` centres what
+    /// comes out on the line `size` takes, so that line's middle goes there.
+    pub fn text_y_mid(mid: f32, size: f32) -> f32 {
+        mid - size / 2.0
+    }
+
     /// How tall text `size` comes out (`size`, or more on a text grid).
     pub fn text_height(size: f32) -> f32 {
         if crate::system_font::active() {
-            size
+            shown_text_size(size)
         } else {
             font_px(size) * 7.0
         }
@@ -5060,11 +5426,12 @@ impl<H> Canvas<H> {
             return size;
         }
         let grid = TEXT_GRID.with(std::cell::Cell::get);
-        if grid > 0.0 {
+        let shown = if grid > 0.0 {
             (max_h / 7.0 * grid).floor().max(1.0) / grid * 7.0
         } else {
             max_h
-        }
+        };
+        asked_text_size(shown)
     }
 
     pub fn text_centered(&mut self, cx: f32, y: f32, size: f32, color: [f32; 4], s: &str) {
@@ -5150,7 +5517,7 @@ impl<H> Canvas<H> {
         if grid > 0.0 && !crate::system_font::active() {
             // Font pixels come in whole render pixels: the biggest that fits.
             let per_px = max_w / text_units(s, font_script()).max(1) as f32;
-            return ((per_px * grid).floor().max(1.0) / grid * 7.0).max(min);
+            return asked_text_size((per_px * grid).floor().max(1.0) / grid * 7.0).max(min);
         }
         (size * max_w / w).max(min)
     }
@@ -5158,6 +5525,38 @@ impl<H> Canvas<H> {
 
 #[cfg(test)]
 mod tests {
+    /// A space as tall as the screen (song select's Legacy layout) puts everything drawn in it
+    /// back where it was drawn; a taller one scales it down onto the screen.
+    #[test]
+    fn a_space_of_the_screens_own_size_leaves_what_is_drawn_in_it_alone() {
+        let draw = |h: f32| {
+            let mut c = super::Canvas::<()>::default();
+            c.clear(800.0);
+            let space = c.begin_space_in(h, super::TextSizes::SAME, f32::INFINITY);
+            let start = c.shapes.len();
+            c.rect(100.0, 60.0, 40.0, 20.0, super::rgba(0xffffff, 1.0));
+            c.hit(100.0, 60.0, 40.0, 20.0, ());
+            c.clip_since(start, 90.0, 50.0, 60.0, 40.0);
+            c.end_space(space);
+            let s = c.shapes[start];
+            (s.center, s.half, c.hits[0].rect, c.clips[0].1)
+        };
+        let height = super::VIRTUAL_HEIGHT;
+        assert_eq!(
+            draw(height),
+            (
+                [120.0, 70.0],
+                [20.0, 10.0],
+                [100.0, 60.0, 40.0, 20.0],
+                [90.0, 50.0, 60.0, 40.0]
+            )
+        );
+        let (center, half, hit, clip) = draw(2.0 * height);
+        assert_eq!((center, half), ([60.0, 35.0], [10.0, 5.0]));
+        assert_eq!(hit, [50.0, 30.0, 20.0, 10.0]);
+        assert_eq!(clip, [45.0, 25.0, 30.0, 20.0]);
+    }
+
     /// Moving what was drawn since a point moves its clips with it (a .tko map's slices in a play
     /// area smaller than the screen), and leaves the clips of what came before alone.
     #[test]
@@ -5423,6 +5822,59 @@ mod tests {
     }
 
     #[test]
+    fn a_sharp_background_never_reads_its_blurred_copy() {
+        // The background covers the screen every frame: reading the blurred copy too, at no blur
+        // (a song, song select), doubled what it cost a weak GPU.
+        let module = naga::front::wgsl::parse_str(super::BG_SHADER).unwrap();
+        let blurred: Vec<_> = module
+            .global_variables
+            .iter()
+            .filter(|(_, g)| matches!(g.name.as_deref(), Some("luma_blur" | "chroma_blur")))
+            .map(|(h, _)| h)
+            .collect();
+        assert_eq!(blurred.len(), 2);
+        let fs = &module
+            .entry_points
+            .iter()
+            .find(|e| e.name == "fs")
+            .unwrap()
+            .function;
+        // The expressions that read it, by index.
+        let reads: Vec<usize> = fs
+            .expressions
+            .iter()
+            .filter(|(_, e)| match e {
+                naga::Expression::ImageSample { image, .. } => matches!(
+                    fs.expressions[*image],
+                    naga::Expression::GlobalVariable(g) if blurred.contains(&g)
+                ),
+                _ => false,
+            })
+            .map(|(h, _)| h.index())
+            .collect();
+        // How many of them an `Emit` evaluates.
+        let evaluated = |s: &naga::Statement| match s {
+            naga::Statement::Emit(range) => {
+                let r = range.index_range();
+                reads
+                    .iter()
+                    .filter(|&&i| (r.start as usize..r.end as usize).contains(&i))
+                    .count()
+            }
+            _ => 0,
+        };
+        let (mut always, mut sometimes) = (0, 0);
+        for statement in fs.body.iter() {
+            always += evaluated(statement);
+            if let naga::Statement::If { accept, .. } = statement {
+                sometimes += accept.iter().map(evaluated).sum::<usize>();
+            }
+        }
+        assert_eq!(always, 0, "the blurred copy is read only when blurring");
+        assert_eq!(sometimes, 2, "and then both its planes");
+    }
+
+    #[test]
     fn shaders_compile() {
         let shapes = super::shape_shader();
         for (name, src) in [
@@ -5447,6 +5899,47 @@ mod tests {
 #[cfg(test)]
 mod shape_limit_tests {
     use super::*;
+
+    #[test]
+    fn a_background_comes_with_its_blurred_copies_made_where_it_was_read() {
+        let (w, h) = (37, 21);
+        let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i * 7 % 251) as u8).collect();
+        let img = BgImage::from_rgba(w, h, &rgba);
+        assert!(img.is_valid());
+        let (sw, sh) = blurred_size(w, h);
+        let (cw, ch) = BgImage::chroma_size(w, h);
+        // What the render thread made of it when it went up, made ahead.
+        assert_eq!(img.luma_blur, shrink_blur(&img.luma, w, h, 1, sw, sh));
+        assert_eq!(img.chroma_blur, shrink_blur(&img.chroma, cw, ch, 2, sw, sh));
+        assert_eq!(
+            img.bytes(),
+            img.luma.len() + img.chroma.len() + (sw * sh * 3) as usize
+        );
+    }
+
+    #[test]
+    fn a_card_picture_asked_for_twice_in_a_frame_is_one_and_drawn_if_either_draws_it() {
+        let mut c = Canvas::<()>::default();
+        c.clear(800.0);
+        let (a, b) = (
+            std::path::Path::new("/s/a/bg.jpg"),
+            std::path::Path::new("/s/b/bg.jpg"),
+        );
+        c.want_card(a);
+        c.want_card_keyed(&path_picture_key(b), b);
+        c.card_picture(a, [0.0, 0.0, 10.0, 10.0], [1.0; 4], 0.0, [0.0; 2], None);
+        c.want_card(b);
+        let wanted: Vec<_> = c.cards_wanted.iter().map(|w| (w.0.clone(), w.2)).collect();
+        assert_eq!(
+            wanted,
+            [(path_picture_key(a), true), (path_picture_key(b), false)]
+        );
+        c.clear(800.0);
+        assert!(c.cards_wanted.is_empty());
+        c.want_card(b);
+        assert_eq!(c.cards_wanted.len(), 1, "a new frame asks afresh");
+        assert_eq!(c.card_colour(a), c.card_colour_keyed(&path_picture_key(a)));
+    }
 
     #[test]
     fn a_frame_never_asks_for_a_bigger_buffer_than_the_card_has() {

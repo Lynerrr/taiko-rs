@@ -56,6 +56,23 @@ fn song_select() {
 
 /// Song select in the main menu's look (the Legacy setting off): the way back an arrow, sort and
 /// collection bare icons, Mods and Random bare icons and Play the lit end of their lane.
+/// Song select with Settings > System > Legacy menu on: as 1.0 drew it, the list's rows, the
+/// details on their panel beside it, and Mods, Random and Play as buttons under them.
+#[test]
+fn song_select_in_the_legacy_look() {
+    let songs = Songs::new("screen-select-legacy-look", &maps::all());
+    let cfg = Config {
+        main_menu: true,
+        legacy_menu: true,
+        ..harness::config()
+    };
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    assert!(s.select.classic && !s.select.legacy && s.main_menu.is_none());
+    assert_snapshot("screen-song-select-legacy-look", &shot(&mut s, &mut now));
+}
+
 #[test]
 fn song_select_in_the_menus_look() {
     let songs = Songs::new("screen-select-menu-look", &maps::all());

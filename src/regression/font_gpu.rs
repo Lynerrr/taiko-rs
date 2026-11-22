@@ -364,7 +364,14 @@ fn card_pictures_gpu_draw_their_own_strip() {
     let mut canvas = Canvas::<()>::default();
     canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), slot)].into());
     // As wide as the target and a third of it tall: its middle, cut to it.
-    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 0.0, [0.0; 2]));
+    assert!(canvas.card_picture(
+        path,
+        [8.0, 40.0, 240.0, 48.0],
+        [1.0; 4],
+        0.0,
+        [0.0; 2],
+        None
+    ));
     let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
     let at = |x: u32, y: u32| {
         let i = ((y * width + x) * 4) as usize;
@@ -380,7 +387,14 @@ fn card_pictures_gpu_draw_their_own_strip() {
     // Rounded: its corners are cut, the rest of it is its strip as before.
     let mut canvas = Canvas::<()>::default();
     canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), slot)].into());
-    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 8.0, [0.0; 2]));
+    assert!(canvas.card_picture(
+        path,
+        [8.0, 40.0, 240.0, 48.0],
+        [1.0; 4],
+        8.0,
+        [0.0; 2],
+        None
+    ));
     let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
     let at = |x: u32, y: u32| {
         let i = ((y * width + x) * 4) as usize;
@@ -405,7 +419,7 @@ fn card_pictures_gpu_go_grey_towards_the_faded_side() {
     canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), 0)].into());
     // `config::CardFade::ToRight`: all its colour at the left, grey at the right.
     let greys = crate::config::CardFade::ToRight.greys();
-    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 0.0, greys));
+    assert!(canvas.card_picture(path, [8.0, 40.0, 240.0, 48.0], [1.0; 4], 0.0, greys, None));
     let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
     let at = |x: u32, y: u32| {
         let i = ((y * width + x) * 4) as usize;
@@ -419,4 +433,37 @@ fn card_pictures_gpu_go_grey_towards_the_faded_side() {
         "greyer to the right: {left:?} {middle:?} {right:?}"
     );
     assert!(spread(right) < 60, "close to grey at the right: {right:?}");
+}
+
+#[test]
+fn card_pictures_gpu_come_in_across_out_of_nothing_with_no_edge() {
+    let mut gpu = Gpu::new();
+    let [w, h] = CARD_CELL;
+    let green: Vec<u8> = (0..w * h).flat_map(|_| [0, 255, 0, 255]).collect();
+    write_card(&gpu.queue, &gpu.cards, 0, &green);
+    let path = std::path::Path::new("/songs/a/bg.png");
+    let mut canvas = Canvas::<()>::default();
+    canvas.card_slots = std::sync::Arc::new([(path_picture_key(path), 0)].into());
+    // Song select's cards: nothing of it over the left third, all of it at the right edge.
+    let come = Some([1.0 / 3.0, 1.0]);
+    assert!(canvas.card_picture(
+        path,
+        [8.0, 40.0, 240.0, 48.0],
+        [1.0; 4],
+        0.0,
+        [0.0; 2],
+        come
+    ));
+    let (width, _, pixels) = gpu.draw(&canvas.shapes, 1.0);
+    let alpha = |x: u32| pixels[((64 * width + x) * 4 + 3) as usize];
+    for x in [10, 40, 80, 86] {
+        assert_eq!(alpha(x), 0, "none of it at {x}");
+    }
+    assert!(alpha(246) > 245, "all of it at the right: {}", alpha(246));
+    // Coming in a little at a time: no step anywhere along it.
+    let along: Vec<u8> = (88..247).map(alpha).collect();
+    for pair in along.windows(2) {
+        assert!(pair[1] >= pair[0], "only ever more of it: {along:?}");
+        assert!(pair[1] - pair[0] <= 4, "no edge: {along:?}");
+    }
 }

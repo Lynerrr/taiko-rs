@@ -72,9 +72,16 @@ fn level_mut(cfg: &mut Config, note: usize) -> &mut f32 {
     }
 }
 
-fn panel(width: f32) -> [f32; 2] {
-    [width - PANEL_W - 16.0, VIRTUAL_HEIGHT - PANEL_H - 30.0]
+/// Where the lane is on a `width` wide screen: bottom right, or higher up so it ends `GAP` above
+/// `floor` (what a screen keeps clear under it: song select's lane of actions).
+fn panel(width: f32, floor: Option<f32>) -> [f32; 2] {
+    let y = VIRTUAL_HEIGHT - PANEL_H - 30.0;
+    let y = floor.map_or(y, |f| y.min(f - GAP - PANEL_H));
+    [width - PANEL_W - 16.0, y]
 }
+
+/// The room between the lane and what it keeps clear of.
+const GAP: f32 = 8.0;
 
 /// The note at `x, y` on the lane at `[px, py]`.
 fn note_in(px: f32, py: f32, x: f32, y: f32) -> Option<usize> {
@@ -99,6 +106,10 @@ pub struct Overlay {
     shown: [f32; NOTES],
     /// A word over a note and when it came.
     word: Option<(usize, &'static str, f32)>,
+    /// What the screen drawn this frame keeps clear under the lane (`keep_above`), and where
+    /// the lane was last drawn (the pointer is matched against that).
+    floor: Option<f32>,
+    at: Option<[f32; 2]>,
 }
 
 impl Overlay {
@@ -112,7 +123,26 @@ impl Overlay {
             hit: [f32::MIN; NOTES],
             shown: [f32::NAN; NOTES],
             word: None,
+            floor: None,
+            at: None,
         }
+    }
+
+    /// This frame the lane ends above `y` (what's under it there stays clear and clickable).
+    /// Asked every frame by the screen that needs it, before the lane is drawn.
+    pub fn keep_above(&mut self, y: f32) {
+        self.floor = Some(self.floor.map_or(y, |f| f.min(y)));
+    }
+
+    /// A frame without the lane: what was kept clear this frame doesn't carry over.
+    pub fn forget_floor(&mut self) {
+        self.floor = None;
+        self.at = None;
+    }
+
+    /// Where the lane is now on a `width` wide screen: where it was last drawn.
+    fn spot(&self, width: f32) -> [f32; 2] {
+        self.at.unwrap_or_else(|| panel(width, self.floor))
     }
 
     pub fn visible(&self, now: Instant) -> bool {
@@ -138,7 +168,7 @@ impl Overlay {
             self.hovering = false;
             return;
         }
-        let [px, py] = panel(width);
+        let [px, py] = self.spot(width);
         match note_in(px, py, x, y) {
             Some(note) => {
                 self.hovering = true;
@@ -200,20 +230,25 @@ impl Overlay {
     pub fn draw(&mut self, c: &mut Canvas, cfg: &Config, now: Instant) {
         let Some(touched) = self.touched else { return };
         self.clock += c.dt_ms;
-        let [px, py] = panel(c.width);
+        let [px, py] = panel(c.width, self.floor.take());
+        self.at = Some([px, py]);
         let left =
             (SHOWN.as_secs_f32() - now.saturating_duration_since(touched).as_secs_f32()).max(0.0);
         let a = (left / FADE_S).min(1.0);
         let slide = (1.0 - self.opened.map_or(1.0, |t| render::progress(t, SLIDE_MS))) * 40.0;
         let px = px + slide;
-        c.round_rect(
-            [px, py],
-            [PANEL_W, PANEL_H],
-            8.0,
-            rgba(0x101018, 0.92 * a),
-            rgba(0x3a3a4e, a),
-            1.0,
-        );
+        // The main menu's panel, all but opaque: nothing under it shows through its labels.
+        {
+            use crate::style::{radius, tone};
+            c.round_rect(
+                [px, py],
+                [PANEL_W, PANEL_H],
+                radius::PANEL,
+                rgba(tone::PANEL, tone::OVERLAY_ALPHA * a),
+                rgba(tone::EDGE, a),
+                tone::LINE,
+            );
+        }
         self.draw_lane(c, px, py, a);
         for note in 0..NOTES {
             self.draw_cell(c, cfg, note, px + 8.0 + CELL * (note as f32 + 0.5), py, a);
@@ -414,6 +449,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_lane_is_all_but_opaque_and_ends_above_what_a_screen_keeps_clear() {
+        let (mut v, cfg, now) = (Overlay::new(), Config::default(), Instant::now());
+        v.touch(now);
+        let floor = 400.0;
+        v.keep_above(floor);
+        let mut c = Canvas {
+            width: 853.3,
+            ..Canvas::default()
+        };
+        v.draw(&mut c, &cfg, now);
+        let drawn = c
+            .shapes
+            .iter()
+            .find(|s| {
+                (s.half[0] * 2.0 - PANEL_W).abs() < 0.01 && (s.half[1] * 2.0 - PANEL_H).abs() < 0.01
+            })
+            .expect("the lane's panel");
+        assert!(drawn.fill[3] >= 0.95, "opaque: {}", drawn.fill[3]);
+        assert_eq!(drawn.params[1], crate::style::tone::LINE, "a crisp edge");
+        let bottom = drawn.center[1] + drawn.half[1];
+        assert!(bottom <= floor - GAP + 0.01, "ends above {floor}: {bottom}");
+        // The pointer finds the notes where the lane is drawn, not where it would be.
+        // (Where it was put: coming up, it slides in from the right on top of that.)
+        let [px, py] = v.at.expect("drawn");
+        assert_eq!(py, drawn.center[1] - drawn.half[1]);
+        v.point(px + 8.0 + CELL * 0.5, py + 40.0, 853.3, now);
+        assert_eq!(v.selected, MUSIC);
+        // A frame of a screen that keeps nothing clear: back to its own place.
+        let mut c = Canvas {
+            width: 853.3,
+            ..Canvas::default()
+        };
+        v.draw(&mut c, &cfg, now);
+        assert_eq!(v.at, Some(panel(853.3, None)));
+    }
+
+    #[test]
     fn the_wheel_turns_the_picked_note_in_fives_and_stops_at_the_ends() {
         let (mut v, mut cfg, now) = (Overlay::new(), Config::default(), Instant::now());
         cfg.music_volume = 0.52;
@@ -435,7 +507,7 @@ mod tests {
     #[test]
     fn only_moving_the_pointer_onto_a_note_picks_it() {
         let (mut v, now) = (Overlay::new(), Instant::now());
-        let [px, py] = panel(853.3);
+        let [px, py] = panel(853.3, None);
         let over = |k: f32| px + 8.0 + CELL * k;
         v.point(over(0.5), py + 40.0, 853.3, now);
         assert_eq!(v.selected, MASTER, "nothing to point at yet");
@@ -457,7 +529,7 @@ mod tests {
     #[test]
     fn the_lane_stays_up_over_a_note_and_starts_over_each_time() {
         let (mut v, now) = (Overlay::new(), Instant::now());
-        let [px, py] = panel(853.3);
+        let [px, py] = panel(853.3, None);
         v.touch(now);
         v.point(px + 8.0 + CELL / 2.0, py + 40.0, 853.3, now);
         let later = now + SHOWN - Duration::from_millis(1);

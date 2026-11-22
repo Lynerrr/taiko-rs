@@ -474,6 +474,7 @@ animations = false
 splash = false
 epilepsy_warning = false
 main_menu = false
+legacy_menu = true
 menu_notes = false
 menu_notes_dim = 0.40
 guide_seen = true
@@ -633,6 +634,20 @@ fn every_key_of_the_config_file_reads_back_what_was_saved() {
     if cfg!(target_os = "linux") {
         assert_snapshot("formats-every-key-config", &text);
     }
+}
+
+/// "Legacy menu" took the main menu away before 1.2 (`main_menu = false`). It now means 1.0's
+/// song select, which has the main menu: a config from before comes up in it.
+#[test]
+fn a_config_from_before_with_the_legacy_menu_gets_1_0s_song_select() {
+    let old = Config::parse_text("main_menu = false\n");
+    assert!(old.legacy_menu && old.main_menu);
+    let new = Config::parse_text("main_menu = false\nlegacy_menu = false\n");
+    assert!(
+        !new.legacy_menu && !new.main_menu,
+        "a config of 1.2 on reads as it is"
+    );
+    assert!(!Config::parse_text("").legacy_menu);
 }
 
 /// osu!lazer exports a set as `.olz`: the same zip as an `.osz`, files untouched. The game

@@ -133,6 +133,7 @@ pub(super) fn render_loop(
     let mut last_sample: Option<Instant> = None;
     let mut requested_present: Option<PresentChoice> = None;
     let mut pacer = clock::VsyncPacer::default();
+    let mut frame_rate = clock::FrameRate::default();
     // TAIKO_NO_PACE=1: draw notes for when each image was handed out, as before (to compare).
     let pace = std::env::var_os("TAIKO_NO_PACE").is_none();
     let mut waits = (0.0, 0.0, 0.0);
@@ -153,6 +154,10 @@ pub(super) fn render_loop(
     canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
     let mut layout_seen = std::collections::HashSet::new();
     let mut frames = 0u32;
+    // How many frames a new background has waited behind pictures going up (`UPLOAD_BUDGET`).
+    let mut bg_waited = 0u32;
+    /// A background waits behind pictures going up for at most this many frames.
+    const BG_MAX_WAIT: u32 = 3;
     loop {
         frames = frames.saturating_add(1);
         if frames == gpu_start::FRAMES {
@@ -226,13 +231,19 @@ pub(super) fn render_loop(
         }
         let present = renderer.present;
         renderer.pixel_scale = pixel_scale;
+        // What goes up to the GPU this frame, for a new background to wait its turn behind
+        // (`UPLOAD_BUDGET`).
+        let mut uploaded = 0;
         for (slot, rgba) in avatar_uploads {
+            uploaded += rgba.len();
             renderer.set_avatar(slot, &rgba);
         }
         for (slot, rgba) in picture_uploads {
+            uploaded += rgba.len();
             renderer.set_picture(slot, &rgba);
         }
         for (slot, rgba) in card_uploads {
+            uploaded += rgba.len();
             renderer.set_card(slot, &rgba);
         }
         if let Some(atlas) = atlas {
@@ -373,7 +384,22 @@ pub(super) fn render_loop(
                 }
                 let _ = proxy.send_event(UserEvent::HideCursor(hide));
             }
-            let background = s.preview.bg_upload.take();
+            // A new background (3 MB and more) waits a frame or two while pictures are going up,
+            // so the two never land on the GPU in one frame.
+            let background = match &s.preview.bg_upload {
+                Some(image) => {
+                    let bytes = image.as_ref().map_or(0, render::BgImage::bytes);
+                    let crowded = uploaded > 0 && uploaded + bytes > crate::UPLOAD_BUDGET;
+                    if crowded && bg_waited < BG_MAX_WAIT {
+                        bg_waited += 1;
+                        None
+                    } else {
+                        bg_waited = 0;
+                        s.preview.bg_upload.take()
+                    }
+                }
+                None => None,
+            };
             if background.is_some() {
                 s.bg_changed = Some(Instant::now());
             }
@@ -547,6 +573,11 @@ pub(super) fn render_loop(
             }
             h_end = done;
         }
+        // After the present: changing the swapchain needs no image held.
+        if let Some(fast) = frame_rate.frame(acquired, present != PresentChoice::Fifo) {
+            renderer.set_fast_frames(fast);
+        }
+
         if present != PresentChoice::Fifo && cap > 0 {
             // Fixed grid so frames are evenly spaced; resync if we fell behind.
             let period = Duration::from_secs_f64(1.0 / cap as f64);
@@ -1314,10 +1345,12 @@ impl State {
             me_fetch: Job::idle(),
             me_due: None,
             board_online: false,
+            column_preview: true,
             profile: None,
             online_boards: std::collections::HashMap::new(),
             board_fetch: None,
             sim_pp: None,
+            sim_pp_job: Default::default(),
             pending_replay: None,
             changelog: None,
             pending_changelog,
@@ -1339,6 +1372,8 @@ impl State {
             board_for: (0, false, false),
             board_max: 0,
             board_rect: None,
+            select_scale: 1.0,
+            select_left: 0.0,
             split_drag: None,
             split_click: None,
             online_leaderboard: Vec::new(),
@@ -1482,6 +1517,8 @@ impl State {
             preview: preview::Preview::default(),
             stars: stars::Stars::new(stars::read),
             potentials: pp::Potentials::new(stars::read),
+            hasher: Default::default(),
+            grades: Default::default(),
             bg_brightness: 0.0,
             idle: idle::Idle::new(Instant::now()),
             resolutions: Vec::new(),

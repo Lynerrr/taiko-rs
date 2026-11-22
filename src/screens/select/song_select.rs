@@ -5,6 +5,8 @@ use super::super::lobby::Lobby;
 use super::super::screen::{Frame, Key, Screen};
 use crate::*;
 
+mod classic;
+
 /// Song select (and the main menu over it).
 pub(crate) struct SongSelect;
 
@@ -295,11 +297,18 @@ impl Screen for SongSelect {
                 );
                 draw_menu(state, canvas, frame, Layer::Whole);
             }
+            // 1.0's song select: nothing behind it but the map's picture.
+            None if state.select.classic => classic::draw_songs_classic(state, canvas, frame),
             None => {
-                // The routes behind lean a little away from the pointer.
+                // The routes behind lean a little away from the pointer: sharp, as the main
+                // menu's, and calmed (`routes_brightness`) for the text over them.
+                // Over the map's picture, under the routes: the cold ground (the main menu's
+                // look on a computer).
+                if !state.select.legacy && !mobile::active() {
+                    style::ground(canvas, 1.0);
+                }
                 let routes = canvas.shapes.len();
                 draw_crowd(state, canvas, frame.now, true, 1.0, 1.0);
-                canvas.blur_since(routes, routes_blur(state, 1.0));
                 // A pointer off the window (or none) leans nothing.
                 let (mx, my) = canvas.mouse;
                 let pointer = (0.0..=canvas.width).contains(&mx)
@@ -422,18 +431,103 @@ fn draw_menu(state: &mut State, canvas: &mut Canvas, frame: &Frame, layer: Layer
 
 /// The lane of actions under song select's preview in the main menu's look (all but Legacy):
 /// its height, and how much of the screen's width its Play end takes.
-const ACTIONS_H: f32 = 50.0;
+const ACTIONS_H: f32 = crate::ui::FOOT_ROW_H;
 const PLAY_SHARE: f32 = 0.16;
 /// How long the die rolls when Random is pressed, a face to each `style::DICE_ROLL` step.
 pub(crate) const DICE_ROLL_MS: f32 = 300.0;
-/// The mods' badges on the lane of actions: their height (`multiplayer::mod_badges`), and the
-/// least room they are drawn in.
-const MOD_BADGE_H: f32 = 11.0;
+/// The mods' badges on the lane of actions (`action_mod_badges`): their height, the least room
+/// they are drawn in, how many show at most (the rest counted on a `+N` chip), the room between
+/// two of them, and between the group and Random and Play.
+const MOD_BADGE_H: f32 = 13.0;
 const MOD_BADGES_MIN: f32 = 24.0;
-/// How far Mods and Random move up while badges are shown under them, and how far Random's
-/// icon is from the end of Mods (the small mark between them in that room).
-const MOD_ROW_LIFT: f32 = 7.0;
-const RANDOM_STEP: f32 = 18.0;
+const MOD_BADGES_SHOWN: usize = 4;
+const MOD_BADGE_GAP: f32 = 5.0;
+const MOD_GROUP_GAP: f32 = 10.0;
+/// The least Play gets on a narrow column, for Mods and Random to keep their words.
+const PLAY_MIN_W: f32 = 90.0;
+/// How far the lane's buttons are in from its edges, and the room between two of them.
+const ACTIONS_INSET: f32 = crate::ui::FOOT_ROW_INSET;
+const ACTIONS_GAP: f32 = 6.0;
+
+/// The mods that are on as badges from `x` along `y` within `room` (the lane of actions), each
+/// in its mod select column's colour: at most `MOD_BADGES_SHOWN`, the rest (and any past the
+/// room) counted on a last `+N` chip. Hands back their width.
+fn action_mod_badges(c: &mut Canvas, x: f32, y: f32, mods: mods::Mods, room: f32) -> f32 {
+    let colour = |m: mods::Mod| {
+        mods::GROUPS
+            .iter()
+            .find(|g| g.2.contains(&m))
+            .map_or(style::ink::SECONDARY, |g| g.1)
+    };
+    let size = style::text::CAPTION;
+    let width = |label: &str| Canvas::text_width(size, label) + 10.0;
+    let list: Vec<mods::Mod> = mods.iter().collect();
+    // As many as fit with the chip for the rest (none needed when all of them show).
+    let fits = |n: usize| {
+        let more = list.len() - n;
+        let chips: f32 = list[..n].iter().map(|m| width(m.acronym())).sum::<f32>()
+            + if more > 0 {
+                width(&format!("+{more}"))
+            } else {
+                0.0
+            };
+        let count = n + usize::from(more > 0);
+        chips + count.saturating_sub(1) as f32 * MOD_BADGE_GAP <= room
+    };
+    let shown = (0..=list.len().min(MOD_BADGES_SHOWN))
+        .rev()
+        .find(|&n| fits(n))
+        .unwrap_or(0);
+    let more = list.len() - shown;
+    let mut at = x;
+    let mut badge = |c: &mut Canvas, label: &str, col: u32| {
+        let w = width(label);
+        style::badge(c, [at, y, w, MOD_BADGE_H], col);
+        let ty = Canvas::text_y_mid(y + MOD_BADGE_H / 2.0, size);
+        let ink = rgba(style::badge_ink(col), 1.0);
+        c.text_centered(at + w / 2.0, ty, size, ink, label);
+        at += w + MOD_BADGE_GAP;
+    };
+    for &m in &list[..shown] {
+        badge(c, m.acronym(), colour(m));
+    }
+    if more > 0 {
+        badge(c, &format!("+{more}"), style::ink::SECONDARY);
+    }
+    (at - x - MOD_BADGE_GAP).max(0.0)
+}
+
+/// Over the lane of actions' mods (under the pointer), every mod that's on by name, above the
+/// badges at `[x, y]`.
+fn mods_tip(c: &mut Canvas, [x, y]: [f32; 2], mods: mods::Mods) {
+    let size = style::text::CAPTION;
+    let lines: Vec<String> = mods
+        .iter()
+        .map(|m| format!("{}  {}", m.acronym(), m.name()))
+        .collect();
+    let step = Canvas::text_height(size) + 4.0;
+    let w = lines
+        .iter()
+        .map(|l| Canvas::text_width(size, l))
+        .fold(0.0, f32::max)
+        + 16.0;
+    let h = lines.len() as f32 * step + 8.0;
+    let (tx, ty) = (x.min(c.width - w - 4.0), y - 6.0 - h);
+    let fill = rgba(style::PANEL_COLD, 0.98);
+    let edge = rgba(style::tone::EDGE, 1.0);
+    c.round_rect(
+        [tx, ty],
+        [w, h],
+        style::radius::SMALL,
+        fill,
+        edge,
+        style::tone::LINE,
+    );
+    for (k, line) in lines.iter().enumerate() {
+        let ink = rgba(style::ink::PRIMARY, 1.0);
+        c.text(tx + 8.0, ty + 4.0 + k as f32 * step + 2.0, size, ink, line);
+    }
+}
 
 /// The face Random's die shows `now`, pressed `at`: it rolls through a few, then rests on five.
 fn dice_face(at: Option<Instant>, now: Instant) -> &'static style::Icon {
@@ -447,30 +541,279 @@ fn dice_face(at: Option<Instant>, now: Instant) -> &'static style::Icon {
         [((rolled * style::DICE_ROLL.len() as f32) as usize).min(style::DICE_ROLL.len() - 1)]
 }
 
-/// How tall the details' page is drawn (`panel_top` down, at most `panel_h`): as tall as what's on
-/// it (`Preview::panel_bottom`, as last drawn), not the whole column, growing or shrinking to it
-/// smoothly when that changes (a .tko map's taller lane, the pp simulator, a start point picked).
-fn fit_page(preview: &mut crate::preview::Preview, panel_top: f32, panel_h: f32, dt: f32) -> f32 {
-    let want = preview.panel_bottom - panel_top;
-    let want = if want > 0.0 {
-        want.min(panel_h)
+/// How tall song select lays itself out (`render::Canvas::begin_space`): on a computer in the
+/// main menu's look, the interface's own space (720 at scale 1: a unit a pixel at 720p, 1.5 at
+/// 1080p); the Legacy layout and a phone keep the screen's 480.
+fn space_height(state: &State) -> f32 {
+    if state.select.legacy || mobile::active() {
+        render::VIRTUAL_HEIGHT
     } else {
-        panel_h
-    };
-    if preview.page_h <= 0.0 {
-        preview.page_h = want;
-    } else {
-        render::approach(&mut preview.page_h, want, dt, PAGE_FIT_TAU_MS);
-        // The last of the way at once, not a hairline's worth for a while longer.
-        if (preview.page_h - want).abs() < 1.0 {
-            preview.page_h = want;
-        }
+        render::ui_space_height(1.0)
     }
-    preview.page_h
 }
 
-/// The time constant the details' page grows or shrinks to its contents with.
-const PAGE_FIT_TAU_MS: f32 = 60.0;
+/// The widest song select gets in its space: in the interface's own, a screen wider than 2:1
+/// (21:9) has it in its middle, the list and the panel no further apart than on 16:9's.
+fn space_width(state: &State) -> f32 {
+    if space_height(state) == render::VIRTUAL_HEIGHT {
+        f32::INFINITY
+    } else {
+        2.0 * space_height(state)
+    }
+}
+
+/// How song select's text comes out in its space (`render::TextSizes`): bigger than the rest
+/// in the interface's own, so a caption stays as many pixels as it was.
+fn space_text(state: &State) -> render::TextSizes {
+    if space_height(state) == render::VIRTUAL_HEIGHT {
+        render::TextSizes::SAME
+    } else {
+        render::TextSizes::UI
+    }
+}
+
+/// What the right column shows of the selected map besides the library's entry.
+struct SplitShown<'a> {
+    stars: Option<f32>,
+    status: Option<(&'a str, u32)>,
+    liked: Option<bool>,
+    /// The map the details show (the EPIC burst goes with it).
+    path: Option<&'a std::path::Path>,
+}
+
+/// How far in from the column's sides the lines between its sections run: across all of it
+/// (the details' own lines run within their text's edges).
+pub(crate) const COLUMN_RULE_INSET: f32 = 0.0;
+
+/// The right column's sections in `rect`, top down: the details as tall as what's on them
+/// (`preview::compact_head`, the same for every map), the row of tabs, and the body under it,
+/// all the rest, for the tab shown (the preview, or the local or online leaderboard).
+pub(crate) fn column_sections([x, y, w, h]: [f32; 4]) -> [[f32; 4]; 3] {
+    let gap = style::space::SECTION;
+    let usable = (h - gap).max(0.0);
+    let head = preview::compact_head().min(usable).round();
+    let tabs_y = y + head + gap;
+    let body_y = tabs_y + COLUMN_TAB_H;
+    [
+        [x, y, w, head],
+        [x, tabs_y, w, COLUMN_TAB_H],
+        [x, body_y, w, (y + h - body_y).max(0.0)],
+    ]
+}
+
+/// The tab the right column's body shows.
+fn column_tab(state: &State) -> ColumnTab {
+    match (state.column_preview, state.board_online) {
+        (true, _) => ColumnTab::Preview,
+        (false, false) => ColumnTab::Local,
+        (false, true) => ColumnTab::Online,
+    }
+}
+
+/// The main menu's look: the right column in `rect` (`column_sections`): the map's details, the
+/// row of tabs, and under it all the rest for the tab shown: the autoplay with its drum and the
+/// map's density under it, or the leaderboard.
+fn draw_split_column(
+    state: &mut State,
+    canvas: &mut Canvas,
+    space: &render::Space,
+    rect: [f32; 4],
+    shown: &SplitShown,
+) {
+    let [head, tabs, body] = column_sections(rect);
+    let tab = column_tab(state);
+    // On the column's one panel (drawn by the caller), the details parted from the tabs by a
+    // line in the room between them, no box round each.
+    let y = tabs[1] - style::space::SECTION / 2.0;
+    style::rule(
+        canvas,
+        tabs[0] + COLUMN_RULE_INSET,
+        y,
+        tabs[2] - 2.0 * COLUMN_RULE_INSET,
+    );
+    let start = canvas.shapes.len();
+    let preview = &mut state.preview;
+    preview.bare = true;
+    preview.split = Some(preview::Split {
+        head: head[3],
+        area: (tab == ColumnTab::Preview).then_some([body[1], body[3]]),
+    });
+    preview.title_room = 0.0;
+    preview.slid = 0.0;
+    if let Some(clip) = state.preview.draw_panel(
+        canvas,
+        &state.library,
+        head[0],
+        head[1],
+        head[2],
+        rect[3],
+        state.cfg.scroll_speed,
+        shown.stars,
+        Some(("Play from", "Shift+Enter")),
+        shown.status,
+        shown.liked,
+    ) {
+        state.frame_clip = Some(clip);
+    }
+    state.preview.split = None;
+    state.preview.bare = false;
+    // An EPIC map: the music's spectrum round its pill, and on landing on it a glint across the
+    // details and sparks out of the pill.
+    if let Some([ex, ey]) = state.preview.epic_at {
+        let engine = state.audio.as_ref();
+        let fx = &mut state.epic_fx;
+        let sounding = !state.music_paused
+            && state
+                .preview
+                .sounding(engine, Instant::now(), &mut fx.spectrum.samples);
+        let rate = engine.map_or(48_000, |a| a.rate);
+        fx.spectrum.update(canvas.dt_ms, sounding, rate);
+        crate::epic::aura(canvas, ex, ey, fx.spectrum.bands(), 1.0);
+    }
+    let fx = &mut state.epic_fx;
+    fx.burst.show(
+        shown.path,
+        state.preview.epic,
+        state.preview.epic_at,
+        render::animations(),
+    );
+    fx.burst.draw(canvas, head, canvas.dt_ms);
+    // The details of the map before go out within the column.
+    let [x, y, w, h] = rect;
+    canvas.clip_since(start, x - 2.0, y - 2.0, w + 4.0, h + 4.0);
+    draw_column_tabs(canvas, tabs, tab, state.cfg.mods.relax());
+    if tab != ColumnTab::Preview {
+        draw_board_section_for(state, canvas, space, body);
+    }
+}
+
+/// The selected map's leaderboard as the right column's body, `rect` (its tab shown): local or
+/// online, scrolled where it was, the player's best pinned at its bottom when not all of it fits.
+fn draw_board_section_for(
+    state: &mut State,
+    canvas: &mut Canvas,
+    space: &render::Space,
+    rect: [f32; 4],
+) {
+    let relax = state.cfg.mods.relax();
+    state.online_leaderboard = Vec::new();
+    let Some(i) = state.select.selected() else {
+        let shown = BoardShown::Note(String::new());
+        draw_board_section(canvas, rect, state.board_online, &shown);
+        return;
+    };
+    // Its hash is worked out off the frame (`known_hash_of`): no board for the moment until then.
+    let Some(hash) = state.known_hash_of(i) else {
+        let shown = BoardShown::Note(String::new());
+        draw_board_section(canvas, rect, state.board_online, &shown);
+        return;
+    };
+    if state.board_for != (hash, state.board_online, relax) {
+        state.board_for = (hash, state.board_online, relax);
+        state.board_scroll = 0;
+    }
+    // TJA charts have online boards only on a server with TJA boards.
+    let online = state.board_online && state.has_online_board(&state.library[i]);
+    // Where the rows go and how many fit: with the best pinned under them where not all fit.
+    let place = |total: usize| {
+        let (_, all) = section_rows(rect, false);
+        section_rows(rect, total > all)
+    };
+    if online {
+        let board = state.online_board(hash, relax).cloned();
+        let me = state.cfg.online_user.clone();
+        let note = |s: &str| BoardShown::Note(s.to_string());
+        match &board {
+            None => {
+                let shown = note(tr!("loading...", "読み込み中...", "загрузка..."));
+                draw_board_section(canvas, rect, true, &shown);
+            }
+            Some(Err(e)) => {
+                let shown = BoardShown::Note(tr!(
+                    "can't reach the server: {e}",
+                    "サーバーに届きません: {e}",
+                    "сервер недоступен: {e}"; [] [e]
+                ));
+                draw_board_section(canvas, rect, true, &shown);
+            }
+            Some(Ok(rows)) if rows.is_empty() => {
+                let shown = note(tr!(
+                    "No online scores yet - log in (F9) and finish a play",
+                    "オンラインのスコアはまだありません - ログイン (F9) してプレイを終えましょう",
+                    "Онлайн-рекордов пока нет - войдите (F9) и доиграйте карту"
+                ));
+                draw_board_section(canvas, rect, true, &shown);
+            }
+            Some(Ok(rows)) => {
+                let (rows_rect, fits) = place(rows.len());
+                let pinned = fits < rows.len();
+                state.board_max = rows.len().saturating_sub(fits);
+                state.board_scroll = state.board_scroll.min(state.board_max);
+                state.board_rect = Some(space.rect_to_screen(rows_rect));
+                let first = state.board_scroll;
+                let mine = rows
+                    .iter()
+                    .position(|r| !me.is_empty() && r.player.eq_ignore_ascii_case(&me))
+                    .filter(|_| pinned);
+                let lines = rows
+                    .iter()
+                    .enumerate()
+                    .skip(first)
+                    .take(fits)
+                    .map(|(k, r)| BoardLine::online(k + 1, r, &me))
+                    .collect();
+                let best = mine.map(|k| BoardLine::online(k + 1, &rows[k], &me));
+                let shown = BoardShown::Rows {
+                    rows: lines,
+                    first,
+                    total: rows.len(),
+                    best,
+                };
+                draw_board_section(canvas, rect, true, &shown);
+                // What the rows' clicks open: the rows shown, then the pinned best.
+                state.online_leaderboard = rows
+                    .iter()
+                    .skip(first)
+                    .take(fits)
+                    .chain(mine.map(|k| &rows[k]))
+                    .cloned()
+                    .collect();
+            }
+        }
+        return;
+    }
+    let all = scores::top(&state.scores, hash, usize::MAX, relax);
+    if all.is_empty() {
+        draw_board_section(canvas, rect, false, &BoardShown::NoLocal);
+        return;
+    }
+    let (rows_rect, fits) = place(all.len());
+    let pinned = fits < all.len();
+    state.board_max = all.len().saturating_sub(fits);
+    state.board_scroll = state.board_scroll.min(state.board_max);
+    state.board_rect = Some(space.rect_to_screen(rows_rect));
+    let first = state.board_scroll;
+    let shown_rows: Vec<&scores::ScoreRow> = all.iter().skip(first).take(fits).copied().collect();
+    // Every local play is the player's: their best is the board's first.
+    let best = pinned.then(|| all[0]);
+    let shown = BoardShown::Rows {
+        rows: shown_rows
+            .iter()
+            .enumerate()
+            .map(|(k, r)| BoardLine::local(first + k + 1, r))
+            .collect(),
+        first,
+        total: all.len(),
+        best: best.map(|r| BoardLine::local(1, r)),
+    };
+    draw_board_section(canvas, rect, false, &shown);
+    // What the rows' clicks open: the rows shown, then the pinned best.
+    state.leaderboard = shown_rows
+        .iter()
+        .chain(best.as_ref())
+        .map(|r| r.file.clone())
+        .collect();
+}
 
 /// Play pressed (Enter, or a click on it): the map starts at once, in every layout.
 fn press_play(state: &mut State, i: usize) {
@@ -484,6 +827,13 @@ fn draw_songs(
     shift: Option<(menu_shift::Phases, bool)>,
     play_away: bool,
 ) {
+    // Song select lays itself out in a space of its own height, then maps it onto the screen.
+    // What it hands to others (where the Play note is, the mixer's floor, the leaderboard's rows)
+    // goes in the screen's units.
+    let space = canvas.begin_space_in(space_height(state), space_text(state), space_width(state));
+    let k = space.scale();
+    state.select_scale = k;
+    state.select_left = canvas.left;
     // DT / HT show on the Mods button instead.
     state.select.rate_label =
         if (state.cfg.rate - 1.0).abs() > 1e-6 && state.cfg.mods.rate_override().is_none() {
@@ -499,9 +849,13 @@ fn draw_songs(
         } else {
             String::new()
         };
-    let (stars, rate, plays) = (&state.stars, state.play_speed().0, &state.scores);
+    // Each row's letter from the plays (worked out again only when they change), by the map
+    // hashes known: the ones not known yet are worked out off the frame.
+    state.grades.refresh(&state.scores);
+    let (stars, rate) = (&state.stars, state.play_speed().0);
+    let unknown = std::cell::RefCell::new(Vec::new());
     state.select.scrubbing =
-        (state.right_scroll || state.scrollbar_drag).then(|| state.mouse_virtual().1);
+        (state.right_scroll || state.scrollbar_drag).then(|| state.mouse_select().1);
     state.select.list_share = state.cfg.song_list_share;
     state.select.banner = state.pick_to_edit || state.picking_lobby_map;
     let phone = mobile::active();
@@ -528,10 +882,13 @@ fn draw_songs(
             frame.dt,
             &state.status,
             &|i| stars.get(i, rate),
-            &|e| scores::best_grade(plays, e.hash()),
+            &State::row_grade(&state.library, &state.grades, &unknown),
         );
+        for i in unknown.into_inner() {
+            state.hasher.want(&state.library, i);
+        }
     }
-    let lw = Select::list_width(canvas.width, state.cfg.song_list_share);
+    let lw = state.select.list_w(canvas.width);
     state.select.arriving = None;
     // On the way from the menu: the search row comes on over the lane that folded into it,
     // and the list's cards drop out of it one by one (`Select::draw`). On the way back the list
@@ -556,13 +913,23 @@ fn draw_songs(
         state.mobile_select_panel(canvas.width)
     } else {
         let x = 24.0 + lw + style::space::PAD;
-        // Level with the list's frame (the Legacy layout keeps its own).
+        // Level with the list's frame (the Legacy layout keeps its own); in the main menu's look
+        // its top level with the search row's, the column one panel from there down to the
+        // list's bottom (unless the readout beside the search row has the place).
         let [top, end] = if state.select.legacy {
             [54.0, 436.0]
-        } else {
+        } else if state.select.show_info {
             state.select.frame_span()
+        } else {
+            [state.select.search_row(), state.select.frame_span()[1]]
         };
-        [x, top, canvas.width - x - 24.0, end]
+        // Clear of the friends tab at the screen's right edge (17 of its units wide).
+        let margin = if state.select.in_ui_space() {
+            28.0
+        } else {
+            24.0
+        };
+        [x, top, canvas.width - x - margin, end]
     };
     state.board_rect = None;
     // Always at full size (no longer dragged smaller).
@@ -571,15 +938,7 @@ fn draw_songs(
         .select
         .selected()
         .and_then(|i| state.stars.get(i, rate));
-    state.preview.potential = match state.select.selected() {
-        Some(i) => state.potentials.get(
-            &state.library[i].path,
-            rate,
-            state.cfg.mods,
-            state.cfg.scroll_speed,
-        ),
-        None => None,
-    };
+    state.preview.potential = state.selected_potential(rate);
     state.preview.sim_pp = match (state.preview.sim, state.select.selected()) {
         (Some(sim), Some(i)) => state.simulated_pp(i, sim, rate),
         _ => None,
@@ -622,28 +981,46 @@ fn draw_songs(
         let actions_h = if bare { ACTIONS_H } else { PAGE_BUTTON_H };
         let panel_h = panel_end - panel_top - actions_h - style::space::SECTION;
         let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
+        // The column leans against the pointer a little, the other way to what's behind: all of
+        // it as one, the actions' lane at its foot with the rest. What's under the pointer is
+        // worked out where it will be drawn (the pointer taken back by as much meanwhile).
+        let lean = if bare && shift.is_none() {
+            state.select.parallax.map(|v| -v * DETAILS_LEAN / PARALLAX)
+        } else {
+            [0.0; 2]
+        };
+        let mouse = canvas.mouse;
+        canvas.mouse = (mouse.0 - lean[0], mouse.1 - lean[1]);
         let pages = canvas.shapes.len();
-        if t < 1.0 {
+        // The main menu's look: the details, the leaderboard and the preview, each a section of
+        // its own (no pages to slide between).
+        if bare {
+            // One cold panel for the whole column, the actions' lane at its bottom under a line.
+            style::cold_panel(canvas, [x, panel_top, pw, panel_end - panel_top]);
+            let line_y = panel_top + panel_h + style::space::SECTION / 2.0;
+            style::rule(
+                canvas,
+                x + COLUMN_RULE_INSET,
+                line_y,
+                pw - 2.0 * COLUMN_RULE_INSET,
+            );
+            let rect = [x, panel_top, pw, panel_h];
+            let shown = SplitShown {
+                stars: selected_stars,
+                status,
+                liked,
+                path: shown_path.as_deref(),
+            };
+            draw_split_column(state, canvas, &space, rect, &shown);
+        }
+        if t < 1.0 && !bare {
             let start = canvas.shapes.len();
             // The way to the leaderboard is where the way back is on the board (its
             // header's top right), so the mouse stays put going back and forth.
             let label = tr!("Leaderboard", "ランキング", "Рейтинг");
             let legacy_label = format!("{label} >");
-            let bw = if state.select.legacy {
-                Canvas::text_width(7.0, &legacy_label) + 24.0
-            } else {
-                style::icon_button_width(label, None, 7.0)
-            };
-            // The main menu's look: the details on a panel of their own, as the board's page
-            // beside them, so nothing on the right floats over the map's picture.
-            if bare {
-                let page_h = fit_page(&mut state.preview, panel_top, panel_h, canvas.dt_ms);
-                let page = [x - t * step, panel_top, pw, page_h];
-                style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
-            }
+            let bw = Canvas::text_width(7.0, &legacy_label) + 24.0;
             state.preview.title_room = bw + 10.0;
-            state.preview.board_w = if bare { bw } else { 0.0 };
-            state.preview.bare = bare;
             state.preview.slid = t * step;
             if let Some(clip) = state.preview.draw_panel(
                 canvas,
@@ -661,8 +1038,6 @@ fn draw_songs(
                 state.frame_clip = Some(clip);
             }
             state.preview.title_room = 0.0;
-            state.preview.board_w = 0.0;
-            state.preview.bare = false;
             state.preview.slid = 0.0;
             // An EPIC map: the music's spectrum round its pill, and on landing on it a
             // glint across the panel and sparks out of the pill.
@@ -690,59 +1065,43 @@ fn draw_songs(
             fx.burst.draw(canvas, panel, canvas.dt_ms);
             // As the board's back button: 10 in from the frame, then the rows' scroll
             // bar room (`board_tabs`, inside `pw - 28`).
-            // Bare, it ends the row of the full-combo pp instead (where the details left it
-            // room), on a chip as the other buttons are.
-            let (bx, by) = match state.preview.board_at.filter(|_| bare) {
-                Some([bx, by, _, bh]) => (bx, by + bh / 2.0 - 10.0),
-                None => (x - t * step + pw - 18.0 - bw, panel_top + 10.0),
-            };
-            let hit = hit::Hit::BoardPage;
-            if state.select.legacy {
-                canvas.button(bx, by, bw, 20.0, &legacy_label, 7.0, hit, false);
-            } else {
-                let chip_start = canvas.shapes.len();
-                let chip = state.preview.board_at.filter(|_| bare);
-                if let Some(chip) = chip {
-                    // As tall as the pp button it ends the row of.
-                    style::surface(canvas, chip, style::radius::SMALL, style::Surface::Lifted);
-                }
-                let at = [bx + 6.0, by + 10.0];
-                style::icon_button(canvas, at, &style::PODIUM, label, None, 7.0, false, hit);
-                if chip.is_some() {
-                    state.preview.enter_board(canvas, chip_start);
-                }
-            }
+            let (bx, by) = (x - t * step + pw - 18.0 - bw, panel_top + 10.0);
+            canvas.button(
+                bx,
+                by,
+                bw,
+                20.0,
+                &legacy_label,
+                7.0,
+                hit::Hit::BoardPage,
+                false,
+            );
             canvas.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
-        } else {
+        } else if !bare {
             state.preview.hide_panel();
         }
         let board_start = canvas.shapes.len();
         let page_x = x + (1.0 - t) * step;
-        if t > 0.0 {
-            if bare {
-                let page = [page_x, panel_top, pw, panel_h];
-                style::surface(canvas, page, style::radius::CARD, style::Surface::Raised);
-            } else {
-                style::panel(canvas, page_x, panel_top, pw, panel_h);
-            }
+        if t > 0.0 && !bare {
+            style::panel(canvas, page_x, panel_top, pw, panel_h);
         }
         // Inside the frame, with room right of the rows for their scroll bar.
         let (panel_x, panel_w) = (x, pw);
         let (x, pw) = (page_x + 10.0, pw - 28.0);
-        if let Some(i) = state.select.selected().filter(|_| t > 0.0) {
+        if let Some(i) = state.select.selected().filter(|_| t > 0.0 && !bare) {
             let top = panel_top + 10.0;
-            // Bare, the lane of actions is under the board: its rows stop above it.
-            let bottom = if bare { panel_top + panel_h } else { panel_end };
-            let room = bottom - 10.0 - top - BOARD_HEAD;
+            let room = panel_end - 10.0 - top - BOARD_HEAD;
             let fits = (room / BOARD_ROW).floor().max(0.0) as usize;
-            if fits > 0 {
-                let hash = state.library[i].hash();
+            if fits > 0
+                && let Some(hash) = state.known_hash_of(i)
+            {
                 let relax = state.cfg.mods.relax();
                 if state.board_for != (hash, state.board_online, relax) {
                     state.board_for = (hash, state.board_online, relax);
                     state.board_scroll = 0;
                 }
-                state.board_rect = Some([x, top + BOARD_HEAD, pw + 18.0, fits as f32 * BOARD_ROW]);
+                let rows = [x, top + BOARD_HEAD, pw + 18.0, fits as f32 * BOARD_ROW];
+                state.board_rect = Some(space.rect_to_screen(rows));
                 // TJA charts have online boards only on a server with TJA boards.
                 if state.board_online && state.has_online_board(&state.library[i]) {
                     let board = state.online_board(hash, relax).cloned();
@@ -795,17 +1154,6 @@ fn draw_songs(
             }
         }
         canvas.clip_since(board_start, clip[0], clip[1], clip[2], clip[3]);
-        // The pages lean against the pointer a little, the other way to what's behind.
-        if bare && shift.is_none() {
-            let [lx, ly] = state.select.parallax.map(|v| -v * DETAILS_LEAN / PARALLAX);
-            if lx != 0.0 || ly != 0.0 {
-                canvas.transform_since(pages, [0.0, 0.0], 1.0, lx, ly);
-                if let Some((_, area)) = state.frame_clip.as_mut() {
-                    area.x += lx / canvas.width.max(1.0);
-                    area.y += ly / render::VIRTUAL_HEIGHT;
-                }
-            }
-        }
         let play = if state.picking_lobby_map {
             tr!("Pick", "選ぶ", "Выбрать")
         } else if state.pick_to_edit {
@@ -813,7 +1161,6 @@ fn draw_songs(
         } else {
             tr!("Play", "プレイ", "Играть")
         };
-        let mods = &state.select.mods_label;
         let (by, bh) = (panel_end - actions_h, actions_h);
         if !bare {
             // The Legacy layout keeps its one button.
@@ -826,76 +1173,96 @@ fn draw_songs(
             // Mods and Random bare icons on it, and Play its end, filled with the accent.
             let w = canvas.width;
             let right = panel_x + panel_w;
-            style::lane_surface(canvas, [panel_x, by, right - panel_x, bh]);
-            let play_x = right - (w * PLAY_SHARE).clamp(120.0, 200.0);
+            // No strip round them: the buttons stand on their own.
+            // The volume mixer comes up above the lane, not over its buttons.
+            state.volume.keep_above(by * k);
+            // Mods, Random and Play: blocks of one height inside the lane, on one middle line,
+            // as the main menu's music buttons sit by NOW PLAYING.
+            let (inner_h, mid) = (bh - 2.0 * ACTIONS_INSET, by + bh / 2.0);
+            let play_x = right - ACTIONS_INSET - (w * PLAY_SHARE).clamp(120.0, 200.0);
             let mods_word = tr!("Mods", "Mod", "Моды");
             let random = tr!("Random", "ランダム", "Случайная");
-            let room = play_x - panel_x - 32.0 - style::icon_button_width("", None, 8.0);
-            let mods_word = Canvas::fit(8.0, room, mods_word);
-            let (mods_w, random_w) = (
-                style::icon_button_width(&mods_word, None, 8.0),
-                RANDOM_STEP + style::icon_button_width(random, None, 8.0),
-            );
-            // Mods and Random as one group in the middle of the lane left of Play, as far from
-            // its start as from Play whatever mods are on: those go under the group as badges,
-            // the group moving up a little to make room for them.
-            let fits_random = mods_w + random_w <= play_x - panel_x - 32.0;
-            let group_w = mods_w + if fits_random { random_w } else { 0.0 };
-            // (A button's width counts its pointer slack past the label: 12 units.)
-            let gx = panel_x + ((play_x - panel_x - group_w + 12.0) / 2.0).max(16.0);
-            let on = !state.cfg.mods.is_empty();
-            let mid = by + bh / 2.0 - if on { MOD_ROW_LIFT } else { 0.0 };
-            style::icon_button(
+            // A block button's rect starts 6 left of where it's put.
+            let gx = panel_x + ACTIONS_INSET + 6.0;
+            // Mods and Random side by side at the left, always whole (their words never go):
+            // Play gives way for them on a narrow column, down to its least.
+            let pair_w = style::icon_button_width(mods_word, None, 8.0)
+                + ACTIONS_GAP
+                + style::icon_button_width(random, None, 8.0);
+            let play_x = play_x
+                .max(gx - 6.0 + pair_w + ACTIONS_GAP)
+                .min(right - ACTIONS_INSET - PLAY_MIN_W);
+            let mods_w = style::block_button(
                 canvas,
                 [gx, mid],
-                &style::SPARK,
-                &mods_word,
+                &style::SLIDERS,
+                mods_word,
                 None,
                 8.0,
-                !mods.is_empty(),
+                !state.cfg.mods.is_empty(),
                 hit::Hit::ModsButton,
+                inner_h,
             );
-            if fits_random {
-                let rx = gx + mods_w;
-                // The menu's small mark between two notes.
-                canvas.rect(rx + 4.0, mid - 2.0, 4.0, 4.0, render::rgba(0x6a6a88, 0.8));
-                style::icon_button(
-                    canvas,
-                    [rx + RANDOM_STEP, mid],
-                    dice_face(state.dice_roll, render::frame_now()),
-                    random,
-                    None,
-                    8.0,
-                    false,
-                    hit::Hit::Key(KeyCode::F2),
-                );
-            }
-            // The mods that are on, each in its mod select column's colour; a click on them
-            // opens the mod select too.
-            let room = play_x - gx - 8.0;
-            if on && room >= MOD_BADGES_MIN {
-                let top = mid + MOD_ROW_LIFT * 2.0 - MOD_BADGE_H / 2.0 + 1.0;
-                let bw = crate::multiplayer::mod_badges(canvas, gx, top, state.cfg.mods, room);
-                canvas.hit(
-                    gx - 2.0,
-                    top - 1.0,
-                    bw + 4.0,
-                    MOD_BADGE_H + 2.0,
-                    hit::Hit::ModsButton,
-                );
+            let rx = gx - 6.0 + mods_w + ACTIONS_GAP;
+            let random_w = style::block_button(
+                canvas,
+                [rx + 6.0, mid],
+                dice_face(state.dice_roll, render::frame_now()),
+                random,
+                None,
+                8.0,
+                false,
+                hit::Hit::Key(KeyCode::F2),
+                inner_h,
+            );
+            // The mods that are on, each in its mod select column's colour, as a group in the
+            // room between Random and Play (a click on them opens the mod select too).
+            let from = rx + random_w + MOD_GROUP_GAP;
+            let room = play_x - MOD_GROUP_GAP - from;
+            if !state.cfg.mods.is_empty() && room >= MOD_BADGES_MIN {
+                let top = mid - MOD_BADGE_H / 2.0;
+                let bw = action_mod_badges(canvas, from, top, state.cfg.mods, room);
+                let group = [from - 2.0, top - 3.0, bw + 4.0, MOD_BADGE_H + 6.0];
+                canvas.hit(group[0], group[1], group[2], group[3], hit::Hit::ModsButton);
+                if canvas.hovered(group[0], group[1], group[2], group[3]) {
+                    mods_tip(canvas, [from, top], state.cfg.mods);
+                }
             }
             let hit = hit::Hit::Key(KeyCode::Enter);
-            let bar = [play_x, by, right - play_x, bh];
-            state.play_icon_at = Some(style::lane_end_disc([play_x, by, bh]));
+            let bar = [
+                play_x,
+                by + ACTIONS_INSET,
+                right - ACTIONS_INSET - play_x,
+                inner_h,
+            ];
+            let (at, r) = style::lane_end_disc([bar[0], bar[1], bar[3]]);
+            let at = [at[0] + lean[0], at[1] + lean[1]];
+            state.play_icon_at = Some((space.to_screen(at), r * k));
             style::lane_end_button(canvas, "select-play", bar, play, hit, !play_away);
+        }
+        canvas.mouse = mouse;
+        let [lx, ly] = lean;
+        if lx != 0.0 || ly != 0.0 {
+            canvas.transform_since(pages, [0.0, 0.0], 1.0, lx, ly);
+            if let Some((_, area)) = state.frame_clip.as_mut() {
+                area.x += lx / (canvas.width + 2.0 * canvas.left).max(1.0);
+                area.y += ly / canvas.height;
+            }
         }
         // The song list's right edge: the gap between the list's box (`ui`, ending
         // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
         let dragging = matches!(state.split_drag, Some((hit::Hit::SplitList, ..)));
         if !phone {
+            // In the middle of the gap: the cards reach the list's edge in the interface's
+            // space (24 + lw), 4 short of it in the screen's.
+            let gx = if state.select.in_ui_space() {
+                24.0 + lw + 2.0
+            } else {
+                24.0 + lw + 4.0
+            };
             draw_divider(
                 canvas,
-                [24.0 + lw + 4.0, panel_top, 8.0, panel_end - panel_top],
+                [gx, panel_top, 8.0, panel_end - panel_top],
                 true,
                 dragging,
                 hit::Hit::SplitList,
@@ -912,7 +1279,7 @@ fn draw_songs(
     } else if state.pick_to_edit && !phone {
         let w = canvas.width;
         canvas.round_rect(
-            [24.0, 438.0],
+            [24.0, canvas.height - 42.0],
             [w - 48.0, 34.0],
             8.0,
             rgba(0x1d1630, 1.0),
@@ -921,7 +1288,7 @@ fn draw_songs(
         );
         canvas.text_centered(
             w / 2.0,
-            450.0,
+            canvas.height - 30.0,
             10.0,
             rgba(0xffffff, 1.0),
             &Canvas::fit(
@@ -933,7 +1300,7 @@ fn draw_songs(
     } else if state.picking_lobby_map && !phone {
         let w = canvas.width;
         canvas.round_rect(
-            [24.0, 438.0],
+            [24.0, canvas.height - 42.0],
             [w - 48.0, 34.0],
             8.0,
             rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0),
@@ -942,7 +1309,7 @@ fn draw_songs(
         );
         canvas.text_centered(
             w / 2.0,
-            450.0,
+            canvas.height - 30.0,
             10.0,
             rgba(0xffffff, 1.0),
             &Canvas::fit(
@@ -957,7 +1324,11 @@ fn draw_songs(
         canvas.transform_since(right_start, [0.0, 0.0], 1.0, dx, 0.0);
     }
     canvas.mouse = pointer;
-    state.select.draw_popups(canvas, &state.library);
+    // The sort and filter panel hangs from the search row, in song select's units; the lists and
+    // a row's menu (where it was opened) go over everything, in the screen's.
+    state.select.draw_lens_popup(canvas);
+    canvas.end_space(space);
+    state.select.draw_overlays(canvas, &state.library);
     if let Some(naming) = &state.select.naming {
         super::collections::draw_collection_naming(canvas, naming);
     }
@@ -1002,7 +1373,11 @@ pub(crate) const BG_FADE_MS: f32 = 400.0;
 /// Song select in the main menu's look on a computer, animations on: its picture behind
 /// leans and arrives (`background_lean`, `background_arrive`).
 fn moving_backdrop(state: &State) -> bool {
-    !state.select.legacy && !mobile::active() && state.scene.is_select() && render::animations()
+    !state.select.legacy
+        && !state.select.classic
+        && !mobile::active()
+        && state.scene.is_select()
+        && render::animations()
 }
 
 /// How the map's picture behind song select leans with the pointer (virtual units, the routes'
@@ -1035,17 +1410,6 @@ pub(crate) fn background_arrive(state: &State) -> f32 {
 pub(crate) fn parallax_target((x, y): (f32, f32), width: f32) -> [f32; 2] {
     let off = |v: f32, size: f32| -((v / size.max(1.0)) * 2.0 - 1.0).clamp(-1.0, 1.0) * PARALLAX;
     [off(x, width), off(y, render::VIRTUAL_HEIGHT)]
-}
-
-/// How blurred song select's note routes are (`Canvas::blur_since`), `cam` of the way from
-/// the menu: as far as the map's picture behind them (`State::background_blur`). Legacy and the
-/// phone layout keep them sharp.
-fn routes_blur(state: &State, cam: f32) -> f32 {
-    if state.select.legacy || crate::mobile::active() {
-        0.0
-    } else {
-        cam
-    }
 }
 
 fn draw_crowd(
@@ -1120,17 +1484,27 @@ fn draw_shift(
 ) {
     let w = canvas.width;
     let ph = menu_shift::phases(t);
+    // Song select's cold ground comes on with the camera (the main menu's look on a computer).
+    if !state.select.legacy && !mobile::active() {
+        style::ground(canvas, ph.cam);
+    }
     let routes = canvas.shapes.len();
     draw_menu(state, canvas, frame, Layer::Routes);
     canvas.fade_since(routes, routes_brightness(ph.cam), 1.0);
     let shown = if into { (t * 2.0).min(1.0) } else { 1.0 };
     draw_crowd(state, canvas, frame.now, false, shown, ph.cam);
-    // Blurred as the map's picture is, with the camera.
-    canvas.blur_since(routes, routes_blur(state, ph.cam));
     if ph.landed < 1.0 {
-        let lw = Select::list_width(w, state.cfg.song_list_share);
+        // The search row where song select lays it out (`draw_songs`), on the screen.
+        let h = space_height(state);
+        state.select.height = h;
+        state.select.list_share = state.cfg.song_list_share;
+        let k = render::VIRTUAL_HEIGHT / h;
+        let left = ((w / k - space_width(state)) / 2.0).max(0.0);
+        let lw = state.select.list_w(w / k - 2.0 * left);
         let top = state.select.frame_span()[0];
-        let row = [20.0, 14.0, lw + 8.0, top - 14.0];
+        let strip_top = state.select.search_row() - ui::SEARCH_STRIP_PAD;
+        let [x, y, rw, rh] = [20.0 + left, strip_top, lw + 8.0, top - strip_top];
+        let row = [x * k, y * k, rw * k, rh * k];
         // A kiai on the menu stays on its lane as the camera carries it off, going out as the
         // lane folds into the search row.
         let (edge, fill) = state

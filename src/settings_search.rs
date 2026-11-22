@@ -116,7 +116,9 @@ fn words(item: Item) -> &'static str {
         Item::EpilepsyWarning => {
             "epilepsy photosensitive seizure flashing lights startup warning эпилепсия вспышки мигание предупреждение запуск"
         }
-        Item::LegacyMenu => "old classic tabs main menu старый классика вкладки главное меню",
+        Item::LegacyMenu => {
+            "old classic 1.0 song select list rows старый классика выбор песни список строки"
+        }
         Item::MenuNotesDim => "lane notes faint dark menu дорожка ноты бледнее меню",
         Item::MenuNotes => "background multiverse route фон мультиверс маршрут",
         Item::Interface | Item::InterfaceHides | Item::InterfaceKey => "hud ui hide скрыть худ",
