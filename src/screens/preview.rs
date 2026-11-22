@@ -170,6 +170,10 @@ impl Screen for Preview {
         }
         match code {
             KeyCode::Space => state.toggle_preview_held(),
+            // The speed, as in song select: the preview plays at it.
+            KeyCode::BracketLeft | KeyCode::BracketRight => {
+                state.step_rate(code == KeyCode::BracketRight);
+            }
             KeyCode::Escape | KeyCode::Backspace => self.close(state),
             KeyCode::Enter | KeyCode::NumpadEnter if state.modifiers_ctrl => self.close(state),
             KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -245,6 +249,17 @@ impl Screen for Preview {
                     hit::Hit::Key(KeyCode::Space),
                     false,
                 );
+                // The speed beside it, when no mod sets it.
+                if !mobile::active() && state.cfg.mods.rate_override().is_none() {
+                    crate::screens::select::song_select::rate_stepper(
+                        canvas,
+                        bx + bw + 8.0,
+                        by,
+                        bh,
+                        state.cfg.rate,
+                        7.0,
+                    );
+                }
             }
             None => {
                 return Some(*std::mem::replace(
