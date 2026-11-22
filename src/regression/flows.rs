@@ -1369,3 +1369,33 @@ fn play_starts_the_song_whatever_is_on_enter() {
         scene_name(&s)
     );
 }
+
+/// Song select's pp row (the full-combo chips, the simulator's pp) is of its own map: the
+/// download tab's panel, showing a set to download, doesn't carry it over (Discord: "Maps in
+/// the Download tab show PP info of the previously selected map in the Play tab").
+#[test]
+fn the_download_tab_shows_no_pp_of_song_selects_map() {
+    let songs = Songs::new("download-no-pp", &[maps::basics()]);
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    // What song select's map gave, the simulator open.
+    s.preview.potential = Some([321.0, 300.0, 280.0]);
+    s.preview.sim = Some(preview::PpSim {
+        accuracy: 0.98,
+        misses: 0,
+    });
+    s.preview.sim_pp = Some(250.0);
+    s.open_download();
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert!(
+        !shows(&c, "321") && !shows(&c, "250pp"),
+        "no pp of another map"
+    );
+    assert_eq!((s.preview.potential, s.preview.sim_pp), (None, None));
+    assert!(
+        s.preview.sim.is_some(),
+        "the simulator stays open for song select"
+    );
+}
