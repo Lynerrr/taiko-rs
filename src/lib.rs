@@ -238,6 +238,10 @@ const ME_REFRESH: Duration = Duration::from_secs(60);
 /// How long after a play is taken they are fetched again: the server plays its replay back
 /// and settles its pp within about a second.
 const ME_AFTER_SUBMIT: Duration = Duration::from_secs(2);
+/// How long the results of a play just sent keep asking for the pp total until the server has
+/// settled the play (its replay is played back after the answer), and how often.
+const TOTAL_FOLLOW: Duration = Duration::from_secs(30);
+const TOTAL_FOLLOW_STEP: Duration = Duration::from_secs(3);
 
 /// How far behind a watched friend the view plays (room for the network).
 const WATCH_DELAY_MS: f64 = 2000.0;
@@ -546,6 +550,9 @@ struct State {
     /// When they are fetched again: the server works pp out again after a play is taken (its
     /// replay is played back), and recalculations and plays elsewhere change it too.
     me_due: Option<Instant>,
+    /// The results of a play just sent wait for its pp to settle: on which board (Relax or
+    /// not), until when.
+    total_follow: Option<(bool, Instant)>,
     /// The song select leaderboard shows the server's scores, not the local ones.
     board_online: bool,
     /// The right column's body in the main menu's look shows the preview (its Preview tab), not
@@ -14346,7 +14353,9 @@ impl State {
                             before,
                             after: pp,
                             rank,
+                            settling: true,
                         });
+                        self.total_follow = Some((relax, Instant::now() + TOTAL_FOLLOW));
                     }
                     let board = if relax { " (Relax)" } else { "" };
                     let place = map_rank
@@ -14451,9 +14460,45 @@ impl State {
                 })
             });
         }
-        if let Some(Ok(p)) = self.me_fetch.poll() {
-            self.me = Some((p.pp + 0.0, p.rank));
-            self.me_relax = Some((p.relax.pp + 0.0, p.relax.rank));
+        match self.me_fetch.poll() {
+            Some(Ok(p)) => {
+                self.me = Some((p.pp + 0.0, p.rank));
+                self.me_relax = Some((p.relax.pp + 0.0, p.relax.rank));
+                self.follow_total();
+            }
+            Some(Err(_)) => self.follow_total(),
+            None => {}
+        }
+    }
+
+    /// The results of a play just sent take the total fetched now. The server's answer to the
+    /// play comes before its pp counts (the replay is checked after it), so until the total
+    /// moves, or `TOTAL_FOLLOW` is over, it is asked for again every `TOTAL_FOLLOW_STEP`.
+    fn follow_total(&mut self) {
+        let Some((relax, until)) = self.total_follow else {
+            return;
+        };
+        let mine = if relax { self.me_relax } else { self.me };
+        let Some(total) = self
+            .scene
+            .screen_mut::<ResultsScreen>()
+            .map(|r| &mut r.results)
+            .filter(|r| r.opened.is_none())
+            .and_then(|r| r.total.as_mut())
+        else {
+            self.total_follow = None;
+            return;
+        };
+        if let Some((pp, rank)) = mine {
+            total.after = pp;
+            total.rank = rank;
+        }
+        let moved = total.before.is_none_or(|b| total.after - b >= 0.05);
+        if moved || Instant::now() >= until {
+            total.settling = false;
+            self.total_follow = None;
+        } else {
+            self.me_due = Some(Instant::now() + TOTAL_FOLLOW_STEP);
         }
     }
 

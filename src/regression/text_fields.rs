@@ -267,6 +267,35 @@ fn song_setup_boxes_take_the_input_method_arrows_and_shortcuts() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A number box in the map editor (Discord: "Can't paste in SV input field in map editor"):
+/// Ctrl+V types the number on the clipboard, a comma read as a point and other characters
+/// left out.
+#[test]
+fn editor_number_boxes_take_a_pasted_number() {
+    use editor::view::{Btn, Field as EdField, Keys, View};
+    clipboard::fake_for_this_thread();
+    let dir = std::env::temp_dir().join(format!("taiko-rs-sv-paste-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("map.osu");
+    std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
+    let mut s = harness::state_with(harness::config(), Vec::new());
+    harness::frame(&mut s, Instant::now());
+    s.scene = MapEditor::scene(Box::new(View::open(path, 0).unwrap()));
+    fn view(s: &mut State) -> &mut View {
+        &mut s.scene.screen_mut::<MapEditor>().unwrap().view
+    }
+    // The green line's speed, typed by pasting.
+    let green = view(&mut s).ed.chart.timing[1].id;
+    view(&mut s).sel_line = Some(green);
+    view(&mut s).press(Btn::Edit(EdField::Sv), Keys::default(), None);
+    assert!(clipboard::set(" 1,25x\nmore"));
+    press(&mut s, "Ctrl+V", None);
+    press(&mut s, "Enter", None);
+    let sv = view(&mut s).ed.chart.timing_point(green).unwrap().sv();
+    assert!((sv - 1.25).abs() < 1e-9, "the pasted speed: {sv}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Several green lines picked (Discord idea "SV multiplier for editor": a finisher's line 1.5x
 /// faster than the gradual SV around it): Multiply SV takes a typed factor to each picked green
 /// line's own speed, a red line among them keeps its BPM, and one undo takes it back.
