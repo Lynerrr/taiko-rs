@@ -4937,6 +4937,11 @@ impl<H> Canvas<H> {
         k: f32,
         dx: f32,
     ) {
+        // A space of the screen's own size (song select's Legacy layout every frame) maps
+        // everything onto itself: nothing to go through.
+        if k == 1.0 && dx == 0.0 {
+            return;
+        }
         self.transform_since(start, [0.0, 0.0], k, dx, 0.0);
         let map = |[x, y, w, h]: [f32; 4]| [x * k + dx, y * k, w * k, h * k];
         // A click made before the first of those shapes isn't moved with the shapes.
@@ -5520,6 +5525,38 @@ impl<H> Canvas<H> {
 
 #[cfg(test)]
 mod tests {
+    /// A space as tall as the screen (song select's Legacy layout) puts everything drawn in it
+    /// back where it was drawn; a taller one scales it down onto the screen.
+    #[test]
+    fn a_space_of_the_screens_own_size_leaves_what_is_drawn_in_it_alone() {
+        let draw = |h: f32| {
+            let mut c = super::Canvas::<()>::default();
+            c.clear(800.0);
+            let space = c.begin_space_in(h, super::TextSizes::SAME, f32::INFINITY);
+            let start = c.shapes.len();
+            c.rect(100.0, 60.0, 40.0, 20.0, super::rgba(0xffffff, 1.0));
+            c.hit(100.0, 60.0, 40.0, 20.0, ());
+            c.clip_since(start, 90.0, 50.0, 60.0, 40.0);
+            c.end_space(space);
+            let s = c.shapes[start];
+            (s.center, s.half, c.hits[0].rect, c.clips[0].1)
+        };
+        let height = super::VIRTUAL_HEIGHT;
+        assert_eq!(
+            draw(height),
+            (
+                [120.0, 70.0],
+                [20.0, 10.0],
+                [100.0, 60.0, 40.0, 20.0],
+                [90.0, 50.0, 60.0, 40.0]
+            )
+        );
+        let (center, half, hit, clip) = draw(2.0 * height);
+        assert_eq!((center, half), ([60.0, 35.0], [10.0, 5.0]));
+        assert_eq!(hit, [50.0, 30.0, 20.0, 10.0]);
+        assert_eq!(clip, [45.0, 25.0, 30.0, 20.0]);
+    }
+
     /// Moving what was drawn since a point moves its clips with it (a .tko map's slices in a play
     /// area smaller than the screen), and leaves the clips of what came before alone.
     #[test]
