@@ -266,3 +266,68 @@ fn song_setup_boxes_take_the_input_method_arrows_and_shortcuts() {
     assert!(!s.takes_text(), "Enter keeps the text and leaves the box");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Several green lines picked (Discord idea "SV multiplier for editor": a finisher's line 1.5x
+/// faster than the gradual SV around it): Multiply SV takes a typed factor to each picked green
+/// line's own speed, a red line among them keeps its BPM, and one undo takes it back.
+#[test]
+fn editor_multiply_sv_scales_each_picked_green_line() {
+    use editor::view::{Btn, Field as EdField, Keys, View};
+    let dir = std::env::temp_dir().join(format!("taiko-rs-sv-times-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("map.osu");
+    std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
+    let mut s = harness::state_with(harness::config(), Vec::new());
+    harness::frame(&mut s, Instant::now());
+    s.scene = MapEditor::scene(Box::new(View::open(path, 0).unwrap()));
+    fn view(s: &mut State) -> &mut View {
+        &mut s.scene.screen_mut::<MapEditor>().unwrap().view
+    }
+    // Two more green lines at speeds of their own, all three picked with the red one.
+    let v = view(&mut s);
+    let red = v.ed.chart.timing[0].clone();
+    let mut greens = vec![v.ed.chart.timing[1].id];
+    for (t, sv) in [(6000.0, 0.8), (8000.0, 0.5)] {
+        greens.push(v.ed.add_green(t, sv).unwrap());
+    }
+    let before: Vec<f64> = greens
+        .iter()
+        .map(|id| v.ed.chart.timing_point(*id).unwrap().sv())
+        .collect();
+    v.sel_line = Some(greens[0]);
+    v.sel_extra.extend(greens[1..].iter().copied());
+    v.sel_extra.insert(red.id);
+    v.press(Btn::Edit(EdField::SvTimes), Keys::default(), None);
+    for chord in ["Digit1", "Period", "Digit5", "Enter"] {
+        press(&mut s, chord, None);
+    }
+    let v = view(&mut s);
+    let sv = |v: &View, id: u64| v.ed.chart.timing_point(id).unwrap().sv();
+    for (id, was) in greens.iter().zip(&before) {
+        assert!(
+            (sv(v, *id) - was * 1.5).abs() < 1e-9,
+            "{} vs {}",
+            sv(v, *id),
+            was * 1.5
+        );
+    }
+    let now_red = v.ed.chart.timing_point(red.id).unwrap();
+    assert_eq!(
+        now_red.beat_length, red.beat_length,
+        "the red line keeps its BPM"
+    );
+    // Shift + doubles them; one undo is one step back.
+    v.press(
+        Btn::Inc(EdField::SvTimes),
+        Keys {
+            shift: true,
+            ..Keys::default()
+        },
+        None,
+    );
+    assert!((sv(v, greens[2]) - before[2] * 3.0).abs() < 1e-9);
+    press(&mut s, "Ctrl+Z", None);
+    let v = view(&mut s);
+    assert!((sv(v, greens[2]) - before[2] * 1.5).abs() < 1e-9, "undone");
+    let _ = std::fs::remove_dir_all(&dir);
+}
