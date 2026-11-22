@@ -870,6 +870,8 @@ struct Updating {
     /// The pp total its profile of the player says, and how many times it was asked for it.
     profile_pp: f64,
     profiles: usize,
+    /// The total its answer to a play says (100 when not set).
+    answer_pp: Option<f64>,
 }
 
 /// What `score_server` does with the first play sent to it.
@@ -958,7 +960,7 @@ fn score_server(first_play: FirstPlay) -> (String, std::sync::Arc<std::sync::Mut
                     }
                     Request::SubmitScore { play, .. } => {
                         let key = play.operation_key.clone();
-                        let first = {
+                        let (first, answer_pp) = {
                             let mut seen = seen.lock().unwrap();
                             // Answered with 100 pp, settled at 140 once its replay is played
                             // back (the real server does that just after answering).
@@ -971,7 +973,7 @@ fn score_server(first_play: FirstPlay) -> (String, std::sync::Arc<std::sync::Mut
                             {
                                 seen.stored.insert(k.clone());
                             }
-                            first
+                            (first, seen.answer_pp.unwrap_or(100.0))
                         };
                         match first_play {
                             // Stored, then gone before answering: the old copy stops and
@@ -995,7 +997,7 @@ fn score_server(first_play: FirstPlay) -> (String, std::sync::Arc<std::sync::Mut
                             &Reply::Submitted {
                                 relax: false,
                                 map_rank: Some(1),
-                                pp: 100.0,
+                                pp: answer_pp,
                                 rank: Some(7),
                                 medals: Vec::new(),
                             },
@@ -1208,6 +1210,54 @@ fn the_own_pp_total_follows_the_server_after_a_play_settles() {
     assert!(
         seen.lock().unwrap().profiles >= 2,
         "asked on login and after the play"
+    );
+}
+
+/// The server answers a play before its pp counts (the replay is checked just after), so the
+/// answer's total is the one from before the play. The results show "..." for the change, and
+/// the gain once the settled total comes in, instead of "none" (Discord: "PP Change not
+/// showing the increase").
+#[test]
+fn the_results_show_the_pp_gain_once_the_server_settles_the_play() {
+    let (server, seen) = score_server(FirstPlay::Kept);
+    {
+        let mut seen = seen.lock().unwrap();
+        seen.profile_pp = 50.0;
+        seen.answer_pp = Some(50.0);
+    }
+    let songs = Songs::new("results-pp-settles", &[maps::basics()]);
+    let mut s = play_to_server(server, &songs);
+    // Tests keep no replay files: the results of a play just made have one.
+    s.scene
+        .screen_mut::<ResultsScreen>()
+        .expect("the results come after the map")
+        .results
+        .replay = Some(PathBuf::from("played.json"));
+    assert!(!s.submits.is_empty(), "the answer isn't in yet");
+    let total = |s: &State| {
+        s.scene
+            .screen_as::<ResultsScreen>()
+            .and_then(|r| r.results.total)
+    };
+    assert!(
+        poll_own_pp(&mut s, 30, &|s| total(s).is_some()),
+        "the play is sent and answered"
+    );
+    let answered = total(&s).unwrap();
+    assert_eq!(
+        (answered.before, answered.after, answered.settling),
+        (Some(50.0), 50.0, true),
+        "not counted yet: the change waits"
+    );
+    assert!(
+        poll_own_pp(&mut s, 15, &|s| total(s).is_some_and(|t| !t.settling)),
+        "the settled total comes in: {:?}",
+        total(&s)
+    );
+    let settled = total(&s).unwrap();
+    assert_eq!(
+        (settled.before, settled.after, settled.rank),
+        (Some(50.0), 140.0, Some(7))
     );
 }
 

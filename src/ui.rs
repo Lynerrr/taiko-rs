@@ -5155,6 +5155,8 @@ pub struct Total {
     pub after: f64,
     /// Their place by pp.
     pub rank: Option<u32>,
+    /// The server may not have counted the play yet: no change is shown as "..." for now.
+    pub settling: bool,
 }
 
 /// A score opened from a leaderboard (not one just played).
@@ -5867,6 +5869,7 @@ impl Results {
             Some(t) => {
                 let (change, col) = match t.before.map(|b| t.after - b) {
                     Some(g) if g >= 0.05 => (format!("+{g:.1} pp"), 0x86E05A),
+                    Some(_) if t.settling => ("...".to_string(), 0x8a8aa0),
                     Some(_) => ("none".to_string(), 0x8a8aa0),
                     None => ("-".to_string(), 0x8a8aa0),
                 };

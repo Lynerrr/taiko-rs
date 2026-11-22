@@ -1223,6 +1223,7 @@ fn assert_every_screen_fits() {
             before: Some(12_333.3),
             after: 12_345.6,
             rank: Some(99_999),
+            settling: false,
         });
         r.breakdown = (!failed).then_some(pp::Breakdown {
             pp: 456.7,
