@@ -76,6 +76,31 @@ fn focused_song_search_uses_arrows_for_text_and_updates_the_song_filter() {
     assert_eq!(s.select.filter, "c");
 }
 
+/// Discord idea: a right click on song select's search text clears it, typing or not.
+#[test]
+fn a_right_click_on_the_song_search_clears_it() {
+    for searching in [false, true] {
+        let mut s = harness::state_with(harness::config(), Vec::new());
+        s.select.filter = "abc".into();
+        s.select.searching = searching;
+        harness::frame(&mut s, Instant::now());
+        let field = s
+            .hits
+            .iter()
+            .find(|h| h.hit == hit::Hit::TextField)
+            .map(|h| h.rect)
+            .expect("song select has a search box");
+        let k = s.window_h / crate::render::VIRTUAL_HEIGHT;
+        s.mouse = (
+            f64::from((field[0] + field[2] / 2.0) * k),
+            f64::from((field[1] + field[3] / 2.0) * k),
+        );
+        s.right_button(true);
+        s.right_button(false);
+        assert_eq!(s.select.filter, "", "cleared (searching: {searching})");
+    }
+}
+
 #[test]
 fn mouse_placement_and_drag_selection_use_the_rendered_glyph_positions() {
     let mut s = chat();
