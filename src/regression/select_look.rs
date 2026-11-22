@@ -457,8 +457,18 @@ fn the_cards_sit_on_the_lists_wave_the_rest_dimmed_and_one_under_the_pointer_com
     );
 }
 
+/// The strongest fill of what's drawn of the list in `r` (its plain shapes: the card, its
+/// light, its text's plate).
+fn strongest_in(c: &Canvas, r: [f32; 4]) -> f32 {
+    c.shapes
+        .iter()
+        .filter(|sh| plain(sh) && inside(sh.center, r, 0.0))
+        .map(|sh| sh.fill[3])
+        .fold(0.0, f32::max)
+}
+
 #[test]
-fn the_last_card_fades_out_at_the_lists_bottom() {
+fn a_card_cut_by_the_lists_bottom_is_drawn_down_to_it_only_a_little_dimmed() {
     let (mut s, _songs, mut now) = menu_look_with("select-look-bottom", &many());
     let c = settled(&mut s, &mut now);
     let bottom = s.select.list_bottom();
@@ -468,7 +478,15 @@ fn the_last_card_fades_out_at_the_lists_bottom() {
         .map(|(_, r)| r)
         .find(|r| r[1] < bottom && r[1] + r[3] > bottom)
         .expect("a card runs past the list's bottom");
-    // What of it is drawn just above the bottom is all but gone.
+    // The card above it, in full view: as far from the target, all but.
+    let above = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r)
+        .filter(|r| r[1] + r[3] <= cut[1] + 0.5)
+        .max_by(|a, b| a[1].total_cmp(&b[1]))
+        .expect("a card above it");
+    // What of it is drawn just above the bottom is still seen, a little dimmed: cut by the
+    // list's clip, not faded out short of it.
     let near: Vec<f32> = c
         .shapes
         .iter()
@@ -486,55 +504,204 @@ fn the_last_card_fades_out_at_the_lists_bottom() {
         !near.is_empty(),
         "the card at {cut:?} is drawn down to the bottom"
     );
-    assert!(near.iter().all(|a| *a < 0.3), "faded out: {near:?}");
+    let most = near.iter().copied().fold(0.0, f32::max);
+    let full = strongest_in(&c, above);
+    assert!(
+        most >= 0.55 * full && most <= full + 0.01,
+        "a little dimmed at the bottom: {most} there, {full} on the card above"
+    );
 }
 
 #[test]
-fn a_card_cut_by_the_lists_top_fades_out_rather_than_show_part_of_itself() {
+fn a_card_cut_by_the_lists_top_is_drawn_up_to_it_only_a_little_dimmed() {
     let (mut s, _songs, mut now) = many_sets("select-look-top");
     settled(&mut s, &mut now);
-    let smooth = |x: f32| x * x * (3.0 - 2.0 * x);
     let (rh, _, _) = s.select.row_heights();
-    let (mut gone, mut fading) = (0, 0);
+    let (mut deep, mut shallow) = (0, 0);
     // Dragged by what isn't a whole number of rows, cards come to sit across the top.
     drag_then_wheel(&mut s, &mut now, 413.0, 12, |s, c, how| {
         let lw = s.select.list_w(c.width);
+        let top = s.select.list_top();
+        let shown = cards(c);
         // A card cut by the list's top takes the pointer from the top down only: its hit is
         // the part of it under the top.
-        for (_, r) in cards(c) {
-            // (Not one cut by the list's bottom.)
-            if r[3] >= rh - 0.01 || r[1] > c.height / 2.0 {
+        for (_, r) in &shown {
+            // (Not one cut by the list's bottom, nor one with only its edge left.)
+            if r[3] >= rh - 0.01 || r[1] > c.height / 2.0 || r[3] < 6.0 {
                 continue;
             }
-            let (top, under) = (r[1], rh - r[3]);
+            let under = rh - r[3];
             // What of it reaches below the top, where it's seen.
             let most = c
                 .shapes
                 .iter()
                 .filter(|sh| plain(sh) && sh.center[0] > 20.0 && sh.center[0] < 28.0 + lw)
+                .filter(|sh| sh.half[1] * 2.0 < 100.0)
                 .filter(|sh| {
                     let [_, y, _, h] = rect(sh);
                     y + h > top + 0.5 && sh.center[1] < r[1] + r[3] && sh.center[0] > r[0]
                 })
                 .map(|sh| sh.fill[3])
                 .fold(0.0, f32::max);
-            // Gone once half of it is cut; fading out on the way there.
-            let left = (1.0 - under / (rh * 0.5)).clamp(0.0, 1.0);
+            // The next card down, in full view.
+            let Some(next) = shown
+                .iter()
+                .map(|(_, n)| *n)
+                .filter(|n| n[1] >= r[1] + r[3] - 0.5 && n[3] >= rh - 4.5)
+                .min_by(|a, b| a[1].total_cmp(&b[1]))
+            else {
+                continue;
+            };
+            let full = strongest_in(c, next);
+            // Drawn right up to the clip, a little dimmed (and a step fainter for being
+            // farther from the target), never left out leaving a hole under the tabs.
             assert!(
-                most <= smooth(left) + 0.01,
-                "{how}: {under} of a card cut by the top at {top}: {most}"
+                most >= 0.55 * full,
+                "{how}: {under} of a card cut by the top at {}: {most}, {full} on the next",
+                r[1]
             );
-            if left == 0.0 {
-                gone += 1;
+            if under > rh * 0.5 {
+                deep += 1;
             } else {
-                fading += 1;
+                shallow += 1;
             }
         }
     });
     assert!(
-        gone > 0 && fading > 0,
-        "cards cut by the top: {gone} gone, {fading} fading"
+        deep > 0 && shallow > 0,
+        "cards cut by the top: {deep} more than half under it, {shallow} less"
     );
+}
+
+/// Twenty sets, the eleventh with eight difficulties, one of them selected (in the target,
+/// about the view's middle: its rows on different steps of the list's wave).
+fn a_set_of_many_difficulties(tag: &str) -> (State, Songs, Instant) {
+    let songs = Songs::new(tag, &many());
+    let first = songs.paths[10].clone();
+    let folder = first.parent().expect("its set's folder").to_path_buf();
+    let mut entries = songs.entries();
+    for k in 1..8 {
+        let path = folder.join(format!("diff-{k}.osu"));
+        std::fs::copy(&first, &path).expect("a copy of the chart");
+        let mut meta = beatmap::read_meta_file(&path).expect("its metadata");
+        meta.version = format!("Diff {k}");
+        entries.push(Entry::new(path, meta));
+    }
+    for e in &mut entries {
+        e.meta.background = Some("bg.png".into());
+    }
+    let cfg = Config {
+        main_menu: true,
+        accent: ACCENT,
+        ..harness::config()
+    };
+    let mut s = state_with(cfg, entries);
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    let row = (0..s.library.len())
+        .find(|&r| {
+            s.select
+                .row_map(r)
+                .is_some_and(|i| s.library[i].meta.version == "Diff 4")
+        })
+        .expect("the set's fourth difficulty");
+    s.select.set_cursor(row);
+    settled(&mut s, &mut now);
+    (s, songs, now)
+}
+
+#[test]
+fn an_open_sets_tree_is_one_straight_trunk_with_a_step_short_of_each_difficulty() {
+    let (mut s, _songs, mut now) = a_set_of_many_difficulties("select-look-tree");
+    let c = settled(&mut s, &mut now);
+    let (top, bottom) = (s.select.list_top(), s.select.list_bottom());
+    let open = open_card(&c, &s);
+    let cursor = s.select.cursor();
+    // The set's difficulties in full view, top down.
+    let mut diffs: Vec<(usize, [f32; 4])> = c
+        .hits
+        .iter()
+        .filter_map(|h| match h.hit {
+            Hit::SongRow(i) => Some((i, h.rect)),
+            _ => None,
+        })
+        .filter(|(_, r)| r[1] >= top && r[1] + r[3] <= bottom)
+        .collect();
+    diffs.sort_by(|a, b| a.1[1].total_cmp(&b.1[1]));
+    assert!(diffs.len() >= 6, "the set's difficulties: {diffs:?}");
+    let lefts: Vec<f32> = diffs.iter().map(|(_, r)| r[0]).collect();
+    let (least, most) = lefts
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(*x), b.max(*x)));
+    assert!(
+        most - least > 2.0,
+        "the difficulties lie on the wave, in by different amounts: {lefts:?}"
+    );
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let lines: Vec<[f32; 4]> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, edge))
+        .map(rect)
+        .filter(|r| r[0] < least && r[1] >= open[1] && r[1] <= diffs[diffs.len() - 1].1[1] + 22.0)
+        .collect();
+    // The trunk: the lines one unit wide down the indent, every one at the same x.
+    let mut trunk: Vec<[f32; 4]> = lines
+        .iter()
+        .copied()
+        .filter(|r| (r[2] - 1.0).abs() < 0.01 && r[3] > 1.5)
+        .collect();
+    trunk.sort_by(|a, b| a[1].total_cmp(&b[1]));
+    assert!(
+        trunk.len() >= diffs.len(),
+        "a piece of trunk a row: {trunk:?}"
+    );
+    let x = trunk[0][0];
+    assert!(
+        trunk.iter().all(|r| (r[0] - x).abs() < 1e-3),
+        "one straight trunk, not pieces at each row's indent: {trunk:?}"
+    );
+    // Unbroken from the set's card down to the last difficulty in view.
+    assert!(
+        trunk
+            .windows(2)
+            .all(|w| w[1][1] <= w[0][1] + w[0][3] + 0.01),
+        "no gaps down the trunk: {trunk:?}"
+    );
+    // Inside the set's card, and clear of every difficulty's left (the selection's brackets 3
+    // out from its row).
+    assert!(
+        x > open[0] + 4.0 && x < open[0] + open[2],
+        "the trunk at {x} comes down from the set's card at {open:?}"
+    );
+    let selected = diffs
+        .iter()
+        .find(|(i, _)| *i == cursor)
+        .map(|(_, r)| *r)
+        .expect("the selected difficulty in view");
+    assert!(
+        x + 1.0 < least - 3.0 - 2.0,
+        "the trunk at {x} clear of the rows from {least}"
+    );
+    // A step from the trunk into each row, stopping short of its card and the brackets.
+    for (_, r) in &diffs {
+        let step = lines
+            .iter()
+            .find(|l| {
+                (l[3] - 1.0).abs() < 0.01
+                    && (l[0] - x).abs() < 1e-3
+                    && l[1] > r[1]
+                    && l[1] < r[1] + r[3]
+            })
+            .unwrap_or_else(|| panic!("a step into the row at {r:?}: {lines:?}"));
+        let end = step[0] + step[2];
+        let brackets = r[0] - 3.0;
+        assert!(
+            end > x + 1.0 && end <= brackets - 1.9,
+            "the step into {r:?} ends at {end}, short of {brackets}"
+        );
+    }
+    assert!(selected[0] >= least);
 }
 
 /// A picture drawn (`render::Canvas::picture`): its slot is in `params[3]` below -1000.
@@ -2254,6 +2421,47 @@ fn the_stats_are_one_dense_line_under_the_difficulty() {
         .filter(|sh| plain(sh) && same_rgb(sh.fill, fill) && inside(sh.center, caps[0], 2.0))
         .count();
     assert_eq!(tiles, 0, "no tile under OD");
+}
+
+#[test]
+fn the_stats_the_don_and_kat_bar_and_the_pp_have_air_between_them_their_text_kept_small() {
+    let (mut s, _songs, mut now) = menu_look("select-look-stat-air");
+    let c = settled(&mut s, &mut now);
+    let [head, _, body] = sections(&c, &s)[..] else {
+        panic!("three sections")
+    };
+    let boxes = text_boxes(&c);
+    let at = |want: &dyn Fn(&str) -> bool, what: &str| {
+        boxes
+            .iter()
+            .find(|(t, r)| want(t) && inside([r[0], r[1]], head, 0.0))
+            .map(|(_, r)| *r)
+            .unwrap_or_else(|| panic!("{what} in the details"))
+    };
+    let od = at(&|t| t == "OD", "OD");
+    let don = at(&|t| t.ends_with(" DON"), "the Don count");
+    let ss = at(&|t| t == "SS", "the SS pp");
+    // Room between the three lines (the stats, Don and Kat's bar, the pp), not one cramped
+    // block under the banner.
+    assert!(
+        don[1] - (od[1] + od[3]) >= 15.0,
+        "the stats over the bar: {od:?} {don:?}"
+    );
+    assert!(
+        ss[1] - (don[1] + don[3]) >= 19.0,
+        "the bar over the pp: {don:?} {ss:?}"
+    );
+    assert!(
+        ss[1] + ss[3] + 8.0 <= head[1] + head[3],
+        "room under the pp: {ss:?} in {head:?}"
+    );
+    // Still small text, not tiles.
+    assert!(
+        [od, don, ss].iter().all(|r| r[3] < 10.0),
+        "{od:?} {don:?} {ss:?}"
+    );
+    // Taken from the body under the tabs: still room for the lane and the board.
+    assert!(body[3] > 280.0, "the body under the tabs: {body:?}");
 }
 
 #[test]
