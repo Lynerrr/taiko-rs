@@ -467,3 +467,44 @@ fn card_pictures_gpu_come_in_across_out_of_nothing_with_no_edge() {
         assert!(pair[1] - pair[0] <= 4, "no edge: {along:?}");
     }
 }
+
+#[test]
+fn song_selects_ground_in_one_shape_looks_as_the_shapes_it_replaced_did() {
+    let mut gpu = Gpu::new();
+    // 250 x 100 units at 1 px each: the bands are 2 px tall, the side shades 50 px wide.
+    let (w, h) = (250.0, 100.0);
+    let under = |c: &mut Canvas<()>| c.rect(0.0, 0.0, 256.0, 128.0, rgba(0xd0a040, 1.0));
+    let (ground, dim, edge) = (0x0a0c14, 0.72, 0.6);
+    // As `style::ground` drew it: a tint, a shade in from each side, eight bands top and bottom.
+    let mut old = Canvas::<()>::default();
+    under(&mut old);
+    old.rect(0.0, 0.0, w, h, rgba(ground, dim));
+    let side = w * 0.2;
+    let (strong, clear) = (rgba(ground, edge), rgba(ground, 0.0));
+    old.shade_eased([0.0, 0.0], [side, h], 0.0, strong, clear);
+    old.shade_eased([w - side, 0.0], [side, h], 0.0, clear, strong);
+    let band = h * 0.16 / 8.0;
+    for k in 0..8 {
+        let f = 1.0 - (k as f32 + 0.5) / 8.0;
+        let col = rgba(ground, edge * f * f * (3.0 - 2.0 * f) / 2.0);
+        old.rect(0.0, k as f32 * band, w, band, col);
+        old.rect(0.0, h - (k + 1) as f32 * band, w, band, col);
+    }
+    let mut new = Canvas::<()>::default();
+    under(&mut new);
+    new.ground_shade([0.0, 0.0], [w, h], rgba(ground, dim), edge);
+    assert_eq!(new.shapes.len(), 2, "one shape for the ground");
+    let (_, _, a) = gpu.draw(&old.shapes, 1.0);
+    let (_, _, b) = gpu.draw(&new.shapes, 1.0);
+    // Laid over one another in 8 bits each time, the old shapes round a little differently.
+    let worst = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| x.abs_diff(*y))
+        .max()
+        .unwrap_or(0);
+    assert!(worst <= 3, "at most rounding apart: {worst}");
+    // And it is the ground: darker at the sides and the top than in the middle.
+    let px = |x: usize, y: usize| b[(y * 256 + x) * 4] as i32;
+    assert!(px(2, 50) < px(125, 50) && px(125, 1) < px(125, 50));
+}

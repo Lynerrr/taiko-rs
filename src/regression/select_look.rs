@@ -3704,16 +3704,21 @@ fn a_maps_picture_behind_song_select_is_under_a_dense_cold_ground_darker_at_the_
     // Over the whole screen a deep navy, not a grey: a yellow or white picture doesn't colour
     // the screen and the room between the panels brown.
     let ground = render::rgba(style::GROUND, 1.0);
-    let tint = c
+    // One shape (`Canvas::ground_shade`): drawn as a tint and shades and bands over it, it went
+    // over the screen some three times, a good part of a slow graphics chip's frame.
+    let grounds: Vec<&Shape> = c
         .shapes
         .iter()
-        .find(|sh| {
-            plain(sh)
-                && same_rgb(sh.fill, ground)
-                && sh.half[0] * 2.0 >= c.width - 1.0
-                && sh.half[1] * 2.0 >= render::VIRTUAL_HEIGHT - 1.0
-        })
-        .expect("the ground over the whole screen");
+        .filter(|sh| same_rgb(sh.fill, ground) && sh.fill[3] > 0.0)
+        .collect();
+    assert_eq!(grounds.len(), 1, "the ground in one shape");
+    let tint = grounds[0];
+    assert!(
+        tint.params[3] == render::GROUND_SHADE
+            && tint.half[0] * 2.0 >= c.width - 1.0
+            && tint.half[1] * 2.0 >= render::VIRTUAL_HEIGHT - 1.0,
+        "over the whole screen"
+    );
     assert!(ground[2] > ground[0], "cold: {ground:?}");
     let shown = s.bg_brightness * (1.0 - tint.fill[3]);
     assert!(
@@ -3722,14 +3727,12 @@ fn a_maps_picture_behind_song_select_is_under_a_dense_cold_ground_darker_at_the_
         s.bg_brightness,
         tint.fill[3]
     );
-    // Darker still at the screen's sides: a shade from each edge in.
-    let sides = c
-        .shapes
-        .iter()
-        .filter(|sh| sh.params[3] == render::SHADE_EASED && same_rgb(sh.fill, ground))
-        .filter(|sh| sh.half[1] * 2.0 >= render::VIRTUAL_HEIGHT - 1.0)
-        .count();
-    assert_eq!(sides, 2, "a vignette down both sides");
+    // Darker still towards the screen's edges (the shader eases it in from `border`'s alpha).
+    assert!(
+        same_rgb(tint.border, ground) && tint.border[3] >= 0.5,
+        "a vignette round the edges: {:?}",
+        tint.border
+    );
 }
 
 #[test]

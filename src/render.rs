@@ -259,6 +259,10 @@ pub const SHADE_ACROSS: f32 = 3.0;
 /// A plain shape's kind for `Canvas::shade_eased`: as `SHADE_ACROSS`, eased in and out (no edge
 /// shows where it starts or ends against something of its colour).
 pub const SHADE_EASED: f32 = 4.0;
+/// A plain shape's kind for `Canvas::ground_shade`: `fill` over it all, darker towards its
+/// edges up to `border`'s alpha.
+/// (Not 5: #643's frosted routes had that, and a test keeps it unused.)
+pub const GROUND_SHADE: f32 = 7.0;
 
 fn flip_x(sh: &mut Shape) {
     let sprite = |s: Sprite| SPRITE_BASE + s as usize as f32;
@@ -1320,6 +1324,32 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     return out;
 }
 
+// `Canvas::ground_shade`'s alpha at `local` (from the middle of a rect `half` in size): `dim`
+// over it all and, up to `edge`, eased in from each side over a fifth of its width and in eight
+// steps from the top and the bottom over 16% of its height, half as strong; all of them laid
+// over one another as separate shapes of one colour would be.
+fn ground_alpha(local: vec2<f32>, half: vec2<f32>, dim: f32, edge: f32) -> f32 {
+    let size = 2.0 * half;
+    let p = local + half;
+    let side = max(size.x * 0.2, 1e-4);
+    let left = edge * (1.0 - smoothstep(0.0, 1.0, clamp(p.x / side, 0.0, 1.0)));
+    let right = edge * (1.0 - smoothstep(0.0, 1.0, clamp((size.x - p.x) / side, 0.0, 1.0)));
+    let band = max(size.y * 0.02, 1e-4);
+    var top = 0.0;
+    var bottom = 0.0;
+    let kt = floor(p.y / band);
+    if (kt >= 0.0 && kt < 8.0) {
+        let f = 1.0 - (kt + 0.5) / 8.0;
+        top = edge * f * f * (3.0 - 2.0 * f) / 2.0;
+    }
+    let kb = floor((size.y - p.y) / band);
+    if (kb >= 0.0 && kb < 8.0) {
+        let f = 1.0 - (kb + 0.5) / 8.0;
+        bottom = edge * f * f * (3.0 - 2.0 * f) / 2.0;
+    }
+    return 1.0 - (1.0 - dim) * (1.0 - left) * (1.0 - right) * (1.0 - top) * (1.0 - bottom);
+}
+
 fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     let q = abs(p) - b + vec2<f32>(r);
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
@@ -1483,6 +1513,8 @@ fn shade(in: VOut) -> vec4<f32> {
                 vfade = 1.0 - t * t * (3.0 - 2.0 * t);
             }
             color = vec4<f32>(c.rgb, c.a * coverage * vfade);
+        } else if (in.params.w > 6.5 && in.params.w < 7.5) {
+            color = vec4<f32>(in.fill.rgb, ground_alpha(in.local, in.half, in.fill.a, in.border.a) * coverage);
         } else {
             let bw = in.params.y;
             let inner = clamp(0.5 - (d + bw), 0.0, 1.0);
@@ -4927,6 +4959,24 @@ impl<H> Canvas<H> {
             fill: left,
             border: right,
             params: [radius, 0.0, 0.0, SHADE_EASED],
+            angle: 0.0,
+        });
+    }
+
+    /// `fill` over `[x, y]`, `[w, h]`, darker towards its edges up to `edge`'s alpha (of
+    /// `fill`'s colour): eased in from each side over a fifth of its width, and in eight steps
+    /// from the top and the bottom over 16% of its height, half as strong (`style::ground`). One
+    /// shape draws each pixel once where a tint and shades and bands over it drew it some three
+    /// times, which on a slow graphics chip was a good part of song select's frame.
+    pub fn ground_shade(&mut self, [x, y]: [f32; 2], [w, h]: [f32; 2], fill: [f32; 4], edge: f32) {
+        let mut border = fill;
+        border[3] = edge;
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [w / 2.0, h / 2.0],
+            fill,
+            border,
+            params: [0.0, 0.0, 0.0, GROUND_SHADE],
             angle: 0.0,
         });
     }
