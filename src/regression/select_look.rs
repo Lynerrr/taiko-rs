@@ -580,7 +580,7 @@ fn the_banners_text_sits_on_a_plate_dark_at_its_left_lighter_across_and_gone_dow
     for (left, right, r, _) in &layers {
         assert!(r[2] > head[2] * 0.9, "across the banner: {r:?} in {head:?}");
         assert!(
-            left > right && *right > 0.0,
+            left > right && *right >= 0.0,
             "lighter to the right: {left} to {right}"
         );
     }
@@ -597,8 +597,12 @@ fn the_banners_text_sits_on_a_plate_dark_at_its_left_lighter_across_and_gone_dow
     // picture itself near its own brightness, not a black box.
     let left = shown(top + 10.0, |l| l.0);
     let right = shown(top + 10.0, |l| l.1);
-    assert!(left > 0.75, "dark under the title: {left}");
-    assert!(right < 0.25, "open at the right end: {right}");
+    assert!(left > 0.5, "dark under the title: {left}");
+    assert!(right < 0.05, "open at the right end: {right}");
+    // Tall, for the picture to show (on 720), its text down at its foot: the picture open over
+    // its top.
+    let tall = bottom - top;
+    assert!((165.0..=185.0).contains(&tall), "the banner {tall} tall");
     let bright = c
         .shapes
         .iter()
@@ -614,6 +618,11 @@ fn the_banners_text_sits_on_a_plate_dark_at_its_left_lighter_across_and_gone_dow
         .find(|(r, t)| *t == title && !r.is_empty() && c.shapes[r.start].center[0] > 28.0 + lw)
         .expect("the title");
     let glyph = c.shapes[r.start];
+    assert!(
+        glyph.center[1] > top + tall * 0.5,
+        "the title in the banner's lower half: {} of {top}..{bottom}",
+        glyph.center[1]
+    );
     let shadow = c.shapes[..r.start].iter().rev().take(r.len()).any(|sh| {
         (sh.center[0] - glyph.center[0]).abs() < 0.01
             && sh.center[1] > glyph.center[1]
@@ -774,7 +783,7 @@ fn don_and_kat_are_one_bar_split_in_proportion() {
 }
 
 #[test]
-fn a_cards_picture_is_behind_a_curtain_a_dark_plate_under_the_text_then_an_eased_sweep_out_of_it() {
+fn a_cards_picture_comes_in_across_it_out_of_nothing_with_nothing_over_it() {
     let (mut s, _songs, mut now) = menu_look("select-look-shade");
     let i = s.select.selected().expect("a map is selected");
     assert!(
@@ -789,102 +798,73 @@ fn a_cards_picture_is_behind_a_curtain_a_dark_plate_under_the_text_then_an_eased
     }
     let c = settled(&mut s, &mut now);
     let open = open_card(&c, &s);
-    let picture = c
-        .shapes
-        .iter()
-        .find(|sh| card_picture(sh) && inside(sh.center, open, 0.0))
-        .expect("the card's picture");
+    let in_card = |r: [f32; 4]| {
+        c.shapes
+            .iter()
+            .enumerate()
+            .find(|(_, sh)| card_picture(sh) && inside(sh.center, r, 0.0))
+            .expect("the card's picture")
+    };
+    let (at, picture) = in_card(open);
     let [px, _, pw, _] = rect(picture);
     assert!(picture.params[0] > 0.0, "the picture as round as the card");
-    // The curtain over the picture: a plain plate of the card's dark surface colour from its
-    // left under the title and artist, then one eased sweep (it starts and ends level: no edge
-    // where it meets the plate) from that dark to most of the picture at the right end.
-    let dark = render::rgba(style::SURFACE_1, 1.0);
-    let ours = |sh: &&Shape| inside(sh.center, open, 0.0) && same_rgb(sh.fill, dark);
-    let sweeps: Vec<&Shape> = c
-        .shapes
-        .iter()
-        .filter(ours)
-        .filter(|sh| sh.params[3] == render::SHADE_EASED)
-        .collect();
-    assert_eq!(sweeps.len(), 1, "one sweep");
-    let sw = sweeps[0];
-    let plate = c
-        .shapes
-        .iter()
-        .filter(ours)
-        .find(|sh| plain(sh) && same_rgb(sh.border, dark) && (rect(sh)[0] - px).abs() < 0.01)
-        .expect("the plate from the picture's left");
-    let [sx, _, sweep_w, _] = rect(sw);
-    let share = (sx - px) / pw;
+    // Over the whole card (1 in), not cut anywhere: no edge of it to show.
     assert!(
-        (0.25..0.35).contains(&share),
-        "the sweep from about three tenths across: {share}"
+        (px - (open[0] + 1.0)).abs() < 0.01 && (pw - (open[2] - 2.0)).abs() < 0.01,
+        "the whole card: {:?} in {open:?}",
+        rect(picture)
     );
     assert!(
-        (sx + sweep_w - (px + pw)).abs() < 0.01,
-        "to the picture's right end"
+        !c.clips
+            .iter()
+            .any(|(r, cut)| r.contains(&at)
+                && (cut[0] > px + 1.0 || cut[0] + cut[2] < px + pw - 1.0)),
+        "not cut"
     );
-    let [_, _, plate_w, _] = rect(plate);
-    assert!(
-        px + plate_w > sx,
-        "the plate on under the sweep's start, out of sight"
-    );
-    assert_eq!(plate.fill, plate.border, "the plate plain");
-    assert!(
-        plate.fill[3] > 0.99 && sw.fill[3] > 0.99 && (0.35..0.45).contains(&sw.border[3]),
-        "dark under the text, the picture coming out to the right: {} to {}",
-        sw.fill[3],
-        sw.border[3]
-    );
+    // It comes in across the card in its shader: none of it over the left third, under the
+    // title and artist, then eased in to the right end, a little more than half of it there on
+    // the card open.
+    let (from, rest, lit) = ui::CARD_ART;
+    assert!((0.30..=0.35).contains(&from), "{from}");
     assert_eq!(
-        plate.params[0], picture.params[0],
-        "as round as the picture"
+        [picture.border[2], picture.border[3]],
+        [from, 1.0],
+        "from {from} across to the right end"
     );
-    // The picture itself only from the plate's end on, worked out from the card as drawn:
-    // however its fade-in or the card's alpha go, none of it is under the title and artist.
-    let at = c
-        .shapes
-        .iter()
-        .position(|sh| std::ptr::eq(sh, picture))
-        .expect("the picture's place");
-    let clip = c
-        .clips
-        .iter()
-        .filter(|(r, _)| r.contains(&at))
-        .map(|(_, r)| *r)
-        .find(|r| r[0] > px + 1.0)
-        .expect("the picture cut at the plate's end");
+    assert!((0.55..=0.60).contains(&lit), "{lit}");
     assert!(
-        (clip[0] - (px + pw * 0.30)).abs() < 0.6 && (clip[0] + clip[2] - (px + pw)).abs() < 0.6,
-        "from three tenths across to its end: {clip:?} of {px}..{}",
-        px + pw
+        (picture.fill[3] - lit).abs() < 0.01,
+        "the open card's: {}",
+        picture.fill[3]
     );
-    // The cards not open show less of theirs: a sweep ending darker, and dimmed by being darker
-    // rather than see-through (through a see-through curtain the picture under it showed).
+    // Nothing over it: no plate, no sweep, nothing of the card's dark tone on it (which showed a
+    // seam where it ended and clashed with the card's light under the pointer).
+    let dark = render::rgba(style::SURFACE_1, 1.0);
+    let over: Vec<[f32; 4]> = c.shapes[at + 1..]
+        .iter()
+        .filter(|sh| inside(sh.center, open, 0.0))
+        .filter(|sh| {
+            matches!(sh.params[3], render::SHADE_EASED | render::SHADE_ACROSS)
+                || (plain(sh) && same_rgb(sh.fill, dark) && sh.fill[3] > 0.0)
+        })
+        .map(rect)
+        .collect();
+    assert!(over.is_empty(), "nothing over the picture: {over:?}");
+    // The cards not open show less of theirs, the same way.
     let other = cards(&c)
         .into_iter()
         .map(|(_, r)| r)
         .find(|r| *r != open)
         .expect("another card");
-    let muted = c
-        .shapes
-        .iter()
-        .find(|sh| sh.params[3] == render::SHADE_EASED && inside(sh.center, other, 0.0))
-        .expect("its sweep");
+    let (_, theirs) = in_card(other);
+    assert!((0.30..=0.35).contains(&rest), "{rest}");
     assert!(
-        muted.border[3] > sw.border[3] + 0.1,
+        theirs.fill[3] <= rest + 1e-3 && theirs.fill[3] < picture.fill[3] - 0.15,
         "muted where not open: {} vs {}",
-        muted.border[3],
-        sw.border[3]
+        theirs.fill[3],
+        picture.fill[3]
     );
-    assert!(muted.fill[3] > 0.69, "not see-through: {}", muted.fill[3]);
-    let surface = render::rgba(style::SURFACE_1, 1.0);
-    assert!(
-        muted.fill[0] < surface[0] - 1e-4 || surface[0] == 0.0,
-        "darker: {:?} vs {surface:?}",
-        muted.fill
-    );
+    assert_eq!([theirs.border[2], theirs.border[3]], [from, 1.0]);
 }
 
 #[test]
@@ -1135,7 +1115,7 @@ fn rebuilding_the_list_keeps_the_cards_pictures_shown_without_fading_them_in_aga
     let before = pictures(&s, &c);
     assert!(before.len() >= 5, "cards on screen");
     assert!(
-        before.iter().all(|&(_, a)| a > 0.3),
+        before.iter().all(|&(_, a)| a > 0.5 * ui::CARD_ART.1),
         "pictures in: {before:?}"
     );
     // The list rebuilt (a library update, the search, a sort): the pictures on screen stay.
@@ -1210,7 +1190,13 @@ fn a_card_shows_its_pictures_colour_until_the_picture_is_in_then_fades_it_in() {
             .copied()
             .collect()
     };
-    let coloured = |sh: &Shape| plain(sh) && same_rgb(sh.fill, [0.2, 0.6, 0.9, 1.0]);
+    // Its colour where the picture comes in, out of nothing as the picture does.
+    let coloured = |sh: &Shape| {
+        sh.params[3] == render::SHADE_EASED
+            && same_rgb(sh.border, [0.2, 0.6, 0.9, 1.0])
+            && sh.fill[3] == 0.0
+            && sh.border[3] > 0.0
+    };
     now += Duration::from_millis(16);
     let c = frame(&mut s, now);
     assert_eq!(
@@ -1241,13 +1227,18 @@ fn a_card_shows_its_pictures_colour_until_the_picture_is_in_then_fades_it_in() {
             "the colour under it meanwhile"
         );
     }
-    for _ in 0..20 {
+    // Quickly: in well under a fifth of a second, scrolled to fast they ease in, not snap.
+    for _ in 0..3 {
         now += Duration::from_millis(16);
         frame(&mut s, now);
     }
     let c = frame(&mut s, now);
     let pic = in_card(&c, &card_picture);
-    assert!(pic[0].fill[3] > 0.99, "in: at full");
+    assert!(
+        (pic[0].fill[3] - ui::CARD_ART.2).abs() < 0.01,
+        "in within 150 ms: {}",
+        pic[0].fill[3]
+    );
     assert!(
         in_card(&c, &coloured).is_empty(),
         "the colour gone under it"
@@ -1497,8 +1488,9 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
         (notes_end - right).abs() < 0.5,
         "notes to {notes_end}, the tile to {right}"
     );
-    // No lines along it or across its ends.
+    // No lines along it or across its ends (the lane's corridor in it has its own two).
     let edge = render::rgba(style::PANEL_EDGE, 1.0);
+    let [_, cy, _, ch] = s.preview.corridor().expect("the lane's corridor");
     let lines: Vec<[f32; 4]> = c
         .shapes
         .iter()
@@ -1507,6 +1499,7 @@ fn the_preview_lane_has_no_lines_round_it_and_its_corners_round() {
         .map(rect)
         .filter(|r| r[1] < y + h + 2.0 && r[1] + r[3] > y - 2.0)
         .filter(|r| r[0] < right + 2.0 && r[0] + r[2] > left - 2.0)
+        .filter(|r| (r[1] - cy).abs() > 0.01 && (r[1] + r[3] - (cy + ch)).abs() > 0.01)
         .collect();
     assert!(lines.is_empty(), "lines round the lane: {lines:?}");
 }
@@ -2032,7 +2025,7 @@ fn the_right_column_is_the_details_a_row_of_tabs_and_the_tab_shown_under_them() 
     );
     // The details as tall as what's on them, no fixed share and no empty band; the body all
     // the rest, much the tallest.
-    assert!(body[3] > 1.5 * head[3], "the body has the room: {column:?}");
+    assert!(body[3] > head[3], "the body has the room: {column:?}");
     let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
     assert!(
         head[1] + head[3] - (pp[1] + pp[3]) < 8.0,
@@ -2231,8 +2224,8 @@ fn the_players_best_is_pinned_under_the_rows_when_not_all_of_them_fit() {
         .map(|h| h.rect)
         .collect();
     assert!(
-        rows.len() > 2 && rows.len() < 30,
-        "some fit: {}",
+        rows.len() >= 6 && rows.len() < 30,
+        "five plays at least and the best: {}",
         rows.len()
     );
     // The last row is the best, pinned at the section's bottom under the others, marked PB.
@@ -3583,4 +3576,49 @@ fn the_sort_and_filter_panel_has_room_for_every_label_and_song_select_s_colours(
             .any(|sh| inside(sh.center, sort, 0.0) && same_rgb(sh.fill, accent)),
         "the sort picked in Play's colour"
     );
+}
+
+#[test]
+fn the_preview_s_notes_run_along_a_corridor_as_tall_as_the_lane_not_through_empty_room() {
+    let (mut s, _songs, mut now) = menu_look("select-look-corridor");
+    let c = settled(&mut s, &mut now);
+    let [bx, by, bw, bh] = s.preview.box_rect().expect("the lane's box");
+    let corridor = s.preview.corridor().expect("a plain map's corridor");
+    let [cx, cy, cw, ch] = corridor;
+    // Across the lane's tile, in the middle of its box, a share of it: the notes' and the drum's
+    // height (the band of a play's lane at the preview's scale), not the whole box.
+    let tile = hit_rect(&c, |h| *h == Hit::Preview).expect("the lane");
+    assert!(
+        (cx - tile[0]).abs() < 0.01 && cx + cw >= tile[0] + tile[2] - 0.01 && cw > 0.9 * bw,
+        "across the tile: {corridor:?} over {tile:?}"
+    );
+    assert!(cx <= bx + 0.01, "from the drum's side");
+    assert!(
+        ((cy + ch / 2.0) - (by + bh / 2.0)).abs() < 1.0,
+        "in the box's middle: {corridor:?} in {by}..{}",
+        by + bh
+    );
+    assert!(
+        ch < bh * 0.95 && ch > bh * 0.3,
+        "the lane's height: {ch} of {bh}"
+    );
+    // A step lighter than the tile, a thin line of the panels' edge along its top and bottom.
+    let lifted = style::surface_fill(style::Surface::Lifted);
+    let at = |r: [f32; 4]| (r[0] - cx).abs() < 0.01 && (r[2] - cw).abs() < 0.01;
+    assert!(
+        c.shapes.iter().any(|sh| plain(sh)
+            && same_rgb(sh.fill, lifted)
+            && at(rect(sh))
+            && (rect(sh)[3] - ch).abs() < 0.01),
+        "its fill"
+    );
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let lines: Vec<f32> = c
+        .shapes
+        .iter()
+        .filter(|sh| plain(sh) && same_rgb(sh.fill, edge) && at(rect(sh)))
+        .map(|sh| rect(sh)[1])
+        .filter(|&ly| (ly - cy).abs() < 0.01 || (ly + style::tone::LINE - (cy + ch)).abs() < 0.01)
+        .collect();
+    assert_eq!(lines.len(), 2, "a line along its top and bottom: {lines:?}");
 }

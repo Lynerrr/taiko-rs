@@ -130,7 +130,8 @@ fn titles(c: &Canvas, s: &State) -> Vec<(String, f32, f32)> {
         .iter()
         .flat_map(|e| [e.meta.title.as_str(), e.meta.version.as_str()])
         .collect();
-    let list_right = 24.0 + ui::Select::list_width(c.width, s.cfg.song_list_share);
+    // The list as laid out (in song select's own space, narrower than the screen's share).
+    let list_right = 24.0 + s.select.list_w(c.width);
     c.texts
         .iter()
         .filter(|(r, t)| {
