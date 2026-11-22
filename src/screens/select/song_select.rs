@@ -702,7 +702,12 @@ fn draw_board_section_for(
         draw_board_section(canvas, rect, state.board_online, &shown);
         return;
     };
-    let hash = state.library[i].hash();
+    // Its hash is worked out off the frame (`known_hash_of`): no board for the moment until then.
+    let Some(hash) = state.known_hash_of(i) else {
+        let shown = BoardShown::Note(String::new());
+        draw_board_section(canvas, rect, state.board_online, &shown);
+        return;
+    };
     if state.board_for != (hash, state.board_online, relax) {
         state.board_for = (hash, state.board_online, relax);
         state.board_scroll = 0;
@@ -844,7 +849,11 @@ fn draw_songs(
         } else {
             String::new()
         };
-    let (stars, rate, plays) = (&state.stars, state.play_speed().0, &state.scores);
+    // Each row's letter from the plays (worked out again only when they change), by the map
+    // hashes known: the ones not known yet are worked out off the frame.
+    state.grades.refresh(&state.scores);
+    let (stars, rate) = (&state.stars, state.play_speed().0);
+    let unknown = std::cell::RefCell::new(Vec::new());
     state.select.scrubbing =
         (state.right_scroll || state.scrollbar_drag).then(|| state.mouse_select().1);
     state.select.list_share = state.cfg.song_list_share;
@@ -873,8 +882,11 @@ fn draw_songs(
             frame.dt,
             &state.status,
             &|i| stars.get(i, rate),
-            &|e| scores::best_grade(plays, e.hash()),
+            &State::row_grade(&state.library, &state.grades, &unknown),
         );
+        for i in unknown.into_inner() {
+            state.hasher.want(&state.library, i);
+        }
     }
     let lw = state.select.list_w(canvas.width);
     state.select.arriving = None;
@@ -926,15 +938,7 @@ fn draw_songs(
         .select
         .selected()
         .and_then(|i| state.stars.get(i, rate));
-    state.preview.potential = match state.select.selected() {
-        Some(i) => state.potentials.get(
-            &state.library[i].path,
-            rate,
-            state.cfg.mods,
-            state.cfg.scroll_speed,
-        ),
-        None => None,
-    };
+    state.preview.potential = state.selected_potential(rate);
     state.preview.sim_pp = match (state.preview.sim, state.select.selected()) {
         (Some(sim), Some(i)) => state.simulated_pp(i, sim, rate),
         _ => None,
@@ -1088,8 +1092,9 @@ fn draw_songs(
             let top = panel_top + 10.0;
             let room = panel_end - 10.0 - top - BOARD_HEAD;
             let fits = (room / BOARD_ROW).floor().max(0.0) as usize;
-            if fits > 0 {
-                let hash = state.library[i].hash();
+            if fits > 0
+                && let Some(hash) = state.known_hash_of(i)
+            {
                 let relax = state.cfg.mods.relax();
                 if state.board_for != (hash, state.board_online, relax) {
                     state.board_for = (hash, state.board_online, relax);

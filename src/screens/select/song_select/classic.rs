@@ -20,7 +20,11 @@ pub(super) fn draw_songs_classic(state: &mut State, canvas: &mut Canvas, frame: 
         } else {
             String::new()
         };
-    let (stars, rate, plays) = (&state.stars, state.play_speed().0, &state.scores);
+    // Each row's letter from the plays (worked out again only when they change), by the map
+    // hashes known: the ones not known yet are worked out off the frame.
+    state.grades.refresh(&state.scores);
+    let (stars, rate) = (&state.stars, state.play_speed().0);
+    let unknown = std::cell::RefCell::new(Vec::new());
     // 1.0's song select is laid out in the screen's units.
     state.select_scale = 1.0;
     state.select_left = 0.0;
@@ -44,8 +48,11 @@ pub(super) fn draw_songs_classic(state: &mut State, canvas: &mut Canvas, frame: 
             frame.dt,
             &state.status,
             &|i| stars.get(i, rate),
-            &|e| scores::best_grade(plays, e.hash()),
+            &State::row_grade(&state.library, &state.grades, &unknown),
         );
+        for i in unknown.into_inner() {
+            state.hasher.want(&state.library, i);
+        }
     }
     let lw = Select::list_width(canvas.width, state.cfg.song_list_share);
     // The panel beside the list: from `x`, `pw` wide, `panel_top` down to `panel_end`.
@@ -68,15 +75,7 @@ pub(super) fn draw_songs_classic(state: &mut State, canvas: &mut Canvas, frame: 
         .select
         .selected()
         .and_then(|i| state.stars.get(i, rate));
-    state.preview.potential = match state.select.selected() {
-        Some(i) => state.potentials.get(
-            &state.library[i].path,
-            rate,
-            state.cfg.mods,
-            state.cfg.scroll_speed,
-        ),
-        None => None,
-    };
+    state.preview.potential = state.selected_potential(rate);
     // The map the panel shows, and whether it's marked EPIC (its pill by the status).
     let shown_path = state
         .preview_target()
@@ -179,8 +178,9 @@ pub(super) fn draw_songs_classic(state: &mut State, canvas: &mut Canvas, frame: 
             let top = panel_top + 10.0;
             let room = panel_end - 10.0 - top - BOARD_HEAD;
             let fits = (room / BOARD_ROW).floor().max(0.0) as usize;
-            if fits > 0 {
-                let hash = state.library[i].hash();
+            if fits > 0
+                && let Some(hash) = state.known_hash_of(i)
+            {
                 let relax = state.cfg.mods.relax();
                 if state.board_for != (hash, state.board_online, relax) {
                     state.board_for = (hash, state.board_online, relax);

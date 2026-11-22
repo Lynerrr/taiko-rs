@@ -208,11 +208,16 @@ pub fn potential(map: &[u8], rate: f64, mods: Mods, scroll_speed: f64) -> Option
 }
 
 /// `potential` for the selected map, worked out on a thread of its own and kept per map, speed,
-/// mods and scroll speed, so changing them back and forth costs nothing.
+/// mods and scroll speed, so changing them back and forth costs nothing. Only the latest map
+/// asked about is worked out: the ones a run of selections passed by while it was busy are
+/// dropped, not worked through one after another.
 pub struct Potentials {
     tx: Sender<(PotentialKey, PathBuf)>,
-    rx: Receiver<(PotentialKey, Option<[f64; 3]>)>,
+    /// Each answer, or none for a map dropped before its turn (asked again if it's wanted again).
+    rx: Receiver<(PotentialKey, Option<Option<[f64; 3]>>)>,
     known: std::collections::HashMap<PotentialKey, Option<[f64; 3]>>,
+    /// Asked for and not answered yet.
+    waiting: usize,
 }
 
 /// The map, the speed (in hundredths), the mods and the scroll speed (in hundredths).
@@ -226,7 +231,15 @@ impl Potentials {
         std::thread::Builder::new()
             .name("pp-potential".into())
             .spawn(move || {
-                for (key, path) in jobs {
+                while let Ok(mut job) = jobs.recv() {
+                    // Asked about since: those before the latest aren't wanted any more.
+                    while let Ok(newer) = jobs.try_recv() {
+                        if done.send((job.0, None)).is_err() {
+                            return;
+                        }
+                        job = newer;
+                    }
+                    let (key, path) = job;
                     let (rate, scroll) = (key.1 as f64 / 100.0, key.3 as f64 / 100.0);
                     let pp = std::panic::catch_unwind(|| {
                         read(&path)
@@ -234,7 +247,7 @@ impl Potentials {
                     })
                     .ok()
                     .flatten();
-                    if done.send((key, pp)).is_err() {
+                    if done.send((key, Some(pp))).is_err() {
                         return;
                     }
                 }
@@ -244,6 +257,7 @@ impl Potentials {
             tx,
             rx,
             known: std::collections::HashMap::new(),
+            waiting: 0,
         }
     }
 }
@@ -257,23 +271,55 @@ impl Potentials {
         mods: Mods,
         scroll_speed: f64,
     ) -> Option<[f64; 3]> {
-        while let Ok((key, pp)) = self.rx.try_recv() {
-            self.known.insert(key, pp);
-        }
-        let key = (
-            path.to_path_buf(),
-            (rate * 100.0).round() as u32,
-            mods.list().join(","),
-            (scroll_speed * 100.0).round() as u32,
-        );
+        let key = self.take_in(path, rate, mods, scroll_speed);
         match self.known.get(&key) {
             Some(pp) => *pp,
             None => {
                 self.known.insert(key.clone(), None);
+                self.waiting += 1;
                 let _ = self.tx.send((key, path.to_path_buf()));
                 None
             }
         }
+    }
+
+    /// The answer for these if it's known already, without asking for it: while the selection
+    /// hasn't settled on a map yet.
+    pub fn known(
+        &mut self,
+        path: &Path,
+        rate: f64,
+        mods: Mods,
+        scroll_speed: f64,
+    ) -> Option<[f64; 3]> {
+        let key = self.take_in(path, rate, mods, scroll_speed);
+        self.known.get(&key).copied().flatten()
+    }
+
+    /// Whether an answer is still on its way.
+    pub fn is_busy(&self) -> bool {
+        self.waiting > 0
+    }
+
+    /// Takes in the answers that came, and gives the key for these.
+    fn take_in(&mut self, path: &Path, rate: f64, mods: Mods, scroll_speed: f64) -> PotentialKey {
+        while let Ok((key, pp)) = self.rx.try_recv() {
+            self.waiting = self.waiting.saturating_sub(1);
+            match pp {
+                Some(pp) => {
+                    self.known.insert(key, pp);
+                }
+                None => {
+                    self.known.remove(&key);
+                }
+            }
+        }
+        (
+            path.to_path_buf(),
+            (rate * 100.0).round() as u32,
+            mods.list().join(","),
+            (scroll_speed * 100.0).round() as u32,
+        )
     }
 }
 
@@ -672,6 +718,41 @@ mod tests {
             worker.get(&path, 1.0, Mods::NONE, 1.0)
         });
         assert_eq!(got, Some([p100, p99, p98]));
+        assert!(!worker.is_busy());
+
+        // A run of selections: the ones passed by while the worker was busy are dropped, the
+        // latest is worked out, and a dropped one is asked again when it's wanted again.
+        let mut slow = Potentials::new(|p| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            std::fs::read(p).ok()
+        });
+        for rate in [1.0, 1.1, 1.2] {
+            assert_eq!(slow.get(&path, rate, Mods::NONE, 1.0), None);
+        }
+        let latest = (0..1000).find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            slow.get(&path, 1.2, Mods::NONE, 1.0)
+        });
+        assert!(latest.is_some(), "the latest worked out");
+        for _ in 0..1000 {
+            if !slow.is_busy() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            slow.known(&path, 1.0, Mods::NONE, 1.0);
+        }
+        // The first answered too: worked out, or dropped if the worker hadn't begun on it.
+        assert!(!slow.is_busy());
+        assert_eq!(
+            slow.known(&path, 1.1, Mods::NONE, 1.0),
+            None,
+            "the one passed by was dropped"
+        );
+        let again = (0..1000).find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            slow.get(&path, 1.1, Mods::NONE, 1.0)
+        });
+        assert!(again.is_some(), "asked again, worked out");
 
         // The live counter climbs as notes are hit and ends where the whole play's pp is.
         let mut live = Live::start(

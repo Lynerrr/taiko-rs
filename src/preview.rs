@@ -531,6 +531,12 @@ impl Preview {
         self.audio.as_ref().filter(same).map(|s| s.track.clone())
     }
 
+    /// Whether the selection is still settling on library entry `i` (`DEBOUNCE`): the preview
+    /// waits to read it, and other work for the map can wait with it.
+    pub fn settling_on(&self, i: usize) -> bool {
+        self.seen == Some(i) && self.requested != Some(i)
+    }
+
     /// Puts `image` up in place of the background, until `forget_background`.
     pub fn show_image(&mut self, image: Image) {
         self.bg_upload = Some(Some(image));
