@@ -1177,10 +1177,13 @@ fn the_caret_moves_through_a_typed_value_to_fix_one_digit() {
     e.type_text("9", 12);
     assert_eq!(e.text, "1889");
     assert!(!e.nav(KeyA));
-    // Other characters than ASCII too.
-    let (mut t, mut c) = ("ёж".to_string(), 1);
-    settings::caret_insert(&mut t, &mut c, "-", 12);
-    assert_eq!((t.as_str(), c), ("ё-ж", 2));
+    // Other characters than ASCII too, even if the caret starts past the character count.
+    let (mut t, mut c) = ("ёж".to_string(), "ёж".len());
+    settings::caret_backspace(&mut t, &mut c);
+    assert_eq!((t.as_str(), c), ("ё", 1));
+    let mut c = 99;
+    settings::caret_insert(&mut t, &mut c, "-ж", 12);
+    assert_eq!((t.as_str(), c), ("ё-ж", 3));
 }
 
 #[test]
