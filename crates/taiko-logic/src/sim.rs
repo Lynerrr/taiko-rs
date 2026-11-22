@@ -364,6 +364,17 @@ pub enum Scoring {
     /// the lot. Its HP rules come with it: a swell not cleared drains HP, and a map with no
     /// notes to fill HP can't fail on it.
     Lazer,
+    /// Replays of version 6: `Lazer` as the game first had it, where every note judged, an OK
+    /// or a miss too, added GREAT's 300 to the combo part, so missing still raised the score.
+    /// Kept so those replays play back to the score they were sent with.
+    LazerV6,
+}
+
+impl Scoring {
+    /// osu!lazer's scoring and HP rules, as today or as version 6 had them.
+    pub fn lazer(self) -> bool {
+        matches!(self, Scoring::Lazer | Scoring::LazerV6)
+    }
 }
 
 /// What a hit is worth in the combo part of `Scoring::Standard`: later hits in a combo more.
@@ -372,7 +383,8 @@ pub(crate) fn combo_weight(combo: u32) -> f64 {
 }
 
 /// What a hit is worth in the combo part of `Scoring::Lazer`, by the combo after it: log4 of it,
-/// within 0.5 and log4(400). Like osu!lazer, a miss (combo 0) still counts the 0.5.
+/// within 0.5 and log4(400). Like osu!lazer, a combo of 0 still counts the 0.5 (a miss then adds
+/// nothing all the same: its base score is 0).
 pub(crate) fn lazer_combo_weight(combo_after: u32) -> f64 {
     let log = if combo_after == 0 {
         f64::NEG_INFINITY
@@ -1582,7 +1594,7 @@ impl Game {
             || (!self.mods.has(Mod::NoFail)
                 && !self.mods.has(Mod::Autoplay)
                 && !self.hp_exempt
-                && !(self.scoring == Scoring::Lazer && !self.hp_objects)
+                && !(self.scoring.lazer() && !self.hp_objects)
                 && self.hp < 0.5)
     }
 
@@ -1610,7 +1622,7 @@ impl Game {
                 .zip(&self.state)
                 .filter(|(n, st)| n.judged() && st.judged_at != f64::NEG_INFINITY)
                 .count() as u32;
-            let max = if scoring == Scoring::Lazer {
+            let max = if scoring.lazer() {
                 300.0 * (1..=n).map(lazer_combo_weight).sum::<f64>()
             } else {
                 300.0 * (0..n).map(combo_weight).sum::<f64>()
@@ -1619,17 +1631,23 @@ impl Game {
         })
     }
 
-    /// Lazer scoring after a hit or miss: like osu!lazer, every note judged adds GREAT's 300
-    /// times the weight of the combo after it to the combo part, an OK or a miss as well.
-    fn rescore_lazer(&mut self) {
-        self.combo_points += 300.0 * lazer_combo_weight(self.stats.combo);
+    /// Lazer scoring after a hit or miss: like osu!lazer's TaikoScoreProcessor, the note adds
+    /// its base score (GREAT 300, OK 150, miss 0) times the weight of the combo after it to the
+    /// combo part. Version 6 added GREAT's 300 for every note (`Scoring::LazerV6`).
+    fn rescore_lazer(&mut self, judge: Judge) {
+        let base = match (self.scoring, judge) {
+            (Scoring::LazerV6, _) | (_, Judge::Great) => 300.0,
+            (_, Judge::Ok) => 150.0,
+            (_, Judge::Miss) => 0.0,
+        };
+        self.combo_points += base * lazer_combo_weight(self.stats.combo);
         self.lazer_total();
     }
 
     /// Lazer scoring: bonus points (a drumroll tick, a finisher, a swell). Nothing counts after
     /// failing.
     pub(crate) fn add_bonus(&mut self, points: f64) {
-        if self.scoring == Scoring::Lazer && self.failed.is_none() {
+        if self.scoring.lazer() && self.failed.is_none() {
             self.bonus_points += points;
             self.lazer_total();
         }
@@ -2367,7 +2385,7 @@ impl Game {
                         st.judged = Some(Judge::Miss);
                         st.judged_at = end;
                         self.explode(end);
-                    } else if self.scoring == Scoring::Lazer && self.failed.is_none() {
+                    } else if self.scoring.lazer() && self.failed.is_none() {
                         // osu!lazer: a swell not cleared drains HP.
                         self.hp = (self.hp - LAZER_SWELL_MISS_HP * self.hp_miss).max(0.0);
                     }
@@ -2481,7 +2499,7 @@ impl Game {
         }
         match self.scoring {
             Scoring::Standard => self.rescore(judge, combo_before),
-            Scoring::Lazer => self.rescore_lazer(),
+            Scoring::Lazer | Scoring::LazerV6 => self.rescore_lazer(judge),
             Scoring::Classic => {}
         }
     }

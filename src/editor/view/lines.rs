@@ -341,6 +341,41 @@ impl View {
         Ok(said.to_string())
     }
 
+    /// Multiplies the speed of every selected green line by `k` (each its own: a gradual run
+    /// of speeds stays one, only faster or slower). One undo step.
+    pub(super) fn multiply_sv(&mut self, k: f64) {
+        let ids = self.selected_lines();
+        let greens = ids
+            .iter()
+            .filter_map(|id| self.ed.chart.timing_point(*id))
+            .filter(|p| !p.is_red())
+            .count();
+        if greens == 0 {
+            self.status = "select green lines to multiply their SV".into();
+            return;
+        }
+        let r = self.ed.edit_timings(
+            &ids,
+            |p| {
+                if !p.is_red() {
+                    let _ = p.set_sv((p.sv() * k).max(0.01));
+                }
+            },
+            false,
+        );
+        match r {
+            Ok(()) => {
+                self.mark_stale();
+                self.status = format!(
+                    "SV x{} on {greens} green line{}",
+                    (k * 1000.0).round() / 1000.0,
+                    if greens == 1 { "" } else { "s" }
+                );
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
     /// The panel's content when several lines are selected.
     pub(super) fn draw_line_tools(&mut self, c: &mut Canvas, x: f32, mut y: f32, w: f32) {
         let ids = self.selected_lines();
@@ -386,6 +421,7 @@ impl View {
                 Field::Sv,
                 shared("SV", &|p| format!("x{:.2}", p.sv()), &|p| !p.is_red()),
             ));
+            fields.push((Field::SvTimes, "Multiply SV x".to_string()));
         }
         fields.push((
             Field::Volume,

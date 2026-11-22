@@ -207,6 +207,11 @@ impl Screen for Download {
         let x = 24.0 + lw + 12.0;
         let pw = if phone { 0.0 } else { canvas.width - x - 24.0 };
         let stars = state.browse.selected_stars();
+        // Song select's pp (its full-combo chips, the simulator's) is of its own map: a set to
+        // download has none here. The simulator stays open for song select, out of sight.
+        state.preview.potential = None;
+        state.preview.sim_pp = None;
+        let sim = state.preview.sim.take();
         // Song select's flag doesn't carry over: the mark of the set selected here.
         state.preview.epic = state
             .browse
@@ -239,6 +244,7 @@ impl Screen for Download {
                 None => {}
             }
         }
+        state.preview.sim = sim;
         None
     }
 }

@@ -144,7 +144,7 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 - Q flips don and kat. J / K nudge, Ctrl+D clones, Ctrl+G reverses.
 
 # Selecting and copying
-- Drag a box on empty lane (Ctrl+drag with any tool). Ctrl+A selects all.
+- Drag a box on empty lane (Ctrl+drag with any tool). Ctrl+A selects all. A box dragged past the timeline's edge scrolls on, slowly at the border and faster the further out you go.
 - To deselect: press Esc, click empty lane with the Select tool, or press Ctrl+Shift+A. Ctrl+click on a note adds it to the selection or, when it is selected already, takes it out. With Note, Drumroll or Denden a click on empty lane places, so use Esc there.
 - Drag the right end (the light bar) of a drumroll or denden to change its length. It snaps to the grid (Shift: to the millisecond), is never shorter than one snap step and stops at the next note. One drag is one undo step.
 - Ctrl+X / C / V cut, copy, paste at the playhead.
@@ -167,6 +167,7 @@ A green line sets the slider velocity: how fast notes scroll and how long slider
 - Notes follow (on the red line's Position heading, also in the Timing menu): with it on, changing a red line's time or BPM moves the notes and green lines of its section with it, so each keeps its place in the beat, like stable's \"Move already placed notes when changing the offset/BPM\".
 - Timing > Snap notes to the grid puts notes a little off back on the grid, like Mapping Tools' Map Cleaner: tick the divisions, set how far a note may move (farther off, it stays: put there on purpose), the selection or the whole map, and whether drumroll ends and free green lines snap too. Green lines on a note go with it, lines in SV patterns stay, no note lands on another. It shows what it would do before Snap, and one Ctrl+Z takes it back.
 - Drag a box to select several: move them together, or scale them (Alt adds instead of scaling).
+- With several lines picked, Multiply SV in the panel multiplies the speed of each picked green line by the number typed (1.5: every one half again as fast, each from its own speed); - and + take a tenth off or add one, with Shift halve or double.
 - A curve the lines already follow is drawn thin with a chip like sin x1.20 > x2.00. Click it to edit it as a curve: the round handles at its ends can be dragged.
 - The SV | Volume switch turns every gesture into a volume edit. Brush draws a curve by dragging from one point to another; an end dropped right by a line clings to it, so strokes join the lines already there (Alt keeps it free).
 
@@ -511,7 +512,7 @@ File > Open song folder открывает папку карты. Бросьте
 - Q меняет дон на кат. J / K сдвигают, Ctrl+D клонирует, Ctrl+G разворачивает.
 
 # Выделение и копирование
-- Рамка по пустой дорожке (Ctrl+рамка любым инструментом). Ctrl+A выделяет всё.
+- Рамка по пустой дорожке (Ctrl+рамка любым инструментом). Ctrl+A выделяет всё. Рамка, вытянутая за край таймлайна, прокручивает его: у самого края медленно, чем дальше за край, тем быстрее.
 - Чтобы снять выделение: Esc, клик по пустой дорожке инструментом Select или Ctrl+Shift+A. Ctrl+клик по ноте добавляет её в выделение, а если она уже выделена — убирает. С Note, Drumroll и Denden клик по пустой дорожке ставит ноту, поэтому там нажмите Esc.
 - Потяните правый конец (светлую полоску) драмролла или дендена, чтобы изменить длину. Он липнет к сетке (Shift — к миллисекунде), не короче одного шага сетки и упирается в следующую ноту. Одно перетаскивание — один шаг отмены.
 - Ctrl+X / C / V — вырезать, копировать, вставить в курсор.
@@ -531,6 +532,7 @@ File > Open song folder открывает папку карты. Бросьте
 # График (F3)
 - Двойной клик по пустому месту добавляет зелёную линию, перетащите точку, чтобы изменить, правый клик удаляет. Точка двигается по сетке; с Shift — по миллисекундам, с Ctrl время не меняется, только значение.
 - В полосе над нотами красные линии (BPM) сверху, зелёные (SV) снизу. Клик выбирает линию, Shift+клик добавляет, протяжка по пустой полосе выделяет рамкой несколько; выбранные линии тащатся вместе по сетке, с Shift — по миллисекундам.
+- Когда выбрано несколько линий, Multiply SV в панели умножает скорость каждой выбранной зелёной линии на введённое число (1.5 — каждая в полтора раза быстрее своей); - и + убавляют или прибавляют десятую часть, с Shift — вдвое.
 - Notes follow (на заголовке Position у красной линии и в меню Timing): когда включено, смена времени или BPM красной линии двигает ноты и зелёные линии её секции вместе с ней, и каждая остаётся на своей доле — как «Move already placed notes when changing the offset/BPM» в stable.
 - Timing > Snap notes to the grid возвращает немного сбитые ноты на сетку, как Map Cleaner из Mapping Tools: отметьте деления, задайте, насколько нота может сдвинуться (дальше — остаётся: поставлена так специально), выделение или вся карта, и снапать ли концы драмроллов и свободные зелёные линии. Зелёные линии на ноте едут с ней, линии в SV-паттернах остаются, нота не встанет на другую. До Snap видно, что изменится, и один Ctrl+Z всё возвращает.
 - Рамкой выделите несколько: двигайте вместе или масштабируйте (Alt добавляет вместо масштаба).

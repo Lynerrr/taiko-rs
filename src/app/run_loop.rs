@@ -1344,6 +1344,7 @@ impl State {
             me_for: String::new(),
             me_fetch: Job::idle(),
             me_due: None,
+            total_follow: None,
             board_online: false,
             column_preview: true,
             profile: None,
