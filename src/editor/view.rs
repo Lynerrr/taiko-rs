@@ -3902,6 +3902,7 @@ impl View {
                 KeyCode::Backspace => {
                     text.pop();
                 }
+                KeyCode::KeyV if keys.ctrl => text.push_str(&pasted_number()),
                 KeyCode::Period | KeyCode::NumpadDecimal => text.push('.'),
                 KeyCode::Minus | KeyCode::NumpadSubtract => text.push('-'),
                 c => {
@@ -3956,6 +3957,8 @@ impl View {
                 }
                 // Free text is typed through `text_key` and `type_text`.
                 _ if f.is_text() => {}
+                // Ctrl+V pastes a number (an SV or a BPM copied from elsewhere).
+                KeyCode::KeyV if keys.ctrl => text.push_str(&pasted_number()),
                 KeyCode::Period | KeyCode::NumpadDecimal => text.push('.'),
                 KeyCode::Minus | KeyCode::NumpadSubtract => text.push('-'),
                 c => {
@@ -4088,6 +4091,22 @@ impl View {
         }
         KeyResult::Handled
     }
+}
+
+/// The number on the clipboard's first line as a number box takes it: its digits, point and
+/// minus (a comma reads as a point); anything else ("x", "ms", spaces) is left out.
+fn pasted_number() -> String {
+    let text = crate::clipboard::get().unwrap_or_default();
+    text.lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter_map(|c| match c {
+            '0'..='9' | '.' | '-' => Some(c),
+            ',' => Some('.'),
+            _ => None,
+        })
+        .collect()
 }
 
 fn digit(c: KeyCode) -> Option<char> {
