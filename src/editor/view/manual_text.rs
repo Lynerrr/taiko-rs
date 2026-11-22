@@ -144,7 +144,7 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 - Q flips don and kat. J / K nudge, Ctrl+D clones, Ctrl+G reverses.
 
 # Selecting and copying
-- Drag a box on empty lane (Ctrl+drag with any tool). Ctrl+A selects all.
+- Drag a box on empty lane (Ctrl+drag with any tool). Ctrl+A selects all. A box dragged past the timeline's edge scrolls on, slowly at the border and faster the further out you go.
 - To deselect: press Esc, click empty lane with the Select tool, or press Ctrl+Shift+A. Ctrl+click on a note adds it to the selection or, when it is selected already, takes it out. With Note, Drumroll or Denden a click on empty lane places, so use Esc there.
 - Drag the right end (the light bar) of a drumroll or denden to change its length. It snaps to the grid (Shift: to the millisecond), is never shorter than one snap step and stops at the next note. One drag is one undo step.
 - Ctrl+X / C / V cut, copy, paste at the playhead.
@@ -511,7 +511,7 @@ File > Open song folder открывает папку карты. Бросьте
 - Q меняет дон на кат. J / K сдвигают, Ctrl+D клонирует, Ctrl+G разворачивает.
 
 # Выделение и копирование
-- Рамка по пустой дорожке (Ctrl+рамка любым инструментом). Ctrl+A выделяет всё.
+- Рамка по пустой дорожке (Ctrl+рамка любым инструментом). Ctrl+A выделяет всё. Рамка, вытянутая за край таймлайна, прокручивает его: у самого края медленно, чем дальше за край, тем быстрее.
 - Чтобы снять выделение: Esc, клик по пустой дорожке инструментом Select или Ctrl+Shift+A. Ctrl+клик по ноте добавляет её в выделение, а если она уже выделена — убирает. С Note, Drumroll и Denden клик по пустой дорожке ставит ноту, поэтому там нажмите Esc.
 - Потяните правый конец (светлую полоску) драмролла или дендена, чтобы изменить длину. Он липнет к сетке (Shift — к миллисекунде), не короче одного шага сетки и упирается в следующую ноту. Одно перетаскивание — один шаг отмены.
 - Ctrl+X / C / V — вырезать, копировать, вставить в курсор.
