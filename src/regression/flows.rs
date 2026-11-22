@@ -1451,3 +1451,57 @@ fn the_download_tab_can_hide_the_installed_maps() {
     let text = s.cfg.to_text();
     assert!(text.contains("download_hide_installed = true"), "{text}");
 }
+
+/// Discord ideas: the speed can be changed with the mouse in song select (a - / + beside it, as
+/// etterna has), and in the fullscreen preview, which plays at it, with [ and ] or the same
+/// buttons.
+#[test]
+fn the_speed_steps_from_song_select_and_the_preview() {
+    let songs = Songs::new("rate-buttons", &[maps::basics()]);
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    // The main menu's look (the default), where the actions lane has room for the speed.
+    s.cfg.main_menu = true;
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let click = |s: &mut State, key: KeyCode| {
+        let r = s
+            .hits
+            .iter()
+            .find(|h| h.hit == hit::Hit::Key(key))
+            .map(|h| h.rect)
+            .unwrap_or_else(|| panic!("a button for {key:?}"));
+        let k = s.window_h / crate::render::VIRTUAL_HEIGHT;
+        s.mouse = (
+            f64::from((r[0] + r[2] / 2.0) * k),
+            f64::from((r[1] + r[3] / 2.0) * k),
+        );
+        s.mouse_button(true, None);
+        s.mouse_button(false, None);
+    };
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "1.00x"), "song select shows the speed");
+    click(&mut s, KeyCode::BracketRight);
+    assert!(
+        (s.cfg.rate - 1.05).abs() < 1e-9,
+        "+ steps it up: {}",
+        s.cfg.rate
+    );
+    // The fullscreen preview: [ steps it down, its + up again, and it shows what it is.
+    s.open_preview();
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    press(&mut s, KeyCode::BracketLeft, now);
+    press(&mut s, KeyCode::BracketLeft, now);
+    assert!(
+        (s.cfg.rate - 0.95).abs() < 1e-9,
+        "[ in the preview: {}",
+        s.cfg.rate
+    );
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "0.95x"), "the preview shows the speed");
+    click(&mut s, KeyCode::BracketRight);
+    assert!((s.cfg.rate - 1.0).abs() < 1e-9, "its + : {}", s.cfg.rate);
+}
