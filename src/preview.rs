@@ -256,6 +256,8 @@ pub struct Preview {
     play_rect: Option<[f32; 4]>,
     /// Where the autoplay box was drawn (clicking it opens the fullscreen preview).
     box_rect: Option<[f32; 4]>,
+    /// Split, where the lane's corridor was last drawn (a plain map's), if it was.
+    corridor: Option<[f32; 4]>,
     /// Screen units to one of those the rects above were drawn in: song select draws the
     /// panel in a space of its own (`render::Canvas::begin_space`). 0 (none yet) is 1.
     drawn_scale: f32,
@@ -1180,6 +1182,12 @@ impl Preview {
         self.box_rect
     }
 
+    /// Split, where the lane's corridor was last drawn, if it was.
+    #[cfg(test)]
+    pub fn corridor(&self) -> Option<[f32; 4]> {
+        self.corridor
+    }
+
     /// Map time under a point of the difficulty timeline, if the point is on it.
     pub fn time_at(&self, x: f32, y: f32) -> Option<f64> {
         let (x, y) = self.drawn_at(x, y);
@@ -1207,9 +1215,21 @@ impl Preview {
     ) -> Option<(f32, f32)> {
         use crate::style::{Surface, ink, role, space, surface, surface_fill, text};
         let (lx, iw) = (x + 14.0, w - 28.0);
-        self.draw_banner(c, e, [x, y, w, BANNER_H]);
+        let split = self.split.is_some();
+        // Split, a tall banner for the picture to show, the title, the artist and the
+        // difficulty's row down at its foot; else a short one, the title near its top.
+        let (banner_h, look) = if split {
+            (SPLIT_BANNER_H, SPLIT_BANNER)
+        } else {
+            (BANNER_H, (BANNER_WHOLE, BANNER_PLATE))
+        };
+        self.draw_banner(c, e, [x, y, w, banner_h], look);
         // A song picked on its own comes in a part at a time, from the title down (`enter`).
-        let mut cy = y + BANNER_TOP;
+        let mut cy = if split {
+            y + banner_h - SPLIT_BANNER_FOOT - l.banner_text_h()
+        } else {
+            y + BANNER_TOP
+        };
         let part = c.shapes.len();
         for line in &l.title {
             shadowed_text(c, lx, cy, l.title_size, rgba(ink::PRIMARY, 1.0), line);
@@ -1223,8 +1243,10 @@ impl Preview {
         self.enter(c, part, 40.0);
         let part = c.shapes.len();
 
-        if self.split.is_some() {
-            cy = self.draw_compact_row(c, e, [x, cy, w], shown);
+        if split {
+            self.draw_compact_row(c, e, [x, cy, w], shown);
+            // The stats right under the banner.
+            cy = y + banner_h + BLOCK_GAP;
         } else {
             // The mapper's line: the EPIC pill (bumping on the beat) or the status at its right,
             // the heart left of that.
@@ -1794,7 +1816,13 @@ impl Preview {
     /// The map's picture over `[x, y, w, h]` (cover-cropped), whole down to `BANNER_WHOLE` of
     /// it and then fading out strip by strip, a shade over it deepening downwards so the title
     /// reads. It fades in when it first arrives; nothing until then.
-    fn draw_banner(&mut self, c: &mut Canvas, e: &Entry, rect: [f32; 4]) {
+    fn draw_banner(
+        &mut self,
+        c: &mut Canvas,
+        e: &Entry,
+        rect: [f32; 4],
+        (whole, plate): (f32, (f32, f32)),
+    ) {
         let Some(bg) = background_path(e) else {
             return;
         };
@@ -1824,7 +1852,7 @@ impl Preview {
         // How much of the picture shows in strip `k`.
         let keep = |k: usize| {
             let mid = (k as f32 + 0.5) / BANNER_STRIPS as f32;
-            let t = ((mid - BANNER_WHOLE) / (1.0 - BANNER_WHOLE)).clamp(0.0, 1.0);
+            let t = ((mid - whole) / (1.0 - whole)).clamp(0.0, 1.0);
             (1.0 - t * t * (3.0 - 2.0 * t)) * a
         };
         // Layers of the picture, each from the banner's top down to the end of its strip, so
@@ -1872,8 +1900,8 @@ impl Preview {
             // The layers all start at the banner's top, so there they're over one another: each
             // takes the strength that makes them come to `BANNER_PLATE` together.
             let (strength, rest) = (
-                stacked_strength(&alphas, BANNER_PLATE.0),
-                stacked_strength(&alphas, BANNER_PLATE.1),
+                stacked_strength(&alphas, plate.0),
+                stacked_strength(&alphas, plate.1),
             );
             for (k, &alpha) in alphas.iter().enumerate() {
                 if alpha <= 0.0 {
@@ -2038,6 +2066,7 @@ impl Preview {
         self.graph_rect = None;
         self.play_rect = None;
         self.box_rect = None;
+        self.corridor = None;
         let Some(i) = self.seen.filter(|&i| i < library.len()) else {
             (self.size_cap, self.size_shown) = (fitted(110.0), wanted.min(fitted(110.0)));
             let below = unit * self.size_shown + 12.0 + after_box;
@@ -2214,6 +2243,8 @@ impl Preview {
                 (k, if extra > room { room / extra } else { 1.0 })
             }
         };
+        // A plain map's lane alone (no .tko reach past it): its corridor drawn, as in a play.
+        let lane_alone = bottom - top <= band_h + 0.5;
         let band_top = band_top - (band_top - top) * fit;
         let band_h = band_h + (bottom - top - band_h) * fit;
         let preview_h = band_h * k;
@@ -2429,6 +2460,21 @@ impl Preview {
         if self.bare {
             let r = crate::style::radius::SMALL;
             crate::style::tile(c, strip, r, crate::style::Surface::Raised);
+            if split.is_some() && lane_alone {
+                // The lane's corridor across the tile, as tall as the notes and the drum, a
+                // step lighter than the tile with a thin line along its top and bottom: the
+                // notes run along a track, not through empty room.
+                let lh = band_h * k;
+                let ly = crate::render::snap_to_grid(by + (bh - lh) / 2.0);
+                let [sx, _, sw, _] = strip;
+                let fill = crate::style::surface_fill(crate::style::Surface::Lifted);
+                c.rect(sx, ly, sw, lh, fill);
+                let edge = rgba(crate::style::tone::EDGE, 1.0);
+                let line = crate::style::tone::LINE;
+                c.rect(sx, ly, sw, line, edge);
+                c.rect(sx, ly + lh - line, sw, line, edge);
+                self.corridor = Some([sx, ly, sw, lh]);
+            }
         } else {
             c.round_rect(
                 [bx, by],
@@ -2758,6 +2804,13 @@ const PREVIEW_GAP: f32 = 10.0;
 /// The banner's strips (it fades out down them) and how far down it stays whole.
 const BANNER_STRIPS: usize = 12;
 const BANNER_WHOLE: f32 = 0.45;
+/// Split (song select's right column), the banner's height, its look (how far down the picture
+/// stays whole; the plate at its left and its right) and the room under its text. Tall enough
+/// for the picture to show on 720, the text down at its foot over the picture fading out into
+/// the panel, a plate at the left only: its top and right open.
+const SPLIT_BANNER_H: f32 = 172.0;
+const SPLIT_BANNER: (f32, (f32, f32)) = (0.5, (0.55, 0.0));
+const SPLIT_BANNER_FOOT: f32 = 8.0;
 /// How bright the banner's picture is drawn: near its own, the plate under the text does the rest.
 const BANNER_BRIGHT: f32 = 0.85;
 /// How strong each of the layers `alphas` of a shade over one another must be (each `alpha` of
@@ -2820,6 +2873,14 @@ struct Bare {
 }
 
 impl Bare {
+    /// Split, how tall the banner's text is: the title, the artist, the difficulty's row.
+    fn banner_text_h(&self) -> f32 {
+        self.title.len() as f32 * (Canvas::text_height(self.title_size) + 4.0)
+            + Canvas::text_height(self.artist_size)
+            + 6.0
+            + CHIP_H
+    }
+
     fn new(e: &Entry, iw: f32, left_out: bool, sim: bool, compact: bool) -> Bare {
         use crate::style::text::{BODY, HEADING, TITLE};
         let (title_size, title, artist_size) = if Canvas::text_width(TITLE, &e.meta.title) <= iw {
@@ -2868,24 +2929,11 @@ impl Bare {
     }
 }
 
-/// How tall the compact details (`Split`) are, whatever the map: the title on one line, the
-/// difficulty and its mapper on one row, the stats on one line, Don and Kat's bar (or the pp
-/// simulator's play in its place) and the pp, with no room left under it.
+/// How tall the compact details (`Split`) are, whatever the map: the banner (the title on one
+/// line, the difficulty and its mapper on one row at its foot), the stats on one line, Don and
+/// Kat's bar (or the pp simulator's play in its place) and the pp, with no room left under it.
 pub fn compact_head() -> f32 {
-    use crate::style::text::{HEADING, TITLE};
-    BANNER_TOP
-        + Canvas::text_height(TITLE)
-        + 4.0
-        + Canvas::text_height(HEADING)
-        + 6.0
-        + CHIP_H
-        + BLOCK_GAP
-        + stat_line_h()
-        + BLOCK_GAP
-        + BAR_H
-        + BLOCK_GAP
-        + PP_H
-        + COMPACT_FOOT
+    SPLIT_BANNER_H + BLOCK_GAP + stat_line_h() + BLOCK_GAP + BAR_H + BLOCK_GAP + PP_H + COMPACT_FOOT
 }
 
 /// Under the compact details' pp row, before the section's end: a little room, no empty band.

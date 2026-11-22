@@ -537,14 +537,16 @@ const CARD_EDGE: f32 = 0.18;
 const DIFF_DROP: f32 = 8.0;
 const DIFF_CASCADE_MS: f32 = 30.0;
 const DIFF_CASCADE_SPAN_MS: f32 = 120.0;
-const COVER_FADE_MS: f32 = 200.0;
+/// How long a card's picture takes to come in once it's read (scrolled to fast, they ease in
+/// rather than snap).
+const COVER_FADE_MS: f32 = 140.0;
 /// How round a difficulty row's card is, and its light under the pointer or the selection's.
 const DIFF_ROUND: f32 = 4.0;
-/// The curtain over a card's picture: a plain dark plate under the title and artist from the
-/// card's left to the first value's share of it, then an eased sweep out of it to the right end,
-/// where as much of the picture shows as the second value on a card not open, the third on the
-/// open one.
-const CURTAIN: (f32, f32, f32) = (0.30, 0.40, 0.6);
+/// A card's picture: none of it from the card's left to the first value's share of its width
+/// (only the card's own tone under the title and artist), then coming in out of nothing, eased,
+/// to the right end, where as much of it shows as the second value on a card not open, the
+/// third on the open one.
+pub(crate) const CARD_ART: (f32, f32, f32) = (0.32, 0.33, 0.58);
 /// How far in from the list's right end a difficulty's rating badge ends in the main menu's look:
 /// well inside the selection's brackets.
 const DIFF_BADGE_INSET: f32 = 18.0;
@@ -3867,66 +3869,35 @@ impl Select {
             let colour = c.card_colour(&bg);
             // Everything on the card is as round as it, 1 in.
             let round = CARD_RADIUS - 1.0;
+            // The picture comes in across the card out of nothing (`CARD_ART`): none of it under
+            // the title and artist, then up to a little of it at the right end, more on the card
+            // open (and under the pointer). One shape, faded in its shader: no edge, no plate
+            // over it to clash with the card's light.
+            let (from, rest, lit) = CARD_ART;
+            let strength = if open {
+                lit
+            } else {
+                rest + (lit - rest) * light
+            };
+            let [cx, cy, cw, ch] = inner;
+            let start = cx + cw * from;
             if let Some([r, g, b]) = colour
                 && (!shown || a < 1.0)
             {
-                let col = [r, g, b, 1.0];
-                c.round_rect(
-                    [inner[0], inner[1]],
-                    [inner[2], inner[3]],
+                // Its average colour where the picture will be, under it as it fades in.
+                let col = |s: f32| [r, g, b, s];
+                c.shade_eased(
+                    [start, cy],
+                    [cx + cw - start, ch],
                     round,
-                    col,
-                    col,
-                    0.0,
+                    col(0.0),
+                    col(strength * (1.0 - a)),
                 );
             }
-            let tint = [1.0, 1.0, 1.0, a];
-            // The curtain's plate ends here, worked out from the card as it's drawn now (on the
-            // list's wave, under the pointer): the picture is only drawn right of it, so however
-            // the card's alpha, its picture's fade-in or its place change, none of it can show
-            // under the title and artist.
-            let from = inner[0] + inner[2] * CURTAIN.0;
-            let picture = c.shapes.len();
-            let drawn = c.card_picture(&bg, inner, tint, round, self.card_greys);
-            if drawn {
-                let [_, cy, cw, ch] = inner;
-                c.clip_since(picture, from, cy, inner[0] + cw - from, ch);
-            }
+            let tint = [1.0, 1.0, 1.0, strength * a];
+            let drawn = c.card_picture(&bg, inner, tint, round, self.card_greys, Some([from, 1.0]));
             if drawn && since.is_none() {
                 covers.insert(key, crate::render::frame_now());
-            }
-            if drawn || colour.is_some() {
-                // Over the colour the shade is there at once; over the bare surface it comes in
-                // with the picture.
-                let base = if colour.is_some() { 1.0 } else { a };
-                // A curtain drawn back from the left: a plain dark plate under the title and
-                // artist, then the picture coming out of it to the right in one eased sweep (no
-                // edge where it starts, as a straight one showed), muted on the cards not open
-                // (less under the pointer).
-                let shade = |s: f32| rgba(style::SURFACE_1, s * base);
-                let [cx, cy, cw, ch] = inner;
-                let reveal = if open {
-                    CURTAIN.2
-                } else {
-                    CURTAIN.1 + (CURTAIN.2 - CURTAIN.1) * light
-                };
-                // The plate runs on under the sweep's start, as dark there as it: the plate's
-                // end and the sweep's round corners at its start are both out of sight.
-                c.round_rect(
-                    [cx, cy],
-                    [from - cx + 2.0 * round, ch],
-                    round,
-                    shade(1.0),
-                    shade(1.0),
-                    0.0,
-                );
-                c.shade_eased(
-                    [from, cy],
-                    [cx + cw - from, ch],
-                    round,
-                    shade(1.0),
-                    shade(1.0 - reveal),
-                );
             }
         }
         if open {

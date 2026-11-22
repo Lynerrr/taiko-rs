@@ -1275,9 +1275,16 @@ fn shade(in: VOut) -> vec4<f32> {
         let grey = mix(in.border.x, in.border.y, across);
         let luma = dot(t.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
         t = vec4<f32>(mix(t.rgb, vec3<f32>(luma), grey), t.a);
+        // Its alpha coming in across it, eased (`border.zw`: from where to where of its width;
+        // all of it shown when the second is 0): no edge where it starts.
+        var come = 1.0;
+        if (in.border.w > 0.0) {
+            let f = clamp((across - in.border.z) / max(in.border.w - in.border.z, 1e-4), 0.0, 1.0);
+            come = f * f * (3.0 - 2.0 * f);
+        }
         let r = min(in.params.x, min(in.half.x, in.half.y));
         let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
-        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover;
+        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover * come;
     }
     if (in.params.w < -999.5) {
         // A map's picture (premultiplied), its square stretched over the quad, tinted by fill.
@@ -4634,8 +4641,10 @@ impl<H> Canvas<H> {
 
     /// Song select's card picture of the map picture at `path` over all of `[x, y, w, h]`: the
     /// picture's middle strip, cut to it, tinted by `tint`, its colour going to grey across it from
-    /// `greys`' first at its left edge to the second at its right (0: all its colour). Asks for
-    /// it; false while it isn't in (nothing drawn).
+    /// `greys`' first at its left edge to the second at its right (0: all its colour). `come`:
+    /// from where to where across it (0 its left edge, 1 its right) the picture comes in out of
+    /// nothing, eased, none of it shown left of the first; None, all of it shown. Asks for it;
+    /// false while it isn't in (nothing drawn).
     pub fn card_picture(
         &mut self,
         path: &std::path::Path,
@@ -4643,6 +4652,7 @@ impl<H> Canvas<H> {
         tint: [f32; 4],
         radius: f32,
         greys: [f32; 2],
+        come: Option<[f32; 2]>,
     ) -> bool {
         let key = path_picture_key(path);
         let slot = self.card_slots.get(&key).copied();
@@ -4668,7 +4678,10 @@ impl<H> Canvas<H> {
             center: [x + w / 2.0, y + h / 2.0],
             half: [w / 2.0, h / 2.0],
             fill: tint,
-            border: [greys[0], greys[1], 0.0, 0.0],
+            border: match come {
+                Some([from, to]) => [greys[0], greys[1], from, to.max(from + 1e-3)],
+                None => [greys[0], greys[1], 0.0, 0.0],
+            },
             params: [radius, 1.0, k, -CARD_BASE - slot as f32],
             angle: 0.0,
         });
@@ -5014,7 +5027,14 @@ impl<H> Canvas<H> {
     pub fn fade_between(&mut self, start: usize, end: usize, alpha: f32, dim: f32) {
         let end = end.min(self.shapes.len());
         for sh in &mut self.shapes[start.min(end)..end] {
-            for col in [&mut sh.fill, &mut sh.border] {
+            // A card's picture's `border` isn't a colour (how grey it goes, where it comes in).
+            let card = sh.params[3] < -CARD_BASE + 0.5;
+            let cols: &mut [&mut [f32; 4]] = if card {
+                &mut [&mut sh.fill]
+            } else {
+                &mut [&mut sh.fill, &mut sh.border]
+            };
+            for col in cols.iter_mut() {
                 col[0] *= dim;
                 col[1] *= dim;
                 col[2] *= dim;
