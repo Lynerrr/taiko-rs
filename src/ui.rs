@@ -85,7 +85,7 @@ fn star_heading(stars: f64) -> i64 {
 /// The folder map `e` came from, as the list sorted by folder heads it, with its place among
 /// them (TJA folders first). A TJA chart's is the folder its song's folder is in, below the TJA
 /// folder (`Pack / Genre`), so a pack's songs and genres stay together however deep they are.
-fn source_folder(e: &Entry) -> (u8, String) {
+fn source_folder(e: &Entry) -> (u8, std::borrow::Cow<'static, str>) {
     if e.is_tja() {
         let file = crate::tja_maps::split(&e.path).map_or_else(|| e.path.clone(), |(f, _)| f);
         let song = file.parent().unwrap_or(&file);
@@ -104,20 +104,20 @@ fn source_folder(e: &Entry) -> (u8, String) {
             })
             .unwrap_or_default();
         return match names.is_empty() {
-            true => (0, "TJA".to_string()),
-            false => (0, names.join(" / ")),
+            true => (0, std::borrow::Cow::Borrowed("TJA")),
+            false => (0, std::borrow::Cow::Owned(names.join(" / "))),
         };
     }
     if e.is_own() {
-        (1, "taiko.rs maps".to_string())
+        (1, std::borrow::Cow::Borrowed("taiko.rs maps"))
     } else {
-        (2, "osu! Songs".to_string())
+        (2, std::borrow::Cow::Borrowed("osu! Songs"))
     }
 }
 
 /// What a song is ordered by when sorted by folder: its folder (`source_folder`), then its title
 /// and artist.
-type FolderKey<'a> = ((u8, String), (&'a str, &'a str));
+type FolderKey<'a> = ((u8, std::borrow::Cow<'static, str>), (&'a str, &'a str));
 
 /// A heading of the song list and the songs (`Select::groups` indices) under it.
 struct Section {
@@ -602,11 +602,21 @@ pub(crate) fn list_wave(cy: f32, top: f32, bottom: f32) -> f32 {
 }
 
 /// What a song's name starts with, as its heading when the list is by artist or title.
-fn initial(name: &str) -> String {
+fn initial(name: &str) -> std::borrow::Cow<'static, str> {
+    const ASCII_LETTERS: [&str; 26] = [
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
+        "S", "T", "U", "V", "W", "X", "Y", "Z",
+    ];
     match name.trim_start().chars().next() {
-        Some(c) if c.is_ascii_digit() => "0-9".to_string(),
-        Some(c) if c.is_alphabetic() && (c as u32) < 0x250 => c.to_uppercase().collect(),
-        _ => "Other".to_string(),
+        Some(c) if c.is_ascii_digit() => std::borrow::Cow::Borrowed("0-9"),
+        Some(c) if c.is_ascii_alphabetic() => {
+            let idx = (c.to_ascii_uppercase() as u8 - b'A') as usize;
+            std::borrow::Cow::Borrowed(ASCII_LETTERS[idx])
+        }
+        Some(c) if c.is_alphabetic() && (c as u32) < 0x250 => {
+            std::borrow::Cow::Owned(c.to_uppercase().collect())
+        }
+        _ => std::borrow::Cow::Borrowed("Other"),
     }
 }
 
@@ -650,12 +660,18 @@ pub enum SelectAction {
 
 impl Select {
     pub fn new(library: &[Entry]) -> Select {
+        let mut s = Self::new_unfiltered(library);
+        s.refilter(library);
+        s
+    }
+
+    pub fn new_unfiltered(library: &[Entry]) -> Select {
         let has_taiko = library.iter().any(|e| e.meta.mode == 1);
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0x9e37_79b9_7f4a_7c15);
-        let mut s = Select {
+        Select {
             list_share: LIST_SHARE.2,
             height: crate::render::VIRTUAL_HEIGHT,
             banner: false,
@@ -738,13 +754,12 @@ impl Select {
             parallax: [0.0; 2],
             random_history: Vec::new(),
             rng: seed | 1,
-        };
-        s.refilter(library);
-        s
+        }
     }
 
     /// Lists converts too if the settings say so (`Select::new` only does for a list without
     /// any taiko maps).
+    #[cfg(test)]
     pub fn keep_converts(&mut self, library: &[Entry], on: bool) {
         if on && !self.show_converts {
             self.show_converts = true;
@@ -803,7 +818,15 @@ impl Select {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let info = self.info.as_ref().map(|i| i.lock().unwrap());
+        let query_facts = query.needs_facts();
+        let no_facts = crate::search::Facts::default();
+        // The filters as each tab has them (`Filters::active_in`).
+        let active = Source::ALL.map(|s| self.tabs.active(s));
+        let lens_open = self.lens_ui.is_some();
+        let filtering = !self.tabs.filters.is_empty() || lens_open;
+        let info = (query_facts || filtering)
+            .then(|| self.info.as_ref().map(|i| i.lock().unwrap()))
+            .flatten();
         let facts = |i: usize, e: &Entry| {
             let known = info.as_ref().and_then(|v| v.get(i).copied().flatten());
             crate::search::Facts {
@@ -824,12 +847,6 @@ impl Select {
                 epic: asks_epic && self.is_epic(e),
             }
         };
-        let query_facts = query.needs_facts();
-        let no_facts = crate::search::Facts::default();
-        // The filters as each tab has them (`Filters::active_in`).
-        let active = Source::ALL.map(|s| self.tabs.active(s));
-        let lens_open = self.lens_ui.is_some();
-        let filtering = !self.tabs.filters.is_empty() || lens_open;
         let picked = self.tabs.source;
         // One pass over the library: each source's maps (for its tab, and whether the picked one
         // has any), what each tab would list, and what's listed. While the panel is open, what
@@ -1072,7 +1089,10 @@ impl Select {
             Text(&'a str, &'a str),
             Value(f64),
         }
-        let info = self.info.as_ref().map(|i| i.lock().unwrap());
+        let needs_info = matches!(order, Order::Stars | Order::Length | Order::Bpm);
+        let info = needs_info
+            .then(|| self.info.as_ref().map(|i| i.lock().unwrap()))
+            .flatten();
         let known = |i: usize| info.as_ref().and_then(|v| v.get(i).copied().flatten());
         let most = |song: &std::ops::Range<usize>, value: &dyn Fn(usize) -> Option<f64>| {
             self.visible[song.clone()]
@@ -1081,13 +1101,14 @@ impl Select {
                 .filter(|v| v.is_finite())
                 .fold(f64::NAN, |a, b| if a.is_nan() || b > a { b } else { a })
         };
-        let mut headings: std::collections::HashMap<String, usize> = Default::default();
+        let mut headings: std::collections::HashMap<std::borrow::Cow<'static, str>, usize> =
+            Default::default();
         let mut keyed: Vec<(usize, Key, usize)> = Vec::with_capacity(cuts.len());
         for (k, song) in cuts.iter().enumerate() {
             let heading = if self.headings {
                 self.section_heading(library, song.start, now).0
             } else {
-                String::new()
+                std::borrow::Cow::Borrowed("")
             };
             let n = headings.len();
             let h = *headings.entry(heading).or_insert(n);
@@ -1147,7 +1168,13 @@ impl Select {
             self.row_value = vec![f64::NAN; self.visible.len()];
             return;
         }
-        let info = self.info.as_ref().map(|i| i.lock().unwrap());
+        let needs_info = matches!(
+            self.sort,
+            SortMode::Difficulty | SortMode::Length | SortMode::Bpm
+        );
+        let info = needs_info
+            .then(|| self.info.as_ref().map(|i| i.lock().unwrap()))
+            .flatten();
         let value = |i: usize| -> f64 {
             let info = || info.as_ref().and_then(|v| v.get(i).copied().flatten());
             match self.sort {
@@ -1173,20 +1200,20 @@ impl Select {
                 SortMode::Artist | SortMode::Title | SortMode::Folder => 0.0,
             }
         };
-        let mut folder_ids: std::collections::HashMap<(&std::path::Path, i64), usize> =
+        let mut folder_ids: std::collections::HashMap<(&std::ffi::OsStr, i64), usize> =
             std::collections::HashMap::new();
         let split = self.split_difficulties();
         let folder = |i: usize| {
             if split {
                 // Each difficulty on its own: ordered by its own value.
-                return (library[i].path.as_path(), 0);
+                return (library[i].path.as_os_str(), 0);
             }
             let stars = if self.sort == SortMode::Difficulty {
                 star_heading(value(i))
             } else {
                 0
             };
-            (library[i].set_key(), stars)
+            (library[i].set_key().as_os_str(), stars)
         };
         let mut set_value: Vec<f64> = Vec::new();
         let mut keyed = Vec::with_capacity(self.visible.len());
@@ -1334,9 +1361,9 @@ impl Select {
         for g in 0..self.groups.len() {
             let (label, colour) = self.section_heading(library, self.groups[g].start, now);
             match self.sections.last_mut() {
-                Some(last) if last.label == label => last.groups.end = g + 1,
+                Some(last) if last.label == *label => last.groups.end = g + 1,
                 _ => self.sections.push(Section {
-                    label,
+                    label: label.into_owned(),
                     colour,
                     groups: g..g + 1,
                 }),
@@ -1346,21 +1373,25 @@ impl Select {
     }
 
     /// The heading the song at row `row` is listed under for the sort: what it's grouped by.
-    fn section_heading(&self, library: &[Entry], row: usize, now: u64) -> (String, Option<u32>) {
+    fn section_heading(
+        &self,
+        library: &[Entry],
+        row: usize,
+        now: u64,
+    ) -> (std::borrow::Cow<'static, str>, Option<u32>) {
+        use std::borrow::Cow;
         let e = &library[self.visible[row]];
         let v = self.row_value.get(row).copied().unwrap_or(f64::NAN);
-        let unknown = || "Not worked out yet".to_string();
-        let age = |t: f64| {
+        let age = |t: f64| -> Cow<'static, str> {
             let days = now.saturating_sub(t as u64) / 86_400;
-            match days {
+            Cow::Borrowed(match days {
                 0 => "Today",
                 1 => "Yesterday",
                 2..=6 => "Last 7 days",
                 7..=29 => "Last 30 days",
                 30..=179 => "Last 6 months",
                 _ => "Older",
-            }
-            .to_string()
+            })
         };
         let label = match self.sort {
             SortMode::Artist => initial(&e.meta.artist),
@@ -1375,30 +1406,30 @@ impl Select {
                     v as u8
                 };
                 let (name, colour) = status_heading(code);
-                return (name.to_string(), Some(colour));
+                return (Cow::Borrowed(name), Some(colour));
             }
-            _ if v.is_nan() && self.sort == SortMode::Played => "Never played".to_string(),
-            _ if v.is_nan() => unknown(),
+            _ if v.is_nan() && self.sort == SortMode::Played => Cow::Borrowed("Never played"),
+            _ if v.is_nan() => Cow::Borrowed("Not worked out yet"),
             SortMode::Difficulty => match star_heading(v) {
-                10 => "10+ stars".to_string(),
-                n => format!("{n}.00 - {n}.99 stars"),
+                10 => Cow::Borrowed("10+ stars"),
+                n => Cow::Owned(format!("{n}.00 - {n}.99 stars")),
             },
             SortMode::Length => match (v / 60_000.0).floor() as i64 {
-                0 => "Under 1 minute".to_string(),
-                m if m >= 10 => "10+ minutes".to_string(),
-                m => format!("{m} - {} minutes", m + 1),
+                0 => Cow::Borrowed("Under 1 minute"),
+                m if m >= 10 => Cow::Borrowed("10+ minutes"),
+                m => Cow::Owned(format!("{m} - {} minutes", m + 1)),
             },
             SortMode::Bpm => match v {
-                v if v < 60.0 => "Under 60 BPM".to_string(),
-                v if v >= 300.0 => "300+ BPM".to_string(),
-                v => format!(
+                v if v < 60.0 => Cow::Borrowed("Under 60 BPM"),
+                v if v >= 300.0 => Cow::Borrowed("300+ BPM"),
+                v => Cow::Owned(format!(
                     "{} - {} BPM",
                     (v / 20.0).floor() as i64 * 20,
                     (v / 20.0).floor() as i64 * 20 + 19
-                ),
+                )),
             },
-            SortMode::Hp => format!("HP {:.0}.0 - {:.0}.9", v.floor(), v.floor()),
-            SortMode::Od => format!("OD {:.0}.0 - {:.0}.9", v.floor(), v.floor()),
+            SortMode::Hp => Cow::Owned(format!("HP {:.0}.0 - {:.0}.9", v.floor(), v.floor())),
+            SortMode::Od => Cow::Owned(format!("OD {:.0}.0 - {:.0}.9", v.floor(), v.floor())),
             SortMode::Played | SortMode::Added => age(v),
         };
         (label, None)

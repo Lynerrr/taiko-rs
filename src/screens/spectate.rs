@@ -276,13 +276,14 @@ impl Screen for Spectate {
         match v.focus {
             Some(k) if k < v.games.len() => {
                 let g = &mut v.games[k].1;
+                let area_backdrop = state.area_backdrop(state.bg_brightness > 0.0);
                 draw_game_area(
                     canvas,
                     &state.cfg,
                     &mut state.frame_clip,
                     &state.grip,
                     &state.hover,
-                    state.bg_brightness > 0.0,
+                    area_backdrop,
                     |c| {
                         g.draw_playfield(c, scroll);
                     },

@@ -408,6 +408,12 @@ type SimKey = (std::path::PathBuf, u64, u32, u64, mods::Mods, u64);
 struct State {
     cfg: Config,
     library: Vec<Entry>,
+    library_by_set: std::collections::HashMap<u32, Vec<usize>>,
+    library_by_folder: std::collections::HashMap<std::ffi::OsString, Vec<usize>>,
+    library_folders: Arc<Vec<PathBuf>>,
+    library_own_folders: Arc<Vec<PathBuf>>,
+    library_indexed_len: usize,
+    library_indexed_ptr: usize,
     select: Select,
     scene: Scene,
     /// The game of the song, match or calibration up (`PlayScreen`, `MpPlay`, `Calibration`),
@@ -5194,6 +5200,7 @@ impl State {
     fn append_maps(&mut self, fresh: Vec<Entry>) {
         let start = self.library.len();
         self.library.extend(fresh);
+        self.extend_library_indices(start);
         // What's known of their sets' statuses, and the rest asked about soon.
         self.apply_cached_statuses();
         self.status_sweep_due = Some(Instant::now() + Duration::from_secs(10));
@@ -8856,18 +8863,16 @@ impl State {
         let official = online::is_official(&self.cfg.online_server);
         if due && self.custom_call.is_idle() && !self.library.is_empty() {
             self.custom_asked = Some(now);
-            let mut folders: Vec<PathBuf> = self
-                .library
-                .iter()
-                .filter(|e| official || e.is_own())
-                .filter_map(|e| e.path.parent().map(Path::to_path_buf))
-                .collect();
-            folders.sort();
-            folders.dedup();
+            self.ensure_library_indices();
+            let folders = if official {
+                Arc::clone(&self.library_folders)
+            } else {
+                Arc::clone(&self.library_own_folders)
+            };
             self.custom_call = Job::spawn(move || {
                 let known: std::collections::HashMap<PathBuf, u32> = folders
-                    .into_iter()
-                    .filter_map(|d| custom::sidecar_id(&d).map(|id| (d, id)))
+                    .iter()
+                    .filter_map(|d| custom::sidecar_id(d).map(|id| (d.clone(), id)))
                     .collect();
                 if !official {
                     return (known, Vec::new(), None);
@@ -8914,19 +8919,28 @@ impl State {
                         }
                     }
                 }
-                if official {
+                let changed = if official {
+                    let approved_set: std::collections::HashSet<u32> =
+                        approved.into_iter().collect();
+                    let diff = self.select.custom_folder != folders
+                        || self.select.custom_approved != approved_set;
                     self.select.custom_folder = folders;
-                    self.select.custom_approved = approved.into_iter().collect();
+                    self.select.custom_approved = approved_set;
+                    diff
                 } else {
                     // Only taiko.rs's own folder was read.
-                    self.select
-                        .custom_folder
-                        .retain(|d, _| !library::is_own_map(d));
-                    self.select.custom_folder.extend(folders);
-                }
-                if !self.select.filter.is_empty()
-                    || self.select.sort == ui::SortMode::Status
-                    || self.select.tabs.filters.statuses != 0
+                    let mut next = self.select.custom_folder.clone();
+                    next.retain(|d, _| !library::is_own_map(d));
+                    next.extend(folders);
+                    let diff = self.select.custom_folder != next;
+                    self.select.custom_folder = next;
+                    diff
+                };
+                if changed
+                    && (!self.select.filter.is_empty()
+                        || self.select.sort == ui::SortMode::Status
+                        || self.select.tabs.filters.statuses != 0
+                        || self.select.lens_ui.is_some())
                 {
                     self.select.refilter(&self.library);
                 }
@@ -9311,6 +9325,81 @@ impl State {
     /// place, so the indices handed out stay good. What's gone takes the list being rebuilt, which
     /// waits for a next launch if anything could be holding on to one. A map the scan doesn't
     /// cover (one opened by itself) stays while its file is there.
+    fn rebuild_library_indices(&mut self) {
+        self.library_by_set.clear();
+        self.library_by_folder.clear();
+        let mut folders = Vec::new();
+        let mut own_folders = Vec::new();
+        let mut seen_folders: std::collections::HashSet<&std::ffi::OsStr> =
+            std::collections::HashSet::new();
+        let mut seen_own: std::collections::HashSet<&std::ffi::OsStr> =
+            std::collections::HashSet::new();
+        for (i, e) in self.library.iter().enumerate() {
+            if let Some(set) = e.set_id() {
+                self.library_by_set.entry(set).or_default().push(i);
+            }
+            if let Some(parent) = e.path.parent() {
+                let key = parent.as_os_str();
+                self.library_by_folder
+                    .entry(key.to_os_string())
+                    .or_default()
+                    .push(i);
+                if seen_folders.insert(key) {
+                    folders.push(parent.to_path_buf());
+                }
+                if e.is_own() && seen_own.insert(key) {
+                    own_folders.push(parent.to_path_buf());
+                }
+            }
+        }
+        self.library_folders = Arc::new(folders);
+        self.library_own_folders = Arc::new(own_folders);
+        self.library_indexed_len = self.library.len();
+        self.library_indexed_ptr = self.library.as_ptr() as usize;
+    }
+
+    fn extend_library_indices(&mut self, start: usize) {
+        if self.library_indexed_len != start || start > self.library.len() {
+            self.rebuild_library_indices();
+            return;
+        }
+        let folders = Arc::make_mut(&mut self.library_folders);
+        let own_folders = Arc::make_mut(&mut self.library_own_folders);
+        for i in start..self.library.len() {
+            let e = &self.library[i];
+            if let Some(set) = e.set_id() {
+                self.library_by_set.entry(set).or_default().push(i);
+            }
+            if let Some(parent) = e.path.parent() {
+                let key = parent.as_os_str();
+                let new_folder = !self.library_by_folder.contains_key(key);
+                self.library_by_folder
+                    .entry(key.to_os_string())
+                    .or_default()
+                    .push(i);
+                if new_folder {
+                    folders.push(parent.to_path_buf());
+                    if e.is_own() {
+                        own_folders.push(parent.to_path_buf());
+                    }
+                } else if e.is_own() && !own_folders.iter().any(|p| p == parent) {
+                    own_folders.push(parent.to_path_buf());
+                }
+            }
+        }
+        self.library_indexed_len = self.library.len();
+        self.library_indexed_ptr = self.library.as_ptr() as usize;
+    }
+
+    fn ensure_library_indices(&mut self) {
+        if cfg!(test)
+            || self.library_indexed_len != self.library.len()
+            || self.library_indexed_ptr != self.library.as_ptr() as usize
+        {
+            self.rebuild_library_indices();
+        }
+    }
+
     fn check_library(&mut self, mut checked: Vec<Entry>) {
         let refreshing = self.refreshing.take();
         // Nothing where there were maps: the folder can't be reached just now (a drive
@@ -9328,18 +9417,19 @@ impl State {
             }
             return;
         }
-        let index: std::collections::HashMap<PathBuf, usize> = self
-            .library
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (e.path.clone(), i))
-            .collect();
+        let mut index: std::collections::HashMap<&std::ffi::OsStr, usize> =
+            std::collections::HashMap::with_capacity(self.library.len());
+        for (i, e) in self.library.iter().enumerate() {
+            index.insert(e.path.as_os_str(), i);
+        }
+        let mut seen = vec![false; self.library.len()];
         // The scan's cache keeps a set while its folder's time holds, and a file rewritten in
         // place doesn't move it: a map that differs from the list is read again from the disk.
         for e in &mut checked {
-            let Some(&i) = index.get(&e.path) else {
+            let Some(&i) = index.get(e.path.as_os_str()) else {
                 continue;
             };
+            seen[i] = true;
             let old = &self.library[i];
             if (old.size, old.modified) != (e.size, e.modified)
                 && library::file_stats(&e.path) != (e.size, e.modified)
@@ -9348,13 +9438,12 @@ impl State {
                 *e = Entry::new(e.path.clone(), meta);
             }
         }
-        let there: std::collections::HashSet<PathBuf> =
-            checked.iter().map(|e| e.path.clone()).collect();
         let gone: Vec<PathBuf> = self
             .library
             .iter()
-            .filter(|e| !there.contains(&e.path) && !e.path.is_file())
-            .map(|e| e.path.clone())
+            .enumerate()
+            .filter(|(i, e)| !seen[*i] && !e.path.is_file())
+            .map(|(_, e)| e.path.clone())
             .collect();
         if !gone.is_empty() && self.scene.is_select() && self.mp.is_none() {
             let selected = self
@@ -9364,37 +9453,59 @@ impl State {
                 .map(|e| e.path.clone());
             let (mut added, mut changed) = (0, 0);
             for e in &checked {
-                match index.get(&e.path).map(|&i| &self.library[i]) {
+                match index.get(e.path.as_os_str()).map(|&i| &self.library[i]) {
                     None => added += 1,
                     Some(old) if (old.size, old.modified) != (e.size, e.modified) => changed += 1,
                     Some(_) => {}
                 }
             }
+            drop(index);
             let old = std::mem::take(&mut self.library);
             checked.extend(
                 old.into_iter()
-                    .filter(|e| !there.contains(&e.path) && e.path.is_file()),
+                    .enumerate()
+                    .filter(|(i, e)| !seen[*i] && e.path.is_file())
+                    .map(|(_, e)| e),
             );
             self.use_library(checked, selected);
             self.report_refresh(refreshing, added, changed, gone.len());
             return;
         }
-        for path in &gone {
-            self.select.gone.insert(path.clone());
-        }
         let mut fresh = Vec::new();
-        let mut changed = Vec::new();
+        let mut rewrites = Vec::new();
+        let mut discarded = Vec::new();
         for entry in checked {
-            match index.get(&entry.path) {
-                Some(&i) => {
+            match index.get(entry.path.as_os_str()).copied() {
+                Some(i) => {
                     let old = &self.library[i];
                     if (old.size, old.modified) != (entry.size, entry.modified) {
-                        changed.push((i, entry.path.clone(), entry.modified, entry.size));
-                        self.library[i] = entry;
+                        rewrites.push((i, entry));
+                    } else {
+                        discarded.push(entry);
                     }
                 }
                 None => fresh.push(entry),
             }
+        }
+        drop(index);
+        for path in &gone {
+            self.select.gone.insert(path.clone());
+        }
+        let mut changed = Vec::with_capacity(rewrites.len());
+        let mut set_changed = false;
+        for (i, entry) in rewrites {
+            changed.push((i, entry.path.clone(), entry.modified, entry.size));
+            if self.library[i].set_id() != entry.set_id() {
+                set_changed = true;
+            }
+            let prev = std::mem::replace(&mut self.library[i], entry);
+            discarded.push(prev);
+        }
+        if !discarded.is_empty() {
+            services::workers::run(move || drop(discarded));
+        }
+        if set_changed {
+            self.rebuild_library_indices();
         }
         let (added, edited) = (fresh.len(), changed.len());
         self.maps_rewritten(changed);
@@ -9412,16 +9523,24 @@ impl State {
         self.stars.clear();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
+        self.rebuild_library_indices();
         // Song select's cards show every set's background: small copies made ahead read fast.
         // 1.0's look has no cards.
         if self.cfg.main_menu && !self.cfg.legacy_menu {
-            let mut seen = std::collections::HashSet::new();
-            let paths: Vec<PathBuf> = self
-                .library
-                .iter()
-                .filter_map(preview::background_path)
-                .filter(|p| seen.insert(p.clone()))
-                .collect();
+            let mut seen: std::collections::HashSet<(&std::ffi::OsStr, &str)> =
+                std::collections::HashSet::new();
+            let mut paths = Vec::new();
+            for e in &self.library {
+                let Some(bg) = e.meta.background.as_deref().filter(|s| !s.is_empty()) else {
+                    continue;
+                };
+                let Some(dir) = e.path.parent() else {
+                    continue;
+                };
+                if seen.insert((dir.as_os_str(), bg)) {
+                    paths.push(dir.join(bg));
+                }
+            }
             self.card_pictures.prewarm(paths.clone());
             self.pictures.prewarm(paths);
         }
@@ -9439,9 +9558,10 @@ impl State {
         let sort = self.select.sort;
         let headings = self.select.headings;
         let tabs = std::mem::take(&mut self.select.tabs);
-        self.select = Select::new(&self.library);
-        self.select
-            .keep_converts(&self.library, self.cfg.show_converts);
+        self.select = Select::new_unfiltered(&self.library);
+        if self.cfg.show_converts {
+            self.select.show_converts = true;
+        }
         self.select.filter = filter;
         self.select.played = played;
         self.select.status = status;
@@ -9531,40 +9651,49 @@ impl State {
 
     fn apply_osu_db(&mut self, db: osudb::OsuDb) {
         let key = |folder: &str, file: &str| (folder.to_lowercase(), file.to_lowercase());
-        let index: std::collections::HashMap<(String, String), usize> = self
-            .library
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| {
-                let folder = e.path.parent()?.file_name()?.to_str()?;
-                let file = e.path.file_name()?.to_str()?;
-                Some((key(folder, file), i))
-            })
-            .collect();
+        let mut index: std::collections::HashMap<(String, String), usize> =
+            std::collections::HashMap::with_capacity(self.library.len());
+        for (i, e) in self.library.iter().enumerate() {
+            let Some(folder) = e
+                .path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+            else {
+                continue;
+            };
+            let Some(file) = e.path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            index.insert(key(folder, file), i);
+        }
         for m in db.by_md5.values() {
             if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
-                self.db_status
-                    .insert(self.library[i].path.clone(), m.status);
+                let path = &self.library[i].path;
+                self.db_status.insert(path.clone(), m.status);
                 // Unless the mirrors have said better already.
-                self.select
-                    .status
-                    .entry(self.library[i].path.clone())
-                    .or_insert(m.status);
-            }
-        }
-        for m in db.by_md5.values().filter(|m| m.last_played > 0) {
-            if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
-                let t = self
-                    .select
-                    .played
-                    .entry(self.library[i].path.clone())
-                    .or_insert(0);
-                *t = (*t).max(m.last_played);
+                self.select.status.entry(path.clone()).or_insert(m.status);
+                if m.last_played > 0 {
+                    let t = self.select.played.entry(path.clone()).or_insert(0);
+                    *t = (*t).max(m.last_played);
+                }
             }
         }
         eprintln!("osu!.db: {} maps", db.by_md5.len());
-        self.show_collections(Some(&db));
-        self.select.refilter(&self.library);
+        let collections_changed = self.show_collections(Some(&db));
+        services::workers::run(move || drop((index, db)));
+        if collections_changed
+            || matches!(
+                self.select.sort,
+                ui::SortMode::Status | ui::SortMode::Played
+            )
+            || self.select.filter.contains("status")
+            || self.select.filter.contains("played")
+            || self.select.tabs.filters.statuses != 0
+            || self.select.lens_ui.is_some()
+        {
+            self.select.refilter(&self.library);
+        }
     }
 
     /// Remembers that `entry` was just played (for "recently played").
@@ -10573,22 +10702,15 @@ impl State {
     /// Asks the mirrors for the selected set's status once the selection has rested a moment
     /// (scrolling past sets asks about none of them), and takes in what they say.
     fn poll_set_status(&mut self, now: Instant) {
-        // A sweep's answers come thousands at a time: the library is gone through once for them.
-        let mut by_set: Option<std::collections::HashMap<u32, Vec<usize>>> = None;
+        let mut ensured = false;
         while let Ok((set, status)) = self.set_status_rx.try_recv() {
             // The mirrors know graveyard from pending, which osu!.db doesn't: the search uses theirs.
             if let Some(code) = status.as_deref().and_then(search::status_code) {
-                let by_set = by_set.get_or_insert_with(|| {
-                    let mut m: std::collections::HashMap<u32, Vec<usize>> =
-                        std::collections::HashMap::new();
-                    for (i, e) in self.library.iter().enumerate() {
-                        if let Some(set) = e.set_id() {
-                            m.entry(set).or_default().push(i);
-                        }
-                    }
-                    m
-                });
-                for &i in by_set.get(&set).into_iter().flatten() {
+                if !ensured {
+                    self.ensure_library_indices();
+                    ensured = true;
+                }
+                for &i in self.library_by_set.get(&set).into_iter().flatten() {
                     self.select
                         .status
                         .insert(self.library[i].path.clone(), code);
@@ -10725,6 +10847,16 @@ impl State {
             [0.0; 3]
         } else {
             render::clear_colour()
+        }
+    }
+
+    pub(crate) fn area_backdrop(&self, see_through: bool) -> layout::AreaBackdrop {
+        if see_through {
+            layout::AreaBackdrop::SeeThrough
+        } else if self.dims_background() && self.bg_brightness <= 0.0 {
+            layout::AreaBackdrop::Cleared
+        } else {
+            layout::AreaBackdrop::CoverBg
         }
     }
 
@@ -12837,6 +12969,7 @@ impl State {
         // And while song select's list is on the move: the cards and the banner coming in need
         // what CPU a small machine has.
         let browsing = self.scene.is_select() && !self.on_menu() && self.select.flying();
+        self.hasher.hold(in_song);
         self.hasher.take_in(&self.library);
         self.pictures.hold(in_song || browsing);
         self.card_pictures.hold(in_song || browsing);
@@ -12878,6 +13011,11 @@ impl State {
         }
 
         // The pictures the last frame drew, then the ones the renderer has for this one.
+        // Drop the canvas handles first so `Arc::make_mut` updates slot and colour maps in place.
+        canvas.avatar_slots = std::sync::Arc::default();
+        canvas.picture_slots = std::sync::Arc::default();
+        canvas.card_slots = std::sync::Arc::default();
+        canvas.card_colours = std::sync::Arc::default();
         self.avatars.update(&canvas.avatars_wanted);
         let picture_dir = self.picture_dir();
         // The banner first, then the cards' strips, within one frame's budget for the GPU.
@@ -13018,9 +13156,20 @@ impl State {
                 self.scene.is_select()
             };
             if self.cfg.menu_notes && behind {
+                self.ensure_library_indices();
                 let playing = self.preview_target();
-                self.menu_notes
-                    .update(playing, &self.library, &mut self.stars, play_rate);
+                let folder_entries = playing
+                    .and_then(|i| self.library.get(i))
+                    .and_then(|e| e.path.parent())
+                    .and_then(|p| self.library_by_folder.get(p.as_os_str()))
+                    .map(Vec::as_slice);
+                self.menu_notes.update_in(
+                    playing,
+                    &self.library,
+                    folder_entries,
+                    &mut self.stars,
+                    play_rate,
+                );
             }
             if let (true, Some(i)) = (self.scene.screen_is::<Preview>(), selected) {
                 self.stars.request(i, &self.library[i].path, play_rate);
@@ -14636,8 +14785,16 @@ impl State {
                 Ok(Ok((outdated, edited))) => {
                     // Like osu!stable: a difficulty whose file osu! doesn't know (edited from a
                     // ranked one) isn't ranked, whatever its set is.
-                    if !edited.is_empty() {
-                        self.select.edited.extend(edited);
+                    let mut added = false;
+                    for p in edited {
+                        added |= self.select.edited.insert(p);
+                    }
+                    if added
+                        && (self.select.sort == ui::SortMode::Status
+                            || self.select.filter.contains("status")
+                            || self.select.tabs.filters.statuses != 0
+                            || self.select.lens_ui.is_some())
+                    {
                         self.select.refilter(&self.library);
                     }
                     if outdated {
@@ -14701,15 +14858,15 @@ impl State {
             }
         }
         // The set's difficulties here: beatmap ID, [Version] and the MD5 osu! knows each version by.
+        self.ensure_library_indices();
         let folder = self.library[entry].path.parent().map(|p| p.to_path_buf());
-        let maps: Vec<(Option<u32>, String, PathBuf)> = self
-            .library
-            .iter()
-            .filter(|e| {
-                e.set_id() == Some(id)
-                    && e.path.parent() == folder.as_deref()
-                    && !self.select.gone.contains(&e.path)
-            })
+        let maps: Vec<(Option<u32>, String, PathBuf)> = folder
+            .as_deref()
+            .and_then(|dir| self.library_by_folder.get(dir.as_os_str()))
+            .into_iter()
+            .flatten()
+            .map(|&i| &self.library[i])
+            .filter(|e| e.set_id() == Some(id) && !self.select.gone.contains(&e.path))
             .map(|e| (e.meta.beatmap_id, e.meta.version.clone(), e.path.clone()))
             .collect();
         self.select.updates.insert(id, ui::SetUpdate::Checking);

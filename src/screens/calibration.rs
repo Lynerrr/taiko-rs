@@ -198,6 +198,7 @@ impl Screen for Calibration {
     }
 
     fn draw(&mut self, state: &mut State, canvas: &mut Canvas, frame: &Frame) -> Option<Scene> {
+        let area_backdrop = state.area_backdrop(state.bg_brightness > 0.0);
         let game = state.play.as_deref_mut()?;
         if game.update(frame.now, sound(&state.audio), state.play_offset) {
             state.calibration_over = true;
@@ -214,7 +215,7 @@ impl Screen for Calibration {
                 &mut state.frame_clip,
                 &state.grip,
                 &state.hover,
-                state.bg_brightness > 0.0,
+                area_backdrop,
                 |c| {
                     game.draw_playfield(c, state.cfg.scroll_speed);
                 },

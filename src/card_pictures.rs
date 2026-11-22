@@ -23,7 +23,7 @@ const MAX_BYTES: u64 = 24 * 1024 * 1024;
 const MAX_READS: usize = 4;
 /// Strips that go into their slots (and up to the GPU) a frame: 256 KB each, within the frame's
 /// budget (`UPLOAD_BUDGET`) with the banner.
-const PLACE_PER_FRAME: usize = 8;
+const PLACE_PER_FRAME: usize = 4;
 /// What one strip takes to send up: its cell, RGBA.
 const STRIP_BYTES: usize = (CARD_CELL[0] * CARD_CELL[1] * 4) as usize;
 /// How long a strip that couldn't be read waits before it is tried again.
@@ -41,15 +41,41 @@ type Read = (String, Option<Result<Vec<u8>, String>>);
 #[derive(Default)]
 struct Found {
     colours: Mutex<HashMap<String, [f32; 3]>>,
+    pending: Mutex<Vec<(String, [f32; 3])>>,
     new: AtomicBool,
 }
 
 impl Found {
     fn put(&self, key: String, colour: [f32; 3]) {
         if let Ok(mut c) = self.colours.lock() {
-            c.insert(key, colour);
+            c.insert(key.clone(), colour);
         }
-        self.new.store(true, Ordering::Relaxed);
+        if let Ok(mut p) = self.pending.lock() {
+            p.push((key, colour));
+        }
+        self.new.store(true, Ordering::Release);
+    }
+
+    fn put_many(&self, batch: Vec<(String, [f32; 3])>) {
+        if batch.is_empty() {
+            return;
+        }
+        if let Ok(mut c) = self.colours.lock() {
+            for (key, colour) in &batch {
+                c.insert(key.clone(), *colour);
+            }
+        }
+        if let Ok(mut p) = self.pending.lock() {
+            p.extend(batch);
+        }
+        self.new.store(true, Ordering::Release);
+    }
+
+    fn take_pending(&self) -> Vec<(String, [f32; 3])> {
+        self.pending
+            .lock()
+            .map(|mut p| std::mem::take(&mut *p))
+            .unwrap_or_default()
     }
 
     fn get(&self, key: &str) -> Option<[f32; 3]> {
@@ -146,13 +172,22 @@ impl CardPictures {
             .spawn(move || {
                 crate::pictures::lower_priority();
                 // Copies of an older kind aren't read any more.
+                if !crate::pictures::wait_turn(&stop, &paused) {
+                    return;
+                }
                 if let Some(parent) = dir.parent() {
                     for old in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+                        if !crate::pictures::wait_turn(&stop, &paused) {
+                            return;
+                        }
                         let name = old.file_name().to_string_lossy().into_owned();
                         if name.starts_with("cards-v") && old.path() != dir {
                             let _ = std::fs::remove_dir_all(old.path());
                         }
                     }
+                }
+                if !crate::pictures::wait_turn(&stop, &paused) {
+                    return;
                 }
                 let made: HashMap<String, [f32; 3]> = std::fs::read_dir(&dir)
                     .into_iter()
@@ -161,15 +196,26 @@ impl CardPictures {
                     .filter_map(|f| parse_name(&f.file_name().to_string_lossy()))
                     .collect();
                 let mut missing = Vec::new();
+                let mut batch = Vec::new();
                 for path in paths {
+                    if !crate::pictures::wait_turn(&stop, &paused) {
+                        found.put_many(batch);
+                        return;
+                    }
                     let Some(stem) = copy_stem(&path) else {
                         continue;
                     };
                     match made.get(&stem) {
-                        Some(&colour) => found.put(path_picture_key(&path), colour),
+                        Some(&colour) => {
+                            batch.push((path_picture_key(&path), colour));
+                            if batch.len() >= 256 {
+                                found.put_many(std::mem::take(&mut batch));
+                            }
+                        }
                         None => missing.push(path),
                     }
                 }
+                found.put_many(batch);
                 for path in missing {
                     if !crate::pictures::wait_turn(&stop, &paused) {
                         return;
@@ -285,9 +331,10 @@ impl CardPictures {
             });
         }
         let due = self.colours_at.is_none_or(|t| now >= t + COLOURS_EVERY);
-        if due && self.found.new.swap(false, Ordering::Relaxed) {
-            if let Ok(c) = self.found.colours.lock() {
-                self.colours = Arc::new(c.clone());
+        if due && self.found.new.swap(false, Ordering::AcqRel) {
+            let added = self.found.take_pending();
+            if !added.is_empty() {
+                Arc::make_mut(&mut self.colours).extend(added);
             }
             self.colours_at = Some(now);
         }
@@ -304,12 +351,11 @@ impl CardPictures {
             // Every slot holds a strip drawn now; this one isn't wanted.
             return;
         };
-        let mut slots = (*self.slots).clone();
+        let slots = Arc::make_mut(&mut self.slots);
         if let Some(old) = self.held[slot].take() {
             slots.remove(&old);
         }
         slots.insert(key.clone(), slot as u32);
-        self.slots = Arc::new(slots);
         self.held[slot] = Some(key);
         self.used[slot] = self.frame;
         self.uploads.retain(|(s, _)| *s != slot as u32);
@@ -609,5 +655,25 @@ mod tests {
         let colour = p.colours()[&wanted[0].0];
         assert!(colour[1] > 0.9 && colour[0] < 0.1, "its colour: {colour:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn found_colours_merge_incrementally_in_place() {
+        let mut p = CardPictures::default();
+        p.found.put("a".into(), [0.1, 0.2, 0.3]);
+        p.update(&[]);
+        assert_eq!(p.colours.get("a"), Some(&[0.1, 0.2, 0.3]));
+
+        let ptr = Arc::as_ptr(&p.colours);
+        p.found.put_many(vec![
+            ("b".into(), [0.4, 0.5, 0.6]),
+            ("c".into(), [0.7, 0.8, 0.9]),
+        ]);
+        p.colours_at = None;
+        p.update(&[]);
+        assert_eq!(Arc::as_ptr(&p.colours), ptr, "mutated in place when unique");
+        assert_eq!(p.colours.get("a"), Some(&[0.1, 0.2, 0.3]));
+        assert_eq!(p.colours.get("b"), Some(&[0.4, 0.5, 0.6]));
+        assert_eq!(p.colours.get("c"), Some(&[0.7, 0.8, 0.9]));
     }
 }

@@ -196,7 +196,7 @@ impl Screen for Preview {
         match frame.preview_target {
             Some(i) => {
                 let scroll = state.cfg.scroll_speed;
-                let see_through = state.bg_brightness > 0.0;
+                let area_backdrop = state.area_backdrop(state.bg_brightness > 0.0);
                 let kiai = state.cfg.kiai_effects;
                 if let Some(game) = state.preview.game_for(&state.library, i) {
                     game.view.kiai_effects = kiai;
@@ -206,7 +206,7 @@ impl Screen for Preview {
                         &mut state.frame_clip,
                         &state.grip,
                         &state.hover,
-                        see_through,
+                        area_backdrop,
                         |c| game.draw_playfield(c, scroll),
                     );
                 }

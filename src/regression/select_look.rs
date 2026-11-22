@@ -720,58 +720,47 @@ fn the_banners_text_sits_on_a_plate_dark_at_its_left_lighter_across_and_gone_dow
     let c = settled(&mut s, &mut now);
     let lw = s.select.list_w(c.width);
     let dark = render::rgba(style::SURFACE_1, 1.0);
-    // Right of the list: the plate's layers, eased sweeps of the panel's tone across the banner
-    // from dark at the left to lighter at the right, each cut to its strip as the picture's
-    // layers are.
-    // Its strength at the left and at the right, its rect and its strip's.
-    type Layer = (f32, f32, [f32; 4], [f32; 4]);
-    let layers: Vec<Layer> = c
+    // Right of the list: one eased sweep of the panel's tone across the banner from dark at the
+    // left to lighter at the right, fading out downwards with the picture in the shader.
+    let plates: Vec<&Shape> = c
         .shapes
         .iter()
-        .enumerate()
-        .filter(|(_, sh)| {
+        .filter(|sh| {
             sh.params[3] == render::SHADE_EASED
+                && sh.params[1] > 0.0
                 && sh.center[0] > 28.0 + lw
                 && same_rgb(sh.fill, dark)
         })
-        .map(|(i, sh)| {
-            let clip = c
-                .clips
-                .iter()
-                .find(|(r, _)| r.contains(&i))
-                .map(|(_, rect)| *rect)
-                .expect("a layer is cut to its strip");
-            (sh.fill[3], sh.border[3], rect(sh), clip)
-        })
         .collect();
-    assert!(layers.len() >= 4, "a plate in layers: {layers:?}");
+    assert_eq!(
+        plates.len(),
+        1,
+        "one shader-faded plate, got {}",
+        plates.len()
+    );
+    let plate = plates[0];
     let head = sections(&c, &s)[0];
-    for (left, right, r, _) in &layers {
-        assert!(r[2] > head[2] * 0.9, "across the banner: {r:?} in {head:?}");
-        assert!(
-            left > right && *right >= 0.0,
-            "lighter to the right: {left} to {right}"
-        );
-    }
-    let shown = |y: f32, at: fn(&Layer) -> f32| {
-        1.0 - layers
-            .iter()
-            .filter(|(_, _, _, r)| y >= r[1] && y < r[1] + r[3])
-            .map(|l| 1.0 - at(l))
-            .product::<f32>()
-    };
-    let top = layers.iter().map(|l| l.3[1]).fold(f32::MAX, f32::min);
-    let bottom = layers.iter().map(|l| l.3[1] + l.3[3]).fold(0.0, f32::max);
+    let r = rect(plate);
+    assert!(r[2] > head[2] * 0.9, "across the banner: {r:?} in {head:?}");
+    let (left, right) = (plate.fill[3], plate.border[3]);
+    assert!(
+        left > right && right >= 0.0,
+        "lighter to the right: {left} to {right}"
+    );
+    let (top, bottom) = (r[1], r[1] + r[3]);
+    let tall = r[3];
     // Dense under the title at the left, open at the right end where the picture shows; the
     // picture itself near its own brightness, not a black box.
-    let left = shown(top + 10.0, |l| l.0);
-    let right = shown(top + 10.0, |l| l.1);
     assert!(left > 0.5, "dark under the title: {left}");
     assert!(right < 0.05, "open at the right end: {right}");
     // Tall, for the picture to show (on 720), its text down at its foot: the picture open over
     // its top.
-    let tall = bottom - top;
     assert!((165.0..=185.0).contains(&tall), "the banner {tall} tall");
+    assert!(
+        plate.params[1] > 0.0 && plate.params[1] < tall,
+        "fades out downwards over bottom {}: {tall}",
+        plate.params[1]
+    );
     let bright = c
         .shapes
         .iter()
@@ -799,8 +788,6 @@ fn the_banners_text_sits_on_a_plate_dark_at_its_left_lighter_across_and_gone_dow
             && sh.fill[3] > 0.2
     });
     assert!(shadow, "a shadow under the title");
-    let at_end = shown(bottom - 0.5, |l| l.0);
-    assert!(at_end < 0.1, "gone where the picture has: {at_end}");
 }
 
 #[test]
@@ -862,8 +849,8 @@ fn the_details_open_on_a_banner_of_the_maps_picture_fading_out() {
         .pretend_loaded(&render::path_picture_key(&bg), 16.0 / 9.0);
     let c = settled(&mut s, &mut now);
     let lw = s.select.list_w(c.width);
-    // Right of the list: the banner's layers of the picture, each cut to its clip.
-    let layers: Vec<(f32, [f32; 4])> = c
+    // Right of the list: one banner picture shape fading out downwards in the shader.
+    let banners: Vec<(&Shape, [f32; 4])> = c
         .shapes
         .iter()
         .enumerate()
@@ -874,45 +861,44 @@ fn the_details_open_on_a_banner_of_the_maps_picture_fading_out() {
                 .iter()
                 .find(|(r, _)| r.contains(&i))
                 .map(|(_, rect)| *rect)
-                .expect("a layer is cut to its strip");
-            (sh.fill[3], clip)
+                .expect("the banner is clipped to its rect");
+            (sh, clip)
         })
         .collect();
-    assert!(layers.len() >= 6, "a banner in layers: {layers:?}");
-    // How much of the picture shows at a height: the layers over it, together.
-    let shown = |y: f32| {
-        1.0 - layers
-            .iter()
-            .filter(|(_, r)| y >= r[1] && y < r[1] + r[3])
-            .map(|(a, _)| 1.0 - a)
-            .product::<f32>()
-    };
-    let (top, bottom) = (
-        layers.iter().map(|(_, r)| r[1]).fold(f32::MAX, f32::min),
-        layers.iter().map(|(_, r)| r[1] + r[3]).fold(0.0, f32::max),
+    assert_eq!(
+        banners.len(),
+        1,
+        "one banner picture shape, got {}",
+        banners.len()
     );
-    let seen: Vec<f32> = (0..48)
-        .map(|k| shown(top + (k as f32 + 0.5) / 48.0 * (bottom - top)))
-        .collect();
+    let (sh, clip) = banners[0];
+    assert!(
+        (sh.fill[3] - 1.0).abs() < 1e-4,
+        "full opacity: {}",
+        sh.fill[3]
+    );
+    assert!(sh.params[0] > 0.0, "top corners rounded: {:?}", sh.params);
+    assert!(
+        (sh.params[1] - clip[2] / 2.0).abs() < 0.5 && (sh.params[2] - clip[3] / 2.0).abs() < 0.5,
+        "banner half-size matches clip: {:?} vs {clip:?}",
+        sh.params
+    );
+    let [from, to, _, _] = sh.border;
+    assert!(
+        from > 0.0 && from < 1.0 && (to - 1.0).abs() < 1e-4,
+        "fades out downwards from {from} to {to}"
+    );
+    let fade_at = |down: f32| {
+        let t = ((down - from) / (to - from)).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t)
+    };
+    let seen: Vec<f32> = (0..48).map(|k| fade_at((k as f32 + 0.5) / 48.0)).collect();
     assert!((seen[0] - 1.0).abs() < 1e-3, "whole at the top: {seen:?}");
     assert!(
         seen.windows(2).all(|w| w[1] <= w[0] + 1e-4),
         "fading out downwards: {seen:?}"
     );
     assert!(seen[47] < 0.1, "gone at its bottom: {seen:?}");
-    // No two layers end on the same edge: a shared edge is where rounding the clips to whole
-    // pixels draws the picture twice, as a light line across it.
-    let ends: Vec<f32> = layers.iter().map(|(_, r)| r[1] + r[3]).collect();
-    for (k, e) in ends.iter().enumerate() {
-        assert!(
-            layers.iter().all(|(_, r)| (r[1] - e).abs() > 0.01),
-            "a layer starts where another ends: {layers:?}"
-        );
-        assert!(
-            ends.iter().skip(k + 1).all(|o| (o - e).abs() > 0.01),
-            "two layers end alike: {ends:?}"
-        );
-    }
 }
 
 #[test]

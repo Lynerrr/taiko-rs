@@ -132,6 +132,28 @@ pub fn set_of(library: &[Entry], entry: usize) -> Vec<usize> {
     set
 }
 
+/// `set_of` restricted to `candidates` (the indices already known to share `entry`'s folder).
+pub fn set_of_in(library: &[Entry], candidates: &[usize], entry: usize) -> Vec<usize> {
+    let Some(e) = library.get(entry) else {
+        return Vec::new();
+    };
+    let (folder, song): (Option<&Path>, &str) = (e.path.parent(), &e.meta.audio_file);
+    let mut set: Vec<usize> = candidates
+        .iter()
+        .copied()
+        .filter(|&i| {
+            library
+                .get(i)
+                .is_some_and(|m| m.path.parent() == folder && m.meta.audio_file == song)
+        })
+        .collect();
+    if set.iter().any(|&i| library[i].meta.mode == 1) {
+        set.retain(|&i| library[i].meta.mode == 1);
+    }
+    set.sort_by_key(|&i| library[i].size);
+    set
+}
+
 fn ghosts(path: &Path) -> Vec<Ghost> {
     let Ok(map) = beatmap::load(path) else {
         return Vec::new();
@@ -166,6 +188,7 @@ pub struct Notes {
 impl Notes {
     /// Once a frame on the menu. `entry` is what's playing. Asks for the set's star ratings, and
     /// moves on to the hardest as they come in.
+    #[cfg(test)]
     pub fn update(
         &mut self,
         entry: Option<usize>,
@@ -173,11 +196,25 @@ impl Notes {
         stars: &mut Stars,
         rate: f64,
     ) {
+        self.update_in(entry, library, None, stars, rate);
+    }
+
+    pub fn update_in(
+        &mut self,
+        entry: Option<usize>,
+        library: &[Entry],
+        folder_entries: Option<&[usize]>,
+        stars: &mut Stars,
+        rate: f64,
+    ) {
         // Another difficulty of the same song keeps its notes: they're the set's hardest anyway.
         let same_set = entry.is_some_and(|i| self.set.contains(&i));
         if library.len() != self.library_len || (entry != self.entry && !same_set) {
             self.library_len = library.len();
-            self.set = entry.map_or(Vec::new(), |i| set_of(library, i));
+            self.set = entry.map_or(Vec::new(), |i| match folder_entries {
+                Some(candidates) => set_of_in(library, candidates, i),
+                None => set_of(library, i),
+            });
             self.top = None;
             self.loading = None;
             self.notes.clear();
