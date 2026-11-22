@@ -111,15 +111,15 @@ fn tapping_intro_skip_jumps_without_hitting_the_drum() {
 
 #[test]
 fn picture_copies_made_ahead_wait_while_a_map_is_played() {
-    // Song select's cards make copies of every set's picture in the background; decoding them
-    // takes a core, which a 2-core laptop can't spare mid-song without stuttering.
+    // Song select's cards make copies of every set's picture in the background, and its hasher
+    // hashes maps; decoding/hashing takes cores, which a low-end CPU can't spare mid-song.
     let (mut s, _songs, mut now) = client("prewarm-hold", vec![maps::rolls_and_swells()]);
-    let held = |s: &State| (s.pictures.held(), s.card_pictures.held());
-    assert_eq!(held(&s), (false, false), "song select: they go on");
+    let held = |s: &State| (s.pictures.held(), s.card_pictures.held(), s.hasher.held());
+    assert_eq!(held(&s), (false, false, false), "song select: they go on");
     start_selected(&mut s, &mut now);
     now += FRAME;
     frame(&mut s, now);
-    assert_eq!(held(&s), (true, true), "playing: they wait");
+    assert_eq!(held(&s), (true, true, true), "playing: they wait");
     let map = harness::game(&s).unwrap().map().clone();
     play_out(&mut s, &mut now, &maps::presses(&map, Player::Perfect));
     assert!(
@@ -129,7 +129,7 @@ fn picture_copies_made_ahead_wait_while_a_map_is_played() {
     // The hold follows the scene a frame behind (set as a frame starts).
     now += FRAME;
     frame(&mut s, now);
-    assert_eq!(held(&s), (false, false), "the song over: they go on");
+    assert_eq!(held(&s), (false, false, false), "the song over: they go on");
 }
 
 #[test]

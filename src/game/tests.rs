@@ -2146,9 +2146,15 @@ fn a_maps_layers_scale_sideways_with_a_resized_play_area_and_stay_inside() {
             playfield_area: area,
             ..Default::default()
         };
-        draw_game_area(&mut c, &cfg, &mut clip, &None, &None, false, |c| {
-            game.draw_playfield(c, 1.0)
-        });
+        draw_game_area(
+            &mut c,
+            &cfg,
+            &mut clip,
+            &None,
+            &None,
+            crate::layout::AreaBackdrop::CoverBg,
+            |c| game.draw_playfield(c, 1.0),
+        );
         c
     };
     // What the play with the layers draws that the one without doesn't.

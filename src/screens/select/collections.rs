@@ -10,13 +10,16 @@ use crate::ui::{NameFor, Naming, PickList, Shown};
 
 impl State {
     /// Lists the collections (with osu!'s brought in again first, once `db` is read) and the
-    /// library's maps in each.
-    pub(crate) fn show_collections(&mut self, db: Option<&osudb::OsuDb>) {
+    /// library's maps in each. Returns whether the collection list was refreshed.
+    pub(crate) fn show_collections(&mut self, db: Option<&osudb::OsuDb>) -> bool {
         let now = unix_now();
-        if let Some(db) = db
-            && store::with(|s| collections::mirror_osu(s, db, now)) == Some(true)
-        {
+        let mirrored =
+            db.is_some_and(|db| store::with(|s| collections::mirror_osu(s, db, now)) == Some(true));
+        if mirrored {
             eprintln!("collection.db: osu!'s collections brought in again");
+        }
+        if db.is_some() && !mirrored && self.collections_read {
+            return false;
         }
         match store::with(|s| s.collections()) {
             Some(all) => {
@@ -48,11 +51,18 @@ impl State {
                 .filter(|c| !c.maps.is_empty())
                 .count()
         );
+        true
     }
 
     /// Song select's list of `self.collections`: the player's own, then osu!'s with maps here.
     /// The one shown stays shown.
     pub(crate) fn list_collections(&mut self) {
+        if self.collections.is_empty() {
+            self.select.collections.clear();
+            self.select.can_export = false;
+            self.select.collection = None;
+            return;
+        }
         // The one shown, else the one kept from the last run (osu!'s can come later).
         let shown = self
             .select
@@ -70,7 +80,7 @@ impl State {
         if moved {
             self.keep_own_collections();
         }
-        let found = collections::find(&self.collections, &self.library);
+        let found = collections::find_with(&self.collections, &finder);
         self.select.collections = self
             .collections
             .iter()

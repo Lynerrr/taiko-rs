@@ -411,6 +411,7 @@ impl Screen for PlayScreen {
     }
 
     fn draw(&mut self, state: &mut State, canvas: &mut Canvas, frame: &Frame) -> Option<Scene> {
+        let area_backdrop = state.area_backdrop(state.bg_brightness > 0.0);
         let game = state.play.as_deref_mut()?;
         let done = game.update(frame.now, sound(&state.audio), state.play_offset);
         if (state.auto || game.mods().has(mods::Mod::Autoplay)) && game.replay().is_none() {
@@ -458,7 +459,7 @@ impl Screen for PlayScreen {
             &mut state.frame_clip,
             &state.grip,
             &state.hover,
-            state.bg_brightness > 0.0,
+            area_backdrop,
             |c| {
                 game.draw_playfield(c, game.scroll_speed());
             },

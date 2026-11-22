@@ -193,6 +193,7 @@ impl Screen for MpPlay {
     }
 
     fn draw(&mut self, state: &mut State, canvas: &mut Canvas, frame: &Frame) -> Option<Scene> {
+        let area_backdrop = state.area_backdrop(state.bg_brightness > 0.0);
         let game = state.play.as_deref_mut()?;
         let (now, hidden, visual_offset) = (frame.now, frame.hidden, frame.visual_offset);
         let mut next = None;
@@ -224,7 +225,7 @@ impl Screen for MpPlay {
             &mut state.frame_clip,
             &state.grip,
             &state.hover,
-            state.bg_brightness > 0.0,
+            area_backdrop,
             |c| {
                 game.draw_playfield(c, game.scroll_speed());
             },

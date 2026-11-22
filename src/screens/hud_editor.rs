@@ -113,7 +113,7 @@ impl Screen for HudEdit {
             &mut state.frame_clip,
             &state.grip,
             &state.hover,
-            false,
+            layout::AreaBackdrop::CoverBg,
             game::draw_preview,
         );
         let sample = state

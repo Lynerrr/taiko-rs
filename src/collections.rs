@@ -136,9 +136,9 @@ pub struct Finder {
 impl Finder {
     pub fn new(library: &[Entry]) -> Finder {
         let mut f = Finder {
-            by_file: HashMap::new(),
-            by_id: HashMap::new(),
-            by_version: HashMap::new(),
+            by_file: HashMap::with_capacity(library.len()),
+            by_id: HashMap::with_capacity(library.len()),
+            by_version: HashMap::with_capacity(library.len()),
         };
         for (i, e) in library.iter().enumerate() {
             let folder = e.path.parent().and_then(|p| p.file_name());
@@ -187,8 +187,14 @@ impl Finder {
 }
 
 /// Finds each collection's maps in `library` (see `Finder`).
+#[cfg(test)]
 pub fn find(collections: &[Collection], library: &[Entry]) -> Vec<Found> {
     let finder = Finder::new(library);
+    find_with(collections, &finder)
+}
+
+/// Finds each collection's maps using an already-built `Finder`.
+pub fn find_with(collections: &[Collection], finder: &Finder) -> Vec<Found> {
     collections
         .iter()
         .map(|c| {

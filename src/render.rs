@@ -448,6 +448,7 @@ pub struct Renderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
+    opaque_pipeline: wgpu::RenderPipeline,
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     /// The shapes' bind group: globals, then the skin atlas (its UV rects, texture and sampler).
@@ -468,6 +469,7 @@ pub struct Renderer {
     capacity: usize,
     supported_modes: Vec<wgpu::PresentMode>,
     capture_pipeline: wgpu::RenderPipeline,
+    capture_opaque_pipeline: wgpu::RenderPipeline,
     /// Map background: drawn as a full-screen "cover" image under the shapes.
     /// Indexed [capture][opaque]: an opaque layer is drawn without blending, so the GPU doesn't
     /// read back the pixels under it.
@@ -805,6 +807,7 @@ struct Target<'a> {
     size: (u32, u32),
     clips: &'a [(std::ops::Range<usize>, [u32; 4])],
     hole: Option<[u32; 4]>,
+    opaque_shape: Option<u32>,
     /// Shapes drawn through the blur (`Canvas::blur_since`, already in `BlurFx`): the blurred
     /// image goes in their place among the others.
     blur: Option<std::ops::Range<u32>>,
@@ -1011,17 +1014,28 @@ fn to_rgb(y: f32, cbcr: vec2<f32>) -> vec3<f32> {
 @fragment
 fn fs(i: V) -> @location(0) vec4<f32> {
     // params: brightness, opacity (for cross-fading into a new background), how far into its
-    // blurred copy (the idle screen).
-    // Most of the time (a song, song select) nothing is blurred: the blurred copy's two reads are
-    // skipped then, and the picture (the whole screen, every frame) costs about half as much.
+    // blurred copy (song select's main look and the idle screen).
+    // In a song (z == 0) only the sharp planes are read; in song select and idle (z >= 1) only
+    // the small blurred planes are read; only while fading between them are both read.
     // The image has no mipmaps, so level 0 is what `textureSample` read too.
-    var rgb = to_rgb(textureSampleLevel(luma, samp, i.uv, 0.0).r, textureSampleLevel(chroma, samp, i.uv, 0.0).rg);
-    if bg.params.z > 0.0 {
-        let soft = to_rgb(
+    var rgb: vec3<f32>;
+    if bg.params.z >= 1.0 {
+        rgb = to_rgb(
             textureSampleLevel(luma_blur, samp, i.uv, 0.0).r,
             textureSampleLevel(chroma_blur, samp, i.uv, 0.0).rg,
         );
-        rgb = mix(rgb, soft, bg.params.z);
+    } else {
+        rgb = to_rgb(
+            textureSampleLevel(luma, samp, i.uv, 0.0).r,
+            textureSampleLevel(chroma, samp, i.uv, 0.0).rg,
+        );
+        if bg.params.z > 0.0 {
+            let soft = to_rgb(
+                textureSampleLevel(luma_blur, samp, i.uv, 0.0).r,
+                textureSampleLevel(chroma_blur, samp, i.uv, 0.0).rg,
+            );
+            rgb = mix(rgb, soft, bg.params.z);
+        }
     }
     return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * bg.params.x, bg.params.y);
 }
@@ -1234,7 +1248,8 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     let corner = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u)) * 2.0 - 1.0;
     // Everything below is in physical pixels so anti-aliasing is exactly one pixel wide.
     let half_px = inst.half * g.px_per_unit;
-    let pad = 1.5 + max(inst.params.z, 0.0) * g.px_per_unit;
+    let has_glow = inst.params.w >= -0.5 && inst.params.w <= 9.5;
+    let pad = 1.5 + select(0.0, max(inst.params.z, 0.0) * g.px_per_unit, has_glow);
     let local = corner * (half_px + vec2<f32>(pad));
     let center_px = inst.center * g.px_per_unit + g.origin;
     // Rotated shapes turn their quad; the fragment works in the shape's own (unrotated) frame.
@@ -1277,6 +1292,16 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 fn shade(in: VOut) -> vec4<f32> {
     if (in.params.w < -99999.5) {
         // A card's picture (premultiplied): its strip stretched over the quad, tinted by fill.
+        // Skip sampling the large card atlas across the faded-out left portion.
+        let across = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
+        var come = 1.0;
+        if (in.border.w > 0.0) {
+            if (across <= in.border.z) {
+                return vec4<f32>(0.0);
+            }
+            let f = clamp((across - in.border.z) / max(in.border.w - in.border.z, 1e-4), 0.0, 1.0);
+            come = f * f * (3.0 - 2.0 * f);
+        }
         let slot = u32(-in.params.w - 99999.5);
         let per = CARD_SIDE_Xu / CARD_CELL_Xu;
         let cell = vec2<f32>(f32(slot % per), f32(slot / per));
@@ -1290,17 +1315,9 @@ fn shade(in: VOut) -> vec4<f32> {
         let side = vec2<f32>(f32(CARD_SIDE_X), f32(CARD_SIDE_Y));
         var t = textureSampleLevel(cards, samp, (cell + uv) * size / side, 0.0);
         // Its colour going to grey across it (`border`: how grey at the left and right edges).
-        let across = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
         let grey = mix(in.border.x, in.border.y, across);
         let luma = dot(t.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
         t = vec4<f32>(mix(t.rgb, vec3<f32>(luma), grey), t.a);
-        // Its alpha coming in across it, eased (`border.zw`: from where to where of its width;
-        // all of it shown when the second is 0): no edge where it starts.
-        var come = 1.0;
-        if (in.border.w > 0.0) {
-            let f = clamp((across - in.border.z) / max(in.border.w - in.border.z, 1e-4), 0.0, 1.0);
-            come = f * f * (3.0 - 2.0 * f);
-        }
         let r = min(in.params.x, min(in.half.x, in.half.y));
         let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
         return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover * come;
@@ -1316,10 +1333,16 @@ fn shade(in: VOut) -> vec4<f32> {
         var cover = 1.0;
         if (in.params.y > 0.0) {
             // `Canvas::picture_cover_round_top`: the rect it covers is .yz half, its top
-            // corners .x round.
+            // corners .x round; when `border.y > 0`, fades out downwards from `border.x` to
+            // `border.y` of its height (eased).
             let b = vec2<f32>(in.params.y, in.params.z);
             let r = select(0.0, min(in.params.x, min(b.x, b.y)), in.local.y < 0.0);
             cover = clamp(0.5 - sd_round_box(in.local, b, r), 0.0, 1.0);
+            if (in.border.y > 0.0) {
+                let down = clamp(in.local.y / (2.0 * b.y) + 0.5, 0.0, 1.0);
+                let t = clamp((down - in.border.x) / max(in.border.y - in.border.x, 1e-4), 0.0, 1.0);
+                cover *= 1.0 - t * t * (3.0 - 2.0 * t);
+            }
         }
         return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover;
     }
@@ -1400,10 +1423,19 @@ fn shade(in: VOut) -> vec4<f32> {
             let c = mix(in.fill, in.border, u);
             color = vec4<f32>(c.rgb, c.a * coverage);
         } else if (in.params.w > 3.5 && in.params.w < 4.5) {
-            // `Canvas::shade_eased`: as across, eased in and out.
+            // `Canvas::shade_eased`: as across, eased in and out; with `params.y > 0`
+            // (`shade_eased_fade_down`), also fades out downwards over its bottom `params.y`
+            // pixels.
             let u = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
             let c = mix(in.fill, in.border, smoothstep(0.0, 1.0, u));
-            color = vec4<f32>(c.rgb, c.a * coverage);
+            var vfade = 1.0;
+            if (in.params.y > 0.0) {
+                let whole = 1.0 - in.params.y / max(2.0 * in.half.y, 1e-4);
+                let down = clamp(in.local.y / (2.0 * in.half.y) + 0.5, 0.0, 1.0);
+                let t = clamp((down - whole) / max(1.0 - whole, 1e-4), 0.0, 1.0);
+                vfade = 1.0 - t * t * (3.0 - 2.0 * t);
+            }
+            color = vec4<f32>(c.rgb, c.a * coverage * vfade);
         } else {
             let bw = in.params.y;
             let inner = clamp(0.5 - (d + bw), 0.0, 1.0);
@@ -1669,7 +1701,7 @@ impl Renderer {
             immediate_size: 0,
         });
         let attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32];
-        let make_pipeline = |format: wgpu::TextureFormat| {
+        let make_pipeline = |format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("shapes"),
                 layout: Some(&layout),
@@ -1695,7 +1727,7 @@ impl Renderer {
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -1703,9 +1735,14 @@ impl Renderer {
                 cache: None,
             })
         };
-        let pipeline = make_pipeline(format);
+        let pipeline = make_pipeline(format, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING));
+        let opaque_pipeline = make_pipeline(format, None);
         // Screenshots render into an offscreen target, independent of what the compositor allows.
-        let capture_pipeline = make_pipeline(wgpu::TextureFormat::Rgba8Unorm);
+        let capture_pipeline = make_pipeline(
+            wgpu::TextureFormat::Rgba8Unorm,
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        );
+        let capture_opaque_pipeline = make_pipeline(wgpu::TextureFormat::Rgba8Unorm, None);
         // Background pipelines (one per target format, like the shape pipelines).
         let bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("background"),
@@ -2007,6 +2044,7 @@ impl Renderer {
             queue,
             config,
             pipeline,
+            opaque_pipeline,
             globals,
             bind_group,
             shape_layout: bgl,
@@ -2023,6 +2061,7 @@ impl Renderer {
             capacity,
             supported_modes: caps.present_modes,
             capture_pipeline,
+            capture_opaque_pipeline,
             bg_pipelines,
             disc_pipelines,
             disc: None,
@@ -2633,7 +2672,7 @@ impl Renderer {
         clear: [f64; 3],
         capture: bool,
         clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
-        opaque: Option<[f32; 4]>,
+        opaque: Option<(usize, [f32; 4])>,
     ) -> Option<(u32, u32, Vec<u8>)> {
         // What the shapes are drawn at: the game's size, or half of it to be scaled up after. Either
         // goes through an image of its own to get to its place on a black screen.
@@ -2735,7 +2774,7 @@ impl Renderer {
         }
         // The pixels wholly inside the opaque rect (its anti-aliased edge still shows what is
         // under it).
-        let hole = opaque.and_then(|[x, y, rw, rh]| {
+        let hole = opaque.and_then(|(_, [x, y, rw, rh])| {
             let (sw, sh) = (w as f32, h as f32);
             let (x0, y0) = ((ax + x * aw).ceil() + 1.0, (ay + y * ah).ceil() + 1.0);
             let (x1, y1) = (
@@ -2745,6 +2784,10 @@ impl Renderer {
             let (x0, y0, x1, y1) = (x0.max(0.0), y0.max(0.0), x1.min(sw), y1.min(sh));
             (x1 > x0 && y1 > y0).then_some([x0 as u32, y0 as u32, x1 as u32, y1 as u32])
         });
+        let opaque_shape = hole
+            .and(opaque)
+            .and_then(|(i, _)| u32::try_from(i).ok())
+            .filter(|&i| (i as usize) < shapes.len());
         if let Some(t) = &mut self.gpu_timer {
             t.begin(&self.device);
         }
@@ -2762,6 +2805,7 @@ impl Renderer {
             size: (w, h),
             clips: &clip,
             hole,
+            opaque_shape,
             blur: blur.map(|(r, _)| r),
         };
         match self.low.as_ref().filter(|_| through_image) {
@@ -2993,6 +3037,7 @@ impl Renderer {
                 size: (w, h),
                 clips: &clip,
                 hole: None,
+                opaque_shape: None,
                 blur: None,
             },
             None,
@@ -3381,7 +3426,7 @@ impl Renderer {
         if (count as u32) > at {
             runs.push((at..count as u32, None));
         }
-        let draw =
+        let draw_plain =
             |pass: &mut wgpu::RenderPass<'_>, span: std::ops::Range<u32>, cut: Option<[u32; 4]>| {
                 if span.start >= span.end {
                     return;
@@ -3394,6 +3439,48 @@ impl Renderer {
                     pass.set_scissor_rect(0, 0, size.0, size.1);
                 }
             };
+        let draw = |pass: &mut wgpu::RenderPass<'_>,
+                    span: std::ops::Range<u32>,
+                    cut: Option<[u32; 4]>| {
+            if span.start >= span.end {
+                return;
+            }
+            if let (Some(oi), Some([hx0, hy0, hx1, hy1])) = (target.opaque_shape, target.hole)
+                && span.contains(&oi)
+            {
+                let [ox, oy, ow, oh] = cut.unwrap_or([0, 0, size.0, size.1]);
+                let (ox1, oy1) = (ox + ow, oy + oh);
+                let (ix0, iy0, ix1, iy1) = (hx0.max(ox), hy0.max(oy), hx1.min(ox1), hy1.min(oy1));
+                if ix1 > ix0 && iy1 > iy0 {
+                    draw_plain(pass, span.start..oi, cut);
+                    // Keep blending on the 1px anti-aliased edge bands around `hole`.
+                    for [bx, by, bw, bh] in [
+                        [ox, oy, ow, iy0 - oy],
+                        [ox, iy1, ow, oy1 - iy1],
+                        [ox, iy0, ix0 - ox, iy1 - iy0],
+                        [ix1, iy0, ox1 - ix1, iy1 - iy0],
+                    ] {
+                        if bw > 0 && bh > 0 {
+                            pass.set_scissor_rect(bx, by, bw, bh);
+                            pass.draw(0..4, oi..oi + 1);
+                        }
+                    }
+                    // Draw the opaque interior without framebuffer read-modify-write blending.
+                    pass.set_pipeline(if capture {
+                        &self.capture_opaque_pipeline
+                    } else {
+                        &self.opaque_pipeline
+                    });
+                    pass.set_scissor_rect(ix0, iy0, ix1 - ix0, iy1 - iy0);
+                    pass.draw(0..4, oi..oi + 1);
+                    shapes(pass);
+                    pass.set_scissor_rect(0, 0, size.0, size.1);
+                    draw_plain(pass, oi + 1..span.end, cut);
+                    return;
+                }
+            }
+            draw_plain(pass, span, cut);
+        };
         // The blurred shapes aren't drawn themselves: their blurred image goes where they start.
         let blur = target.blur.clone().zip(self.blur_fx.as_ref());
         let (from, to) = blur
@@ -4643,7 +4730,8 @@ impl<H> Canvas<H> {
     }
 
     /// `picture_cover_clipped` with the top corners of `rect` `radius` round (a banner at the
-    /// top of a rounded panel); its bottom is wherever `clip` cuts it.
+    /// top of a rounded panel); its bottom is wherever `clip` cuts it. When `fade_from` is
+    /// `Some(from)`, fades out downwards (eased) from `from` to the bottom of `rect`.
     pub fn picture_cover_round_top(
         &mut self,
         path: &std::path::Path,
@@ -4651,6 +4739,7 @@ impl<H> Canvas<H> {
         clip: [f32; 4],
         tint: [f32; 4],
         radius: f32,
+        fade_from: Option<f32>,
     ) -> bool {
         let start = self.shapes.len();
         let drawn = self.picture_cover_clipped(path, rect, clip, tint);
@@ -4658,6 +4747,9 @@ impl<H> Canvas<H> {
             sh.params[0] = radius;
             sh.params[1] = rect[2] / 2.0;
             sh.params[2] = rect[3] / 2.0;
+            if let Some(from) = fade_from {
+                sh.border = [from.clamp(0.0, 1.0), 1.0, 0.0, 0.0];
+            }
         }
         drawn
     }
@@ -4763,6 +4855,27 @@ impl<H> Canvas<H> {
             fill: left,
             border: right,
             params: [radius, 0.0, 0.0, SHADE_EASED],
+            angle: 0.0,
+        });
+    }
+
+    /// As `shade_eased`, also fading out downwards (eased) from `whole` (0 to 1 of `h`) to the
+    /// bottom edge, in one shape.
+    pub fn shade_eased_fade_down(
+        &mut self,
+        [x, y]: [f32; 2],
+        [w, h]: [f32; 2],
+        radius: f32,
+        left: [f32; 4],
+        right: [f32; 4],
+        whole: f32,
+    ) {
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [w / 2.0, h / 2.0],
+            fill: left,
+            border: right,
+            params: [radius, (1.0 - whole).clamp(0.0, 1.0) * h, 0.0, SHADE_EASED],
             angle: 0.0,
         });
     }
@@ -5086,9 +5199,10 @@ impl<H> Canvas<H> {
     pub fn fade_between(&mut self, start: usize, end: usize, alpha: f32, dim: f32) {
         let end = end.min(self.shapes.len());
         for sh in &mut self.shapes[start.min(end)..end] {
-            // A card's picture's `border` isn't a colour (how grey it goes, where it comes in).
-            let card = sh.params[3] < -CARD_BASE + 0.5;
-            let cols: &mut [&mut [f32; 4]] = if card {
+            // Map and card pictures store shader parameters in `border` (vertical fade range,
+            // greyness/arrival sweep) rather than a colour.
+            let data_border = sh.params[3] < -PICTURE_BASE + 0.5;
+            let cols: &mut [&mut [f32; 4]] = if data_border {
                 &mut [&mut sh.fill]
             } else {
                 &mut [&mut sh.fill, &mut sh.border]
@@ -5823,37 +5937,43 @@ mod tests {
 
     #[test]
     fn a_sharp_background_never_reads_its_blurred_copy() {
-        // The background covers the screen every frame: reading the blurred copy too, at no blur
-        // (a song, song select), doubled what it cost a weak GPU.
+        // The background covers the screen every frame: reading all four planes unconditionally
+        // doubled what it cost a weak GPU. Sharp frames (a song) read only the sharp planes, and
+        // fully blurred frames (song select's main look, idle) read only the small blurred planes.
         let module = naga::front::wgsl::parse_str(super::BG_SHADER).unwrap();
-        let blurred: Vec<_> = module
-            .global_variables
-            .iter()
-            .filter(|(_, g)| matches!(g.name.as_deref(), Some("luma_blur" | "chroma_blur")))
-            .map(|(h, _)| h)
-            .collect();
-        assert_eq!(blurred.len(), 2);
+        let find_globals = |names: &[&str]| -> Vec<_> {
+            module
+                .global_variables
+                .iter()
+                .filter(|(_, g)| g.name.as_deref().is_some_and(|n| names.contains(&n)))
+                .map(|(h, _)| h)
+                .collect()
+        };
+        let sharp = find_globals(&["luma", "chroma"]);
+        let blurred = find_globals(&["luma_blur", "chroma_blur"]);
+        assert_eq!((sharp.len(), blurred.len()), (2, 2));
         let fs = &module
             .entry_points
             .iter()
             .find(|e| e.name == "fs")
             .unwrap()
             .function;
-        // The expressions that read it, by index.
-        let reads: Vec<usize> = fs
-            .expressions
-            .iter()
-            .filter(|(_, e)| match e {
-                naga::Expression::ImageSample { image, .. } => matches!(
-                    fs.expressions[*image],
-                    naga::Expression::GlobalVariable(g) if blurred.contains(&g)
-                ),
-                _ => false,
-            })
-            .map(|(h, _)| h.index())
-            .collect();
-        // How many of them an `Emit` evaluates.
-        let evaluated = |s: &naga::Statement| match s {
+        let reads_in = |vars: &[_]| -> Vec<usize> {
+            fs.expressions
+                .iter()
+                .filter(|(_, e)| match e {
+                    naga::Expression::ImageSample { image, .. } => matches!(
+                        fs.expressions[*image],
+                        naga::Expression::GlobalVariable(g) if vars.contains(&g)
+                    ),
+                    _ => false,
+                })
+                .map(|(h, _)| h.index())
+                .collect()
+        };
+        let sharp_reads = reads_in(&sharp);
+        let blur_reads = reads_in(&blurred);
+        let evaluated = |reads: &[usize], s: &naga::Statement| match s {
             naga::Statement::Emit(range) => {
                 let r = range.index_range();
                 reads
@@ -5863,15 +5983,35 @@ mod tests {
             }
             _ => 0,
         };
-        let (mut always, mut sometimes) = (0, 0);
-        for statement in fs.body.iter() {
-            always += evaluated(statement);
-            if let naga::Statement::If { accept, .. } = statement {
-                sometimes += accept.iter().map(evaluated).sum::<usize>();
-            }
-        }
-        assert_eq!(always, 0, "the blurred copy is read only when blurring");
-        assert_eq!(sometimes, 2, "and then both its planes");
+        let shallow = |reads: &[usize], stmts: &[naga::Statement]| -> usize {
+            stmts.iter().map(|s| evaluated(reads, s)).sum()
+        };
+        // Nothing is read unconditionally at the function's top level.
+        assert_eq!(shallow(&sharp_reads, &fs.body), 0);
+        assert_eq!(shallow(&blur_reads, &fs.body), 0);
+        let (accept, reject) = fs
+            .body
+            .iter()
+            .find_map(|s| match s {
+                naga::Statement::If { accept, reject, .. } => Some((accept, reject)),
+                _ => None,
+            })
+            .expect("top-level blur check");
+        // Fully blurred (`z >= 1.0`): reads only the blurred copy, never the sharp one.
+        assert_eq!(shallow(&blur_reads, accept), 2);
+        assert_eq!(shallow(&sharp_reads, accept), 0);
+        // Sharp or blending (`else`): reads the sharp copy, and blurred only inside `z > 0.0`.
+        assert_eq!(shallow(&sharp_reads, reject), 2);
+        assert_eq!(shallow(&blur_reads, reject), 0);
+        let inner_accept = reject
+            .iter()
+            .find_map(|s| match s {
+                naga::Statement::If { accept, .. } => Some(accept),
+                _ => None,
+            })
+            .expect("inner partial-blur check");
+        assert_eq!(shallow(&blur_reads, inner_accept), 2);
+        assert_eq!(shallow(&sharp_reads, inner_accept), 0);
     }
 
     #[test]
