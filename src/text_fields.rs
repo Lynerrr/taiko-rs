@@ -235,6 +235,18 @@ impl State {
         {
             return false;
         }
+        // With nothing typed, Backspace in one skin part's list goes back to the parts.
+        if field == Field::FontSearch
+            && value.is_empty()
+            && code == KeyCode::Backspace
+            && self
+                .settings_ui
+                .choices
+                .as_ref()
+                .is_some_and(|c| matches!(c.item, Item::SkinPart(_)))
+        {
+            return false;
+        }
         // Friend-list actions stay available until a message is actually being edited.
         if field == Field::Social
             && value.is_empty()
