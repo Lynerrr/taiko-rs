@@ -2757,8 +2757,13 @@ const PLAY_FROM_ROOM: f32 = 22.0;
 /// Bare: the timeline's bars, a neutral ink (the accent is Play's and the selection's), kiai's in
 /// gold; how strong they are ahead of the playhead and behind it.
 const KIAI_GOLD: u32 = 0xFFD34D;
-const BARS_AHEAD: f32 = 0.35;
-const BARS_PLAYED: f32 = 0.8;
+const BARS_AHEAD: f32 = 0.24;
+const BARS_PLAYED: f32 = 0.6;
+/// Bare, the density graph's bins: how wide, the steps their heights go in, and how much
+/// stronger than their fill their top edge is.
+const BIN_W: f32 = 5.0;
+const BIN_STEP: f32 = 2.0;
+const BIN_CAP: f32 = 0.3;
 
 /// The details in song select's main menu look (`Preview::bare`): how tall the map picture's
 /// banner is and where the title starts on it (under the leaderboard button's row), the rows'
@@ -3091,10 +3096,18 @@ fn draw_graph(
         x_of(g.peaks_start),
         x_of(g.peaks_start + g.peaks.len() as f64 * g.section),
     );
-    let n = (((bx1 - bx0) / 2.5) as usize).max(1);
+    // Bare, wider bins side by side with no room between them, their heights in whole steps:
+    // a blocky stepped profile rather than a comb of thin bars.
+    let n = (((bx1 - bx0) / if boxed { 2.5 } else { BIN_W }) as usize).max(1);
     let bar_w = (bx1 - bx0) / n as f32;
+    let snap = crate::render::snap_to_grid;
+    let base = snap(y + h - 3.0);
     for (i, v) in g.bins(n).into_iter().enumerate() {
-        let bh = 2.0 + v * (h - 8.0);
+        let bh = if boxed {
+            2.0 + v * (h - 8.0)
+        } else {
+            ((2.0 + v * (h - 8.0)) / BIN_STEP).round().max(1.0) * BIN_STEP
+        };
         let mid = bx0 + (i as f32 + 0.5) * bar_w;
         let played = mid <= x_of(now);
         let colour = if boxed {
@@ -3109,21 +3122,35 @@ fn draw_graph(
             };
             rgba(ink, if played { BARS_PLAYED } else { BARS_AHEAD })
         };
-        // Bare, each bar's ends on whole pixels, so the bars are as wide as each other.
-        let (left, right) = if boxed {
-            (bx0 + i as f32 * bar_w, bx0 + (i as f32 + 1.0) * bar_w - 0.5)
-        } else {
-            let snap = crate::render::snap_to_grid;
-            (
-                snap(bx0 + i as f32 * bar_w),
-                snap(bx0 + (i as f32 + 1.0) * bar_w - 0.5),
-            )
-        };
-        c.rect(left, y + h - 3.0 - bh, (right - left).max(0.5), bh, colour);
+        if boxed {
+            let (left, right) = (bx0 + i as f32 * bar_w, bx0 + (i as f32 + 1.0) * bar_w - 0.5);
+            c.rect(left, y + h - 3.0 - bh, (right - left).max(0.5), bh, colour);
+            continue;
+        }
+        // Bare, each bin's ends on whole pixels, the next one starting where it ends: no gap.
+        let (left, right) = (
+            snap(bx0 + i as f32 * bar_w),
+            snap(bx0 + (i as f32 + 1.0) * bar_w),
+        );
+        let top = snap(base - bh);
+        c.rect(left, top, (right - left).max(0.5), base - top, colour);
+        // A crisp top edge, a step stronger than the fill.
+        let cap = [
+            colour[0],
+            colour[1],
+            colour[2],
+            (colour[3] + BIN_CAP).min(1.0),
+        ];
+        c.rect(
+            left,
+            top,
+            (right - left).max(0.5),
+            crate::style::tone::LINE,
+            cap,
+        );
     }
     // Bare, the bars stand on a line of the panels' edge.
     if !boxed {
-        let base = crate::render::snap_to_grid(y + h - 3.0);
         let edge = rgba(crate::style::tone::EDGE, 1.0);
         c.rect(x, base, w, crate::style::tone::LINE, edge);
     }
