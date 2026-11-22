@@ -558,7 +558,8 @@ pub(super) fn render_loop(
                         (sh.half[0] * ppu + pad) * 2.0 * (sh.half[1] * ppu + pad) * 2.0
                     };
                     let screen = (renderer.size().0 * renderer.size().1).max(1) as f32;
-                    let cover: f32 = canvas.shapes.iter().map(area).sum::<f32>() / screen;
+                    let drawn = renderer.as_drawn(&canvas.shapes);
+                    let cover: f32 = drawn.iter().map(area).sum::<f32>() / screen;
                     eprintln!(
                         "profile: {:.0} fps  acquire {:.2} ms (max {:.2})  build {:.2} ms  submit {:.2} ms  shapes {}{gpu}  cover {cover:.2}",
                         n / prof_start.elapsed().as_secs_f64(),
@@ -569,7 +570,7 @@ pub(super) fn render_loop(
                         prof_shapes
                     );
                     if std::env::var("TAIKO_PROFILE").is_ok_and(|v| v == "shapes") {
-                        let mut big: Vec<&render::Shape> = canvas.shapes.iter().collect();
+                        let mut big: Vec<&render::Shape> = drawn.iter().collect();
                         big.sort_by(|a, b| area(b).total_cmp(&area(a)));
                         for sh in big.iter().take(12) {
                             eprintln!(

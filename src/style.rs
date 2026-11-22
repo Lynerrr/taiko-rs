@@ -92,22 +92,13 @@ pub fn ground(c: &mut Canvas, alpha: f32) {
         return;
     }
     let (w, h) = (c.width, render::VIRTUAL_HEIGHT);
-    c.rect(0.0, 0.0, w, h, rgba(GROUND, GROUND_ALPHA * alpha));
-    let edge = rgba(GROUND, GROUND_VIGNETTE * alpha);
-    let clear = rgba(GROUND, 0.0);
-    let side = w * 0.2;
-    c.shade_eased([0.0, 0.0], [side, h], 0.0, edge, clear);
-    c.shade_eased([w - side, 0.0], [side, h], 0.0, clear, edge);
-    // Top and bottom in bands, eased out.
-    const BANDS: usize = 8;
-    let band = h * 0.16 / BANDS as f32;
-    for k in 0..BANDS {
-        let f = 1.0 - (k as f32 + 0.5) / BANDS as f32;
-        let a = GROUND_VIGNETTE * alpha * f * f * (3.0 - 2.0 * f) / 2.0;
-        let col = rgba(GROUND, a);
-        c.rect(0.0, k as f32 * band, w, band, col);
-        c.rect(0.0, h - (k + 1) as f32 * band, w, band, col);
-    }
+    // The tint, a shade in from each side, and the top and bottom in eased bands: one shape.
+    c.ground_shade(
+        [0.0, 0.0],
+        [w, h],
+        rgba(GROUND, GROUND_ALPHA * alpha),
+        GROUND_VIGNETTE * alpha,
+    );
 }
 
 /// A surface's fill (the back one is clear).
