@@ -86,6 +86,8 @@ pub enum KeyResult {
 pub enum Field {
     Bpm,
     Sv,
+    /// A factor every selected green line's speed is multiplied by (several lines selected).
+    SvTimes,
     Volume,
     Meter,
     Time,
@@ -748,7 +750,7 @@ pub struct View {
         crate::editor::resnap::SnapPlan,
     )>,
     /// Timing lines selected besides `sel_line` (see `selected_lines`).
-    sel_extra: std::collections::BTreeSet<u64>,
+    pub(crate) sel_extra: std::collections::BTreeSet<u64>,
     /// What the selected lines were (id, time, velocity) when a drag of them began.
     line_origin: Vec<(u64, f64, f64)>,
     /// The graph's range, held still while its dots are dragged.
@@ -3422,6 +3424,11 @@ impl View {
         if matches!(f, Field::FxText | Field::Say(_) | Field::GroupName(_)) {
             return;
         }
+        // - / + take a tenth off or add one (Shift: halve, double).
+        if f == Field::SvTimes {
+            let up = if keys.shift { 2.0 } else { 1.1 };
+            return self.multiply_sv(if dir > 0.0 { up } else { 1.0 / up });
+        }
         let ids = self.edit_targets(f);
         let k = if keys.shift {
             10.0
@@ -3455,7 +3462,8 @@ impl View {
                 | Field::Meta(_)
                 | Field::Say(_)
                 | Field::Playhead
-                | Field::GroupName(_) => {}
+                | Field::GroupName(_)
+                | Field::SvTimes => {}
             },
             false,
         );
@@ -3572,6 +3580,14 @@ impl View {
             }
             return;
         }
+        if f == Field::SvTimes {
+            match text.trim().parse::<f64>() {
+                Ok(v) if v.is_finite() && v > 0.0 => self.multiply_sv(v),
+                Ok(_) => self.status = "the multiplier has to be above 0".into(),
+                Err(_) => self.status = "not a number".into(),
+            }
+            return;
+        }
         let Ok(v) = text.trim().parse::<f64>() else {
             self.status = "not a number".into();
             return;
@@ -3600,7 +3616,8 @@ impl View {
                 | Field::Meta(_)
                 | Field::Say(_)
                 | Field::Playhead
-                | Field::GroupName(_) => {}
+                | Field::GroupName(_)
+                | Field::SvTimes => {}
             },
             false,
         );
