@@ -2424,6 +2424,47 @@ fn the_stats_are_one_dense_line_under_the_difficulty() {
 }
 
 #[test]
+fn the_stats_the_don_and_kat_bar_and_the_pp_have_air_between_them_their_text_kept_small() {
+    let (mut s, _songs, mut now) = menu_look("select-look-stat-air");
+    let c = settled(&mut s, &mut now);
+    let [head, _, body] = sections(&c, &s)[..] else {
+        panic!("three sections")
+    };
+    let boxes = text_boxes(&c);
+    let at = |want: &dyn Fn(&str) -> bool, what: &str| {
+        boxes
+            .iter()
+            .find(|(t, r)| want(t) && inside([r[0], r[1]], head, 0.0))
+            .map(|(_, r)| *r)
+            .unwrap_or_else(|| panic!("{what} in the details"))
+    };
+    let od = at(&|t| t == "OD", "OD");
+    let don = at(&|t| t.ends_with(" DON"), "the Don count");
+    let ss = at(&|t| t == "SS", "the SS pp");
+    // Room between the three lines (the stats, Don and Kat's bar, the pp), not one cramped
+    // block under the banner.
+    assert!(
+        don[1] - (od[1] + od[3]) >= 15.0,
+        "the stats over the bar: {od:?} {don:?}"
+    );
+    assert!(
+        ss[1] - (don[1] + don[3]) >= 19.0,
+        "the bar over the pp: {don:?} {ss:?}"
+    );
+    assert!(
+        ss[1] + ss[3] + 8.0 <= head[1] + head[3],
+        "room under the pp: {ss:?} in {head:?}"
+    );
+    // Still small text, not tiles.
+    assert!(
+        [od, don, ss].iter().all(|r| r[3] < 10.0),
+        "{od:?} {don:?} {ss:?}"
+    );
+    // Taken from the body under the tabs: still room for the lane and the board.
+    assert!(body[3] > 280.0, "the body under the tabs: {body:?}");
+}
+
+#[test]
 fn the_plays_are_on_the_leaderboard_section_under_the_details() {
     let (mut s, _songs, mut now) = menu_look("select-look-board-rows");
     for (k, name) in ["Ann", "Bo"].iter().enumerate() {

@@ -1316,8 +1316,8 @@ impl Preview {
 
         if split {
             self.draw_compact_row(c, e, [x, cy, w], shown);
-            // The stats right under the banner.
-            cy = y + banner_h + BLOCK_GAP;
+            // The stats under the banner, a little room over them.
+            cy = y + banner_h + COMPACT_TOP;
         } else {
             // The mapper's line: the EPIC pill (bumping on the beat) or the status at its right,
             // the heart left of that.
@@ -1410,8 +1410,12 @@ impl Preview {
                 rgba(crate::style::tone::EDGE, 1.0),
             );
         };
+        // Compact, the stats, Don and Kat's bar and the pp have more room between them (their
+        // text kept small), each line in the middle of its gap.
+        let gap = if split { COMPACT_GAP } else { BLOCK_GAP };
         let part = c.shapes.len();
-        divider(c, cy - BLOCK_GAP / 2.0);
+        let above = if split { COMPACT_TOP } else { BLOCK_GAP };
+        divider(c, cy - above / 2.0);
         self.enter(c, part, 130.0);
 
         // The stats as tiles: a caption over its value. OD is known at once, the rest when the
@@ -1489,7 +1493,7 @@ impl Preview {
                 }
                 self.enter(c, part, 130.0 + 25.0 * k as f32);
             }
-            cy += line_h + BLOCK_GAP;
+            cy += line_h + gap;
         } else {
             let n = tiles.len() as f32;
             let tile_h = tile_h();
@@ -1598,14 +1602,14 @@ impl Preview {
             }
         }
         if bar_shown {
-            cy += BAR_H + BLOCK_GAP;
+            cy += BAR_H + gap;
         }
         self.enter(c, part, 230.0);
 
         // What a full combo would give, on one button that opens the pp simulator in its place,
         // counting from the last song's; a skeleton while the map is being read.
         let part = c.shapes.len();
-        divider(c, cy - BLOCK_GAP / 2.0);
+        divider(c, cy - gap / 2.0);
         let pp_now = follow_pp(&mut self.pp_shown, self.potential, c.dt_ms);
         let row_w = iw;
         let ty = cy + (PP_H - Canvas::text_height(text::BODY)) / 2.0;
@@ -2708,7 +2712,7 @@ const STAT_GAP: f32 = 10.0;
 const SPLIT_LANE_FILL: f32 = 0.8;
 /// Split, the density graph under the lane: its share of the section's room, between the bare
 /// timeline's height and this much (tall enough to read its dense runs and peaks at a glance).
-const SPLIT_GRAPH_SHARE: f32 = 0.3;
+const SPLIT_GRAPH_SHARE: f32 = 0.26;
 const SPLIT_GRAPH_MAX: f32 = 84.0;
 /// Split, a .tko map whose playfield reaches past the lane: it is fitted whole into the box, its
 /// notes never drawn smaller than this share of a plain map's (what's still out of reach then is
@@ -3009,11 +3013,22 @@ impl Bare {
 /// line, the difficulty and its mapper on one row at its foot), the stats on one line, Don and
 /// Kat's bar (or the pp simulator's play in its place) and the pp, with no room left under it.
 pub fn compact_head() -> f32 {
-    SPLIT_BANNER_H + BLOCK_GAP + stat_line_h() + BLOCK_GAP + BAR_H + BLOCK_GAP + PP_H + COMPACT_FOOT
+    SPLIT_BANNER_H
+        + COMPACT_TOP
+        + stat_line_h()
+        + COMPACT_GAP
+        + BAR_H
+        + COMPACT_GAP
+        + PP_H
+        + COMPACT_FOOT
 }
 
-/// Under the compact details' pp row, before the section's end: a little room, no empty band.
-const COMPACT_FOOT: f32 = 4.0;
+/// The compact details' rows under the banner: the room over the stats' line, between it, Don
+/// and Kat's bar and the pp row (air for the three small lines to read apart, rather than
+/// bigger text), and under the pp before the section's end (a little room, no empty band).
+const COMPACT_TOP: f32 = 12.0;
+const COMPACT_GAP: f32 = 14.0;
+const COMPACT_FOOT: f32 = 6.0;
 
 /// The details split into sections of their own (song select's right column in the main menu's
 /// look): the details `head` tall at the top, the autoplay's lane in a box of its own lower down.
