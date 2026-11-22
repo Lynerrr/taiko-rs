@@ -192,6 +192,8 @@ pub enum Hit {
     Overlay,
     /// The leaderboard's tabs: local (false) or online (true).
     BoardTab(bool),
+    /// Song select's right column: the tab with the preview.
+    PreviewTab,
     /// Opens the selected map's page in the browser.
     BoardWebsite,
     /// Lobby: give the host role to this player.

@@ -235,13 +235,14 @@ pub(crate) enum BoardShown<'a> {
 
 /// The embedded leaderboard's parts (in the interface's own units): its tabs' row, a row, and
 /// the pinned best's row; the room round them.
-pub(crate) const SECTION_HEAD: f32 = 26.0;
 pub(crate) const SECTION_ROW: f32 = 34.0;
+/// The right column's row of tabs over its body (`draw_column_tabs`): how tall it is.
+pub(crate) const COLUMN_TAB_H: f32 = 24.0;
 const SECTION_PAD: f32 = 8.0;
 /// How far in from the section's sides its tabs and rows are: as far as the details and the
 /// preview's lane above and under it.
 const SECTION_INSET: f32 = 14.0;
-/// Between the Local and Online tabs.
+/// Between two of the column's tabs.
 const SECTION_TAB_GAP: f32 = 8.0;
 /// The gap under a row (in `SECTION_ROW`).
 const SECTION_ROW_GAP: f32 = 3.0;
@@ -249,7 +250,7 @@ const SECTION_ROW_GAP: f32 = 3.0;
 /// Where the embedded leaderboard in `[x, y, w, h]` lists its rows (`best`: with the player's
 /// best pinned under them), and how many fit.
 pub(crate) fn section_rows([x, y, w, h]: [f32; 4], best: bool) -> ([f32; 4], usize) {
-    let top = y + SECTION_PAD + SECTION_HEAD;
+    let top = y + SECTION_PAD;
     let pinned = if best { SECTION_ROW + 6.0 } else { 0.0 };
     let room = (y + h - SECTION_PAD - pinned - top).max(0.0);
     let fits = ((room + SECTION_ROW_GAP) / SECTION_ROW).floor() as usize;
@@ -262,30 +263,47 @@ pub(crate) fn section_rows([x, y, w, h]: [f32; 4], best: bool) -> ([f32; 4], usi
     (rows, fits)
 }
 
-/// Song select's leaderboard as a section of its own in `rect` (the main menu's look): the
-/// Local and Online tabs and the way to the map's website on top, the plays as dense two-line
-/// rows (the place, the player's picture and name, the mods and the pp; under it accuracy,
-/// combo, misses, the speed and when), a scroll bar, and the player's best pinned at the bottom.
-/// `video`: the local board, whose rows can be exported (under the pointer).
-pub(crate) fn draw_board_section(
+/// What the right column's body shows (the main menu's look): the map's preview, or its local or
+/// online leaderboard. One at a time, picked on the row of tabs over it (`draw_column_tabs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ColumnTab {
+    Preview,
+    Local,
+    Online,
+}
+
+/// The right column's row of tabs in `[x, y, w, h]`: Preview, Local and Online as words, the one
+/// shown bright with a bar of the accent under it, the others muted (brighter under the pointer);
+/// with Relax on and a board shown, a RELAX badge after them (its scores count apart); the way to
+/// the map's website at the right.
+pub(crate) fn draw_column_tabs(
     c: &mut Canvas,
-    rect: [f32; 4],
-    online: bool,
+    [x, y, w, h]: [f32; 4],
+    tab: ColumnTab,
     relax: bool,
-    shown: &BoardShown,
 ) {
-    use crate::style::{Surface, ink, radius, surface};
-    let [x, y, w, h] = rect;
-    // On the right column's panel (no box of its own). The tabs: words, the one shown bright
-    // with a bar of the accent under it, the other muted (brighter under the pointer).
-    let (ty, th) = (y + SECTION_PAD, SECTION_HEAD - 8.0);
+    use crate::style::{ink, radius};
+    let (ty, th) = (y + (h - 18.0) / 2.0, 18.0);
     let mut tx = x + SECTION_INSET;
-    for (label, on) in [
-        (tr!("Local", "ローカル", "Локально"), false),
-        (tr!("Online", "オンライン", "Онлайн"), true),
+    for (label, which, hit) in [
+        (
+            tr!("Preview", "プレビュー", "Превью"),
+            ColumnTab::Preview,
+            hit::Hit::PreviewTab,
+        ),
+        (
+            tr!("Local", "ローカル", "Локально"),
+            ColumnTab::Local,
+            hit::Hit::BoardTab(false),
+        ),
+        (
+            tr!("Online", "オンライン", "Онлайн"),
+            ColumnTab::Online,
+            hit::Hit::BoardTab(true),
+        ),
     ] {
         let tw = Canvas::text_width(7.0, label) + 20.0;
-        let lit = on == online;
+        let lit = which == tab;
         let hover = c.hovered(tx, ty, tw, th);
         if lit {
             c.rect(
@@ -310,11 +328,11 @@ pub(crate) fn draw_board_section(
             rgba(col, 1.0),
             label,
         );
-        c.hit(tx, ty, tw, th, hit::Hit::BoardTab(on));
+        c.hit(tx, ty, tw, th, hit);
         tx += tw + SECTION_TAB_GAP;
     }
-    // With Relax on, these are its scores, which count apart.
-    if relax {
+    // With Relax on, the boards are its scores, which count apart.
+    if relax && tab != ColumnTab::Preview {
         let label = "RELAX";
         let tw = Canvas::text_width(6.0, label) + 12.0;
         crate::style::badge(c, [tx + 4.0, ty + 2.0, tw, th - 4.0], 0xFFD34D);
@@ -341,6 +359,16 @@ pub(crate) fn draw_board_section(
         label,
     );
     c.hit(wx, ty, ww, th, hit::Hit::BoardWebsite);
+}
+
+/// Song select's leaderboard as the right column's body in `rect` (the main menu's look, its
+/// tabs over it: `draw_column_tabs`): the plays as dense two-line
+/// rows (the place, the player's picture and name, the mods and the pp; under it accuracy,
+/// combo, misses, the speed and when), a scroll bar, and the player's best pinned at the bottom.
+/// `video`: the local board, whose rows can be exported (under the pointer).
+pub(crate) fn draw_board_section(c: &mut Canvas, rect: [f32; 4], online: bool, shown: &BoardShown) {
+    use crate::style::{Surface, ink, radius, surface};
+    let [x, y, w, h] = rect;
     match shown {
         BoardShown::Rows {
             rows,
@@ -412,10 +440,7 @@ pub(crate) fn draw_board_section(
         BoardShown::Note(note) => section_note(c, rect, note),
         BoardShown::NoLocal => {
             // Calm: a line saying so, and the way to the online board.
-            let (_, mid) = (
-                0.0,
-                y + SECTION_PAD + SECTION_HEAD + (h - SECTION_HEAD) / 2.0 - 16.0,
-            );
+            let mid = y + h / 2.0 - 16.0;
             let none = tr!(
                 "No plays on this map yet",
                 "このマップのプレイはまだありません",
@@ -461,7 +486,7 @@ pub(crate) fn draw_board_section(
 fn section_note(c: &mut Canvas, [x, y, w, h]: [f32; 4], note: &str) {
     let lines = mobile::wrap(7.0, w - 32.0, note, 3);
     let step = Canvas::text_height(7.0) + 4.0;
-    let top = y + SECTION_PAD + SECTION_HEAD + (h - SECTION_HEAD - lines.len() as f32 * step) / 2.0;
+    let top = y + (h - lines.len() as f32 * step) / 2.0;
     for (k, line) in lines.iter().enumerate() {
         let ink = rgba(crate::style::ink::CAPTION, 1.0);
         c.text_centered(x + w / 2.0, top + k as f32 * step, 7.0, ink, line);

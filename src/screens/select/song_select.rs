@@ -435,13 +435,99 @@ const ACTIONS_H: f32 = 50.0;
 const PLAY_SHARE: f32 = 0.16;
 /// How long the die rolls when Random is pressed, a face to each `style::DICE_ROLL` step.
 pub(crate) const DICE_ROLL_MS: f32 = 300.0;
-/// The mods' badges on the lane of actions: their height (`multiplayer::mod_badges`), and the
-/// least room they are drawn in.
-const MOD_BADGE_H: f32 = 11.0;
+/// The mods' badges on the lane of actions (`action_mod_badges`): their height, the least room
+/// they are drawn in, how many show at most (the rest counted on a `+N` chip), the room between
+/// two of them, and between the group and Random and Play.
+const MOD_BADGE_H: f32 = 13.0;
 const MOD_BADGES_MIN: f32 = 24.0;
+const MOD_BADGES_SHOWN: usize = 4;
+const MOD_BADGE_GAP: f32 = 5.0;
+const MOD_GROUP_GAP: f32 = 10.0;
+/// The least Play gets on a narrow column, for Mods and Random to keep their words.
+const PLAY_MIN_W: f32 = 90.0;
 /// How far the lane's buttons are in from its edges, and the room between two of them.
 const ACTIONS_INSET: f32 = 8.0;
 const ACTIONS_GAP: f32 = 6.0;
+
+/// The mods that are on as badges from `x` along `y` within `room` (the lane of actions), each
+/// in its mod select column's colour: at most `MOD_BADGES_SHOWN`, the rest (and any past the
+/// room) counted on a last `+N` chip. Hands back their width.
+fn action_mod_badges(c: &mut Canvas, x: f32, y: f32, mods: mods::Mods, room: f32) -> f32 {
+    let colour = |m: mods::Mod| {
+        mods::GROUPS
+            .iter()
+            .find(|g| g.2.contains(&m))
+            .map_or(style::ink::SECONDARY, |g| g.1)
+    };
+    let size = style::text::CAPTION;
+    let width = |label: &str| Canvas::text_width(size, label) + 10.0;
+    let list: Vec<mods::Mod> = mods.iter().collect();
+    // As many as fit with the chip for the rest (none needed when all of them show).
+    let fits = |n: usize| {
+        let more = list.len() - n;
+        let chips: f32 = list[..n].iter().map(|m| width(m.acronym())).sum::<f32>()
+            + if more > 0 {
+                width(&format!("+{more}"))
+            } else {
+                0.0
+            };
+        let count = n + usize::from(more > 0);
+        chips + count.saturating_sub(1) as f32 * MOD_BADGE_GAP <= room
+    };
+    let shown = (0..=list.len().min(MOD_BADGES_SHOWN))
+        .rev()
+        .find(|&n| fits(n))
+        .unwrap_or(0);
+    let more = list.len() - shown;
+    let mut at = x;
+    let mut badge = |c: &mut Canvas, label: &str, col: u32| {
+        let w = width(label);
+        style::badge(c, [at, y, w, MOD_BADGE_H], col);
+        let ty = Canvas::text_y_mid(y + MOD_BADGE_H / 2.0, size);
+        let ink = rgba(style::badge_ink(col), 1.0);
+        c.text_centered(at + w / 2.0, ty, size, ink, label);
+        at += w + MOD_BADGE_GAP;
+    };
+    for &m in &list[..shown] {
+        badge(c, m.acronym(), colour(m));
+    }
+    if more > 0 {
+        badge(c, &format!("+{more}"), style::ink::SECONDARY);
+    }
+    (at - x - MOD_BADGE_GAP).max(0.0)
+}
+
+/// Over the lane of actions' mods (under the pointer), every mod that's on by name, above the
+/// badges at `[x, y]`.
+fn mods_tip(c: &mut Canvas, [x, y]: [f32; 2], mods: mods::Mods) {
+    let size = style::text::CAPTION;
+    let lines: Vec<String> = mods
+        .iter()
+        .map(|m| format!("{}  {}", m.acronym(), m.name()))
+        .collect();
+    let step = Canvas::text_height(size) + 4.0;
+    let w = lines
+        .iter()
+        .map(|l| Canvas::text_width(size, l))
+        .fold(0.0, f32::max)
+        + 16.0;
+    let h = lines.len() as f32 * step + 8.0;
+    let (tx, ty) = (x.min(c.width - w - 4.0), y - 6.0 - h);
+    let fill = rgba(style::PANEL_COLD, 0.98);
+    let edge = rgba(style::tone::EDGE, 1.0);
+    c.round_rect(
+        [tx, ty],
+        [w, h],
+        style::radius::SMALL,
+        fill,
+        edge,
+        style::tone::LINE,
+    );
+    for (k, line) in lines.iter().enumerate() {
+        let ink = rgba(style::ink::PRIMARY, 1.0);
+        c.text(tx + 8.0, ty + 4.0 + k as f32 * step + 2.0, size, ink, line);
+    }
+}
 
 /// The face Random's die shows `now`, pressed `at`: it rolls through a few, then rests on five.
 fn dice_face(at: Option<Instant>, now: Instant) -> &'static style::Icon {
@@ -495,36 +581,38 @@ struct SplitShown<'a> {
     path: Option<&'a std::path::Path>,
 }
 
-/// The right column's sections' shares of its height (the main menu's look), top down: the
-/// details, the leaderboard and the preview. Fixed, so nothing in it moves from map to map.
-const COLUMN_SHARES: [f32; 3] = [0.32, 0.34, 0.34];
 /// How far in from the column's sides the lines between its sections run: across all of it
 /// (the details' own lines run within their text's edges).
 pub(crate) const COLUMN_RULE_INSET: f32 = 0.0;
 
-/// The right column's sections in `rect`, top down (`COLUMN_SHARES`): the details (never
-/// shorter than they need, `preview::compact_head`), the leaderboard and the preview.
+/// The right column's sections in `rect`, top down: the details as tall as what's on them
+/// (`preview::compact_head`, the same for every map), the row of tabs, and the body under it,
+/// all the rest, for the tab shown (the preview, or the local or online leaderboard).
 pub(crate) fn column_sections([x, y, w, h]: [f32; 4]) -> [[f32; 4]; 3] {
     let gap = style::space::SECTION;
-    let usable = (h - 2.0 * gap).max(0.0);
-    let head = (usable * COLUMN_SHARES[0])
-        .max(preview::compact_head())
-        .min(usable)
-        .round();
-    let rest = usable - head;
-    let board = (rest * COLUMN_SHARES[1] / (COLUMN_SHARES[1] + COLUMN_SHARES[2])).round();
-    let board_y = y + head + gap;
-    let lane_y = board_y + board + gap;
+    let usable = (h - gap).max(0.0);
+    let head = preview::compact_head().min(usable).round();
+    let tabs_y = y + head + gap;
+    let body_y = tabs_y + COLUMN_TAB_H;
     [
         [x, y, w, head],
-        [x, board_y, w, board],
-        [x, lane_y, w, rest - board],
+        [x, tabs_y, w, COLUMN_TAB_H],
+        [x, body_y, w, (y + h - body_y).max(0.0)],
     ]
 }
 
-/// The main menu's look: the right column in `rect` as three sections of fixed heights
-/// (`column_sections`): the map's details, its leaderboard, and the autoplay with its drum and
-/// the map's density under it.
+/// The tab the right column's body shows.
+fn column_tab(state: &State) -> ColumnTab {
+    match (state.column_preview, state.board_online) {
+        (true, _) => ColumnTab::Preview,
+        (false, false) => ColumnTab::Local,
+        (false, true) => ColumnTab::Online,
+    }
+}
+
+/// The main menu's look: the right column in `rect` (`column_sections`): the map's details, the
+/// row of tabs, and under it all the rest for the tab shown: the autoplay with its drum and the
+/// map's density under it, or the leaderboard.
 fn draw_split_column(
     state: &mut State,
     canvas: &mut Canvas,
@@ -532,24 +620,23 @@ fn draw_split_column(
     rect: [f32; 4],
     shown: &SplitShown,
 ) {
-    let [head, board, lane] = column_sections(rect);
-    // On the column's one panel (drawn by the caller), the sections parted by a line in the
-    // room between them, no box round each.
-    for r in [board, lane] {
-        let y = r[1] - style::space::SECTION / 2.0;
-        style::rule(
-            canvas,
-            r[0] + COLUMN_RULE_INSET,
-            y,
-            r[2] - 2.0 * COLUMN_RULE_INSET,
-        );
-    }
+    let [head, tabs, body] = column_sections(rect);
+    let tab = column_tab(state);
+    // On the column's one panel (drawn by the caller), the details parted from the tabs by a
+    // line in the room between them, no box round each.
+    let y = tabs[1] - style::space::SECTION / 2.0;
+    style::rule(
+        canvas,
+        tabs[0] + COLUMN_RULE_INSET,
+        y,
+        tabs[2] - 2.0 * COLUMN_RULE_INSET,
+    );
     let start = canvas.shapes.len();
     let preview = &mut state.preview;
     preview.bare = true;
     preview.split = Some(preview::Split {
         head: head[3],
-        lane: preview::Split::lane_in(lane[1], lane[3]),
+        area: (tab == ColumnTab::Preview).then_some([body[1], body[3]]),
     });
     preview.title_room = 0.0;
     preview.slid = 0.0;
@@ -594,10 +681,13 @@ fn draw_split_column(
     // The details of the map before go out within the column.
     let [x, y, w, h] = rect;
     canvas.clip_since(start, x - 2.0, y - 2.0, w + 4.0, h + 4.0);
-    draw_board_section_for(state, canvas, space, board);
+    draw_column_tabs(canvas, tabs, tab, state.cfg.mods.relax());
+    if tab != ColumnTab::Preview {
+        draw_board_section_for(state, canvas, space, body);
+    }
 }
 
-/// The selected map's leaderboard as the right column's middle section, `rect`: local or
+/// The selected map's leaderboard as the right column's body, `rect` (its tab shown): local or
 /// online, scrolled where it was, the player's best pinned at its bottom when not all of it fits.
 fn draw_board_section_for(
     state: &mut State,
@@ -609,7 +699,7 @@ fn draw_board_section_for(
     state.online_leaderboard = Vec::new();
     let Some(i) = state.select.selected() else {
         let shown = BoardShown::Note(String::new());
-        draw_board_section(canvas, rect, state.board_online, relax, &shown);
+        draw_board_section(canvas, rect, state.board_online, &shown);
         return;
     };
     let hash = state.library[i].hash();
@@ -631,7 +721,7 @@ fn draw_board_section_for(
         match &board {
             None => {
                 let shown = note(tr!("loading...", "読み込み中...", "загрузка..."));
-                draw_board_section(canvas, rect, true, relax, &shown);
+                draw_board_section(canvas, rect, true, &shown);
             }
             Some(Err(e)) => {
                 let shown = BoardShown::Note(tr!(
@@ -639,7 +729,7 @@ fn draw_board_section_for(
                     "サーバーに届きません: {e}",
                     "сервер недоступен: {e}"; [] [e]
                 ));
-                draw_board_section(canvas, rect, true, relax, &shown);
+                draw_board_section(canvas, rect, true, &shown);
             }
             Some(Ok(rows)) if rows.is_empty() => {
                 let shown = note(tr!(
@@ -647,7 +737,7 @@ fn draw_board_section_for(
                     "オンラインのスコアはまだありません - ログイン (F9) してプレイを終えましょう",
                     "Онлайн-рекордов пока нет - войдите (F9) и доиграйте карту"
                 ));
-                draw_board_section(canvas, rect, true, relax, &shown);
+                draw_board_section(canvas, rect, true, &shown);
             }
             Some(Ok(rows)) => {
                 let (rows_rect, fits) = place(rows.len());
@@ -674,7 +764,7 @@ fn draw_board_section_for(
                     total: rows.len(),
                     best,
                 };
-                draw_board_section(canvas, rect, true, relax, &shown);
+                draw_board_section(canvas, rect, true, &shown);
                 // What the rows' clicks open: the rows shown, then the pinned best.
                 state.online_leaderboard = rows
                     .iter()
@@ -689,7 +779,7 @@ fn draw_board_section_for(
     }
     let all = scores::top(&state.scores, hash, usize::MAX, relax);
     if all.is_empty() {
-        draw_board_section(canvas, rect, false, relax, &BoardShown::NoLocal);
+        draw_board_section(canvas, rect, false, &BoardShown::NoLocal);
         return;
     }
     let (rows_rect, fits) = place(all.len());
@@ -711,7 +801,7 @@ fn draw_board_section_for(
         total: all.len(),
         best: best.map(|r| BoardLine::local(1, r)),
     };
-    draw_board_section(canvas, rect, false, relax, &shown);
+    draw_board_section(canvas, rect, false, &shown);
     // What the rows' clicks open: the rows shown, then the pinned best.
     state.leaderboard = shown_rows
         .iter()
@@ -1088,59 +1178,51 @@ fn draw_songs(
             let play_x = right - ACTIONS_INSET - (w * PLAY_SHARE).clamp(120.0, 200.0);
             let mods_word = tr!("Mods", "Mod", "Моды");
             let random = tr!("Random", "ランダム", "Случайная");
-            let end = play_x - ACTIONS_GAP;
             // A block button's rect starts 6 left of where it's put.
             let gx = panel_x + ACTIONS_INSET + 6.0;
-            let room = end - gx - style::icon_button_width("", None, 8.0) - ACTIONS_GAP;
-            let mods_word = Canvas::fit(8.0, room, mods_word);
+            // Mods and Random side by side at the left, always whole (their words never go):
+            // Play gives way for them on a narrow column, down to its least.
+            let pair_w = style::icon_button_width(mods_word, None, 8.0)
+                + ACTIONS_GAP
+                + style::icon_button_width(random, None, 8.0);
+            let play_x = play_x
+                .max(gx - 6.0 + pair_w + ACTIONS_GAP)
+                .min(right - ACTIONS_INSET - PLAY_MIN_W);
             let mods_w = style::block_button(
                 canvas,
                 [gx, mid],
                 &style::SLIDERS,
-                &mods_word,
+                mods_word,
                 None,
                 8.0,
                 !state.cfg.mods.is_empty(),
                 hit::Hit::ModsButton,
                 inner_h,
             );
-            let mut rx = gx - 6.0 + mods_w + ACTIONS_GAP;
-            // The mods that are on, each in its mod select column's colour, beside the button
-            // (a click on them opens the mod select too).
-            let on = !state.cfg.mods.is_empty();
-            let random_min = style::icon_button_width("", None, 8.0);
-            let badge_room = end - rx - random_min - ACTIONS_GAP;
-            if on && badge_room >= MOD_BADGES_MIN {
+            let rx = gx - 6.0 + mods_w + ACTIONS_GAP;
+            let random_w = style::block_button(
+                canvas,
+                [rx + 6.0, mid],
+                dice_face(state.dice_roll, render::frame_now()),
+                random,
+                None,
+                8.0,
+                false,
+                hit::Hit::Key(KeyCode::F2),
+                inner_h,
+            );
+            // The mods that are on, each in its mod select column's colour, as a group in the
+            // room between Random and Play (a click on them opens the mod select too).
+            let from = rx + random_w + MOD_GROUP_GAP;
+            let room = play_x - MOD_GROUP_GAP - from;
+            if !state.cfg.mods.is_empty() && room >= MOD_BADGES_MIN {
                 let top = mid - MOD_BADGE_H / 2.0;
-                let bw =
-                    crate::multiplayer::mod_badges(canvas, rx, top, state.cfg.mods, badge_room);
-                canvas.hit(
-                    rx - 2.0,
-                    top - 1.0,
-                    bw + 4.0,
-                    MOD_BADGE_H + 2.0,
-                    hit::Hit::ModsButton,
-                );
-                rx += bw + ACTIONS_GAP;
-            }
-            // Random with its word where there's room for it, its die alone where not.
-            let random_word = if rx + style::icon_button_width(random, None, 8.0) <= end {
-                random
-            } else {
-                ""
-            };
-            if rx + style::icon_button_width(random_word, None, 8.0) <= end {
-                style::block_button(
-                    canvas,
-                    [rx + 6.0, mid],
-                    dice_face(state.dice_roll, render::frame_now()),
-                    random_word,
-                    None,
-                    8.0,
-                    false,
-                    hit::Hit::Key(KeyCode::F2),
-                    inner_h,
-                );
+                let bw = action_mod_badges(canvas, from, top, state.cfg.mods, room);
+                let group = [from - 2.0, top - 3.0, bw + 4.0, MOD_BADGE_H + 6.0];
+                canvas.hit(group[0], group[1], group[2], group[3], hit::Hit::ModsButton);
+                if canvas.hovered(group[0], group[1], group[2], group[3]) {
+                    mods_tip(canvas, [from, top], state.cfg.mods);
+                }
             }
             let hit = hit::Hit::Key(KeyCode::Enter);
             let bar = [

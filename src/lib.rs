@@ -185,8 +185,9 @@ use screens::play::{FAIL_RESTART_LINGER, PlayScreen, draw_spectate_all, pause_la
 use screens::preview::Preview;
 use screens::results::{ResultsScreen, results_job, results_title};
 use screens::select::leaderboard::{
-    BOARD_HEAD, BOARD_ROW, BoardLine, BoardShown, draw_board_section, draw_divider,
-    draw_leaderboard, draw_online_leaderboard, fetch_board, misses_and_age, section_rows,
+    BOARD_HEAD, BOARD_ROW, BoardLine, BoardShown, COLUMN_TAB_H, ColumnTab, draw_board_section,
+    draw_column_tabs, draw_divider, draw_leaderboard, draw_online_leaderboard, fetch_board,
+    misses_and_age, section_rows,
 };
 use screens::select::presets::{draw_preset_deleting, draw_preset_naming, preset_key};
 use screens::select::preview_chrome::{draw_analysis, draw_preview_chrome};
@@ -547,6 +548,9 @@ struct State {
     me_due: Option<Instant>,
     /// The song select leaderboard shows the server's scores, not the local ones.
     board_online: bool,
+    /// The right column's body in the main menu's look shows the preview (its Preview tab), not
+    /// the leaderboard. Kept from map to map; on again each time song select is come to.
+    column_preview: bool,
     /// A player's profile, over everything else.
     profile: Option<profile::View>,
     /// The medals screen, over everything but a medal being earned.
@@ -2116,6 +2120,7 @@ impl State {
         }
         self.stop_audio();
         self.report_smoothness();
+        self.column_preview = true;
         self.scene = SongSelect::scene();
     }
 
@@ -2616,6 +2621,8 @@ impl State {
 
     fn leave_menu_for_songs(&mut self, shifts: bool) {
         let left = self.main_menu.take();
+        // Song select opens on its preview.
+        self.column_preview = true;
         if !shifts {
             self.menu_shift = None;
             return;
@@ -15270,7 +15277,11 @@ impl State {
                     self.toast(format!("{name} is the host now"));
                 }
             }
-            Hit::BoardTab(online) => self.board_online = online,
+            Hit::BoardTab(online) => {
+                self.board_online = online;
+                self.column_preview = false;
+            }
+            Hit::PreviewTab => self.column_preview = true,
             Hit::BoardPage => self.mob.flip_board(),
             Hit::RateOpen
             | Hit::RateClose
