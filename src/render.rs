@@ -3936,6 +3936,8 @@ pub struct Canvas<H> {
     /// Card pictures asked for this frame: picture key, file, and whether a card draws it now
     /// (`card_picture`) or it is only read ahead (`want_card`).
     pub cards_wanted: Vec<(String, std::path::PathBuf, bool)>,
+    /// Where each key is in `cards_wanted`.
+    pub card_index: std::collections::HashMap<String, usize>,
 }
 
 // By hand: a derive would ask `H: Default` of the hit type.
@@ -3970,6 +3972,7 @@ impl<H> Default for Canvas<H> {
             card_slots: Default::default(),
             card_colours: Default::default(),
             cards_wanted: Default::default(),
+            card_index: Default::default(),
         }
     }
 }
@@ -4170,6 +4173,7 @@ impl<H> Canvas<H> {
         self.picture_paths.clear();
         self.picture_times.clear();
         self.cards_wanted.clear();
+        self.card_index.clear();
         self.disc = None;
         self.glitch = None;
         self.hits.clear();
@@ -4667,14 +4671,29 @@ impl<H> Canvas<H> {
     pub fn card_picture(
         &mut self,
         path: &std::path::Path,
-        [x, y, w, h]: [f32; 4],
+        rect: [f32; 4],
         tint: [f32; 4],
         radius: f32,
         greys: [f32; 2],
         come: Option<[f32; 2]>,
     ) -> bool {
         let key = path_picture_key(path);
-        let slot = self.card_slots.get(&key).copied();
+        self.card_picture_keyed(&key, path, rect, tint, radius, greys, come)
+    }
+
+    /// `card_picture`, its key (`path_picture_key`) worked out already.
+    #[allow(clippy::too_many_arguments)]
+    pub fn card_picture_keyed(
+        &mut self,
+        key: &str,
+        path: &std::path::Path,
+        [x, y, w, h]: [f32; 4],
+        tint: [f32; 4],
+        radius: f32,
+        greys: [f32; 2],
+        come: Option<[f32; 2]>,
+    ) -> bool {
+        let slot = self.card_slots.get(key).copied();
         self.ask_card(key, path, true);
         let Some(slot) = slot else {
             return false;
@@ -4751,19 +4770,35 @@ impl<H> Canvas<H> {
     /// Asks for the card picture of the map picture at `path` without drawing it, so it's in
     /// before its card comes into view.
     pub fn want_card(&mut self, path: &std::path::Path) {
-        self.ask_card(path_picture_key(path), path, false);
+        self.ask_card(&path_picture_key(path), path, false);
     }
 
-    fn ask_card(&mut self, key: String, path: &std::path::Path, drawn: bool) {
-        match self.cards_wanted.iter_mut().find(|w| w.0 == key) {
-            Some(w) => w.2 |= drawn,
-            None => self.cards_wanted.push((key, path.to_path_buf(), drawn)),
+    /// `want_card`, its key (`path_picture_key`) worked out already.
+    pub fn want_card_keyed(&mut self, key: &str, path: &std::path::Path) {
+        self.ask_card(key, path, false);
+    }
+
+    fn ask_card(&mut self, key: &str, path: &std::path::Path, drawn: bool) {
+        // Looked up by key, not along the list: it holds a hundred and more a frame.
+        match self.card_index.get(key) {
+            Some(&i) => self.cards_wanted[i].2 |= drawn,
+            None => {
+                self.card_index
+                    .insert(key.to_string(), self.cards_wanted.len());
+                self.cards_wanted
+                    .push((key.to_string(), path.to_path_buf(), drawn));
+            }
         }
     }
 
     /// The average colour of the card picture of the map picture at `path`, once known.
     pub fn card_colour(&self, path: &std::path::Path) -> Option<[f32; 3]> {
-        self.card_colours.get(&path_picture_key(path)).copied()
+        self.card_colour_keyed(&path_picture_key(path))
+    }
+
+    /// `card_colour` by its picture key (`path_picture_key`).
+    pub fn card_colour_keyed(&self, key: &str) -> Option<[f32; 3]> {
+        self.card_colours.get(key).copied()
     }
 
     /// Where an animated picture `file` is to be in its frames this frame: `since` ms into them

@@ -22,6 +22,10 @@ pub struct Entry {
     /// Content hash of the `.osu` for matching maps between multiplayer clients. Computed on first
     /// use: hashing every file up front would make startup with a big library crawl.
     hash: OnceLock<u64>,
+    /// Its background picture's path and the key song select's cards keep it by
+    /// (`render::path_picture_key`), worked out the first time: the list asks for them every
+    /// frame for every card near the view.
+    cover: OnceLock<Option<(PathBuf, String)>>,
     text: crate::search::Text,
     /// In taiko.rs's own custom maps folder (`is_own_map`): a taiko.rs map, whatever osu! set
     /// its file names.
@@ -49,8 +53,21 @@ impl Entry {
             size,
             modified,
             hash: OnceLock::new(),
+            cover: OnceLock::new(),
             text,
         }
+    }
+
+    /// Its background picture (`preview::background_path`) and its picture key, if it names one.
+    pub fn cover(&self) -> Option<(&Path, &str)> {
+        self.cover
+            .get_or_init(|| {
+                let path = crate::preview::background_path(self)?;
+                let key = crate::render::path_picture_key(&path);
+                Some((path, key))
+            })
+            .as_ref()
+            .map(|(p, k)| (p.as_path(), k.as_str()))
     }
 
     pub fn label(&self) -> String {
@@ -1359,6 +1376,62 @@ pub(crate) fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Opti
         };
         candidate && e.hash() == s.map_hash
     })
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use super::*;
+
+    #[test]
+    fn hashes_worked_out_off_the_frame_are_the_entries_own_and_a_cover_is_kept() {
+        let dir = std::env::temp_dir().join(format!("taiko-hasher-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let entries: Vec<Entry> = (0..3)
+            .map(|i| {
+                let path = dir.join(format!("{i}.osu"));
+                std::fs::write(&path, format!("osu file format v14\n// {i}\n")).unwrap();
+                let meta = Meta {
+                    background: (i != 2).then(|| "bg.jpg".to_string()),
+                    ..Default::default()
+                };
+                Entry::from_parts(path, meta, 0, 0)
+            })
+            .collect();
+        assert!(
+            entries.iter().all(|e| e.known_hash().is_none()),
+            "none read yet"
+        );
+        assert_eq!(index_in(&entries, &entries[2]), Some(2));
+        let elsewhere = Entry::from_parts(dir.join("x.osu"), Meta::default(), 0, 0);
+        assert_eq!(index_in(&entries, &elsewhere), None);
+
+        let mut hasher = Hasher::default();
+        for i in [0, 2, 0, 7] {
+            hasher.want(&entries, i);
+        }
+        for _ in 0..2000 {
+            hasher.take_in(&entries);
+            if !hasher.is_busy() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!hasher.is_busy(), "the hashes came");
+        assert_eq!(entries[1].known_hash(), None, "not asked for");
+        for i in [0, 2] {
+            let read = work_out_hash(&entries[i].path, false);
+            assert_eq!(entries[i].known_hash(), Some(read), "entry {i}");
+            assert_eq!(entries[i].hash(), read);
+        }
+
+        // Its picture and key, as song select's cards ask for them.
+        let (path, key) = entries[0].cover().expect("names a picture");
+        let bg = crate::preview::background_path(&entries[0]).unwrap();
+        assert_eq!(path, bg.as_path());
+        assert_eq!(key, crate::render::path_picture_key(&bg));
+        assert!(entries[2].cover().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

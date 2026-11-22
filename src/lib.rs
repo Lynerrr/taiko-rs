@@ -12974,6 +12974,13 @@ impl State {
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
             self.preview.mods = self.shown_mods();
+            // Song select's main look shows the autoplay on its Preview tab only.
+            self.preview.autoplay_hidden = self.scene.is_select()
+                && !self.on_menu()
+                && !self.select.legacy
+                && !self.select.classic
+                && !mobile::active()
+                && !self.column_preview;
             self.preview.update(
                 now,
                 entries,

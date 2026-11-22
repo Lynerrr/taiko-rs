@@ -352,6 +352,11 @@ pub struct Preview {
     /// would give, which song select works out.
     pub sim: Option<PpSim>,
     pub sim_pp: Option<f64>,
+    /// The autoplay isn't shown (song select's Local and Online tabs): it isn't played on, its
+    /// notes and drum aren't worked out every frame for nothing. The music plays on.
+    pub autoplay_hidden: bool,
+    /// It wasn't played on while hidden: it starts over where the music is when shown again.
+    autoplay_behind: bool,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
     /// changes per unit of that (for dragging the panel's bottom edge).
     pub size: f32,
@@ -937,10 +942,26 @@ impl Preview {
             return;
         }
         let Some(game) = &mut self.game else { return };
+        let music = engine.position_ms(now).map(|p| (p - offset) * speed);
+        if self.autoplay_hidden {
+            // Nobody sees the autoplay (song select's Local and Online tabs): it isn't played,
+            // only its clock is kept for the beat and kiai the rest of the screen goes by.
+            if let Some(t) = music {
+                self.last_time = t;
+                self.autoplay_behind = true;
+            }
+            return;
+        }
         // Where the music is, in map time, before the game expires anything: notes skipped over
         // are marked played first, so jumping in never shows misses.
-        if let Some(t) = engine.position_ms(now).map(|p| (p - offset) * speed) {
-            if t < self.last_time - 1000.0 {
+        if let Some(t) = music {
+            if std::mem::take(&mut self.autoplay_behind) {
+                // Shown again: it starts over where the music is, as on a jump.
+                if let Some((_, map, _, _)) = &self.map {
+                    *game = new_preview_game(map, speed);
+                    game.skip_to(t - 50.0);
+                }
+            } else if t < self.last_time - 1000.0 {
                 // The music looped: start the preview over from the preview point.
                 if let Some((_, map, _, _)) = &self.map {
                     *game = new_preview_game(map, speed);

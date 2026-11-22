@@ -3111,8 +3111,8 @@ impl Select {
             near.sort_by(|a, b| a.0.total_cmp(&b.0));
             for (_, gi) in near {
                 let e = &library[self.visible[groups[gi].start]];
-                if let Some(bg) = crate::preview::background_path(e) {
-                    c.want_card(&bg);
+                if let Some((bg, key)) = e.cover() {
+                    c.want_card_keyed(key, bg);
                 }
             }
         }
@@ -3194,10 +3194,10 @@ impl Select {
             let down = ((view - above) / song_h).ceil() as usize + 1;
             for g in g0.saturating_sub(up)..(g0 + down + 1).min(groups.len()) {
                 let e = &library[self.visible[groups[g].start]];
-                if let Some(bg) = crate::preview::background_path(e) {
-                    c.want_card(&bg);
+                if let Some((bg, key)) = e.cover() {
+                    c.want_card_keyed(key, bg);
                     if g == g0 && !self.hold_pictures {
-                        c.want_picture_path(&bg);
+                        c.want_picture_path(bg);
                     }
                 }
             }
@@ -3917,14 +3917,13 @@ impl Select {
             Surface::Raised
         };
         style::tile(c, [x, y, w, h], CARD_RADIUS, level);
-        if let Some(bg) = crate::preview::background_path(e) {
-            let key = crate::render::path_picture_key(&bg);
-            let shown = c.card_slots.contains_key(&key);
+        if let Some((bg, key)) = e.cover() {
+            let shown = c.card_slots.contains_key(key);
             if !shown {
                 // Let go of to make room for others: it fades in again when it's back.
-                covers.remove(&key);
+                covers.remove(key);
             }
-            let since = covers.get(&key).copied();
+            let since = covers.get(key).copied();
             let a = match since {
                 Some(t) => crate::render::progress(t, COVER_FADE_MS),
                 None if crate::render::animations() => 0.0,
@@ -3933,7 +3932,7 @@ impl Select {
             let inner = [x + 1.0, y + 1.0, w - 2.0, h - 2.0];
             // Until its picture is in, the card shows the picture's average colour (once known),
             // and the picture fades in over it: nothing on the card pops.
-            let colour = c.card_colour(&bg);
+            let colour = c.card_colour_keyed(key);
             // Everything on the card is as round as it, 1 in.
             let round = CARD_RADIUS - 1.0;
             // The picture comes in across the card out of nothing (`CARD_ART`): none of it under
@@ -3962,9 +3961,10 @@ impl Select {
                 );
             }
             let tint = [1.0, 1.0, 1.0, strength * a];
-            let drawn = c.card_picture(&bg, inner, tint, round, self.card_greys, Some([from, 1.0]));
+            let come = Some([from, 1.0]);
+            let drawn = c.card_picture_keyed(key, bg, inner, tint, round, self.card_greys, come);
             if drawn && since.is_none() {
-                covers.insert(key, crate::render::frame_now());
+                covers.insert(key.to_string(), crate::render::frame_now());
             }
         }
         if open {
