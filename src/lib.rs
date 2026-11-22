@@ -6747,7 +6747,7 @@ impl State {
             PresetAction::Edit if i < saved => {
                 let (w, h) = self.cfg.saved_presets[i];
                 let text = format!("{w}x{h}");
-                dd.caret = text.len();
+                dd.caret = text.chars().count();
                 dd.editing = Some((Some(i), text));
                 return;
             }
@@ -6787,7 +6787,7 @@ impl State {
                 .into(),
             );
             if let Some(dd) = &mut self.settings_ui.dropdown {
-                dd.caret = text.len();
+                dd.caret = text.chars().count();
                 dd.editing = Some((index, text));
             }
             return;
