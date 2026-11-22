@@ -72,9 +72,9 @@ pub(crate) fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
 
 /// Sleeps until `deadline` with sub-100µs precision: coarse sleep, then spin the last stretch.
 pub(super) fn sleep_until(deadline: Instant) {
-    #[cfg(windows)]
-    const SPIN: Duration = Duration::from_micros(1500);
-    #[cfg(not(windows))]
+    // std's sleep already waits on a high-resolution timer on Windows 10+, and the 1 ms timer
+    // period (`TimerPeriod`) tightens it on older systems: a longer spin would only burn CPU,
+    // which an APU takes from its GPU.
     const SPIN: Duration = Duration::from_micros(500);
     loop {
         let now = Instant::now();

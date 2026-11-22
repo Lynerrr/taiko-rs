@@ -414,8 +414,9 @@ pub enum AreaBackdrop {
     /// The render pass already cleared the whole target to the inside colour (`dims_background`
     /// with `bg_brightness == 0`); skip the inside rect and any outside bars that match it.
     Cleared,
-    /// Cover whatever is drawn behind (editors over the menu background), without overlapping
-    /// the outside bars behind the inside rect.
+    /// Cover whatever is drawn behind (editors over the menu background). The dim spans the
+    /// whole screen under the inside rect: bars meeting it edge to edge would leave a seam of
+    /// anti-aliasing the menu shows through. Off the hot path, so the overdraw doesn't matter.
     CoverBg,
 }
 
@@ -470,7 +471,7 @@ pub fn begin(c: &mut Canvas, area: Area, backdrop: AreaBackdrop, black: bool) ->
         }
         AreaBackdrop::CoverBg => {
             if !area.is_full() {
-                draw_outside_bars(c, area, full, rgba(outside, 1.0));
+                c.rect(0.0, 0.0, full, VIRTUAL_HEIGHT, rgba(outside, 1.0));
             }
             let start = c.shapes.len();
             c.width = full * area.w / area.h;
@@ -805,11 +806,20 @@ mod tests {
 
         c.clear(853.3);
         let (start, _) = begin(&mut c, framed, AreaBackdrop::CoverBg, true);
-        assert_eq!(start, 4, "four outer bars before area shapes");
+        assert_eq!(start, 1, "one full-screen dim before the area's shapes");
         assert_eq!(
             c.shapes.len(),
-            5,
-            "plus one inside rect when covering menu bg"
+            2,
+            "plus one inside rect when covering the menu background"
+        );
+        let dim = &c.shapes[0];
+        assert_eq!(
+            (dim.center, dim.half),
+            (
+                [853.3 / 2.0, VIRTUAL_HEIGHT / 2.0],
+                [853.3 / 2.0, VIRTUAL_HEIGHT / 2.0]
+            ),
+            "the dim runs under the area: no seam where bars would meet the inside rect"
         );
     }
 }

@@ -767,6 +767,20 @@ impl Select {
         }
     }
 
+    /// Whether what the list shows depends on maps' ranked statuses: sorted by them, searched
+    /// for them (`status=`, any case) or filtered by the status tabs.
+    pub fn lists_by_status(&self) -> bool {
+        self.sort == SortMode::Status
+            || self.tabs.filters.statuses != 0
+            || crate::search::Query::parse(&self.filter).asks_status()
+    }
+
+    /// Whether what the list shows depends on when maps were last played: sorted by it or
+    /// searched for it (`played`, `unplayed`, any case).
+    pub fn lists_by_played(&self) -> bool {
+        self.sort == SortMode::Played || crate::search::Query::parse(&self.filter).asks_played()
+    }
+
     pub fn refilter(&mut self, library: &[Entry]) {
         if self.pinned_view != self.view() {
             self.pinned.clear();

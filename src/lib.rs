@@ -1243,6 +1243,7 @@ impl State {
                     if (old.size, old.modified) != (entry.size, entry.modified) {
                         changed.push((i, path.clone(), entry.modified, entry.size));
                         self.library[i] = entry;
+                        self.invalidate_library_indices();
                     }
                     self.select.gone.remove(&path);
                     self.select.edited.remove(&path);
@@ -1290,6 +1291,7 @@ impl State {
     fn map_renamed(&mut self, from: &Path, to: PathBuf) {
         if let Some(e) = self.library.iter_mut().find(|e| e.path == from) {
             e.path = to.clone();
+            self.invalidate_library_indices();
         }
         self.select.gone.remove(from);
         let (from, to) = (
@@ -8938,8 +8940,7 @@ impl State {
                 };
                 if changed
                     && (!self.select.filter.is_empty()
-                        || self.select.sort == ui::SortMode::Status
-                        || self.select.tabs.filters.statuses != 0
+                        || self.select.lists_by_status()
                         || self.select.lens_ui.is_some())
                 {
                     self.select.refilter(&self.library);
@@ -9321,10 +9322,8 @@ impl State {
         }
     }
 
-    /// The scan's list against the one up: what's new joins the end and what's changed takes its
-    /// place, so the indices handed out stay good. What's gone takes the list being rebuilt, which
-    /// waits for a next launch if anything could be holding on to one. A map the scan doesn't
-    /// cover (one opened by itself) stays while its file is there.
+    /// Indexes the library by set and by folder, and lists its folders (all and taiko.rs's own),
+    /// so per-message and periodic lookups don't walk 40k entries.
     fn rebuild_library_indices(&mut self) {
         self.library_by_set.clear();
         self.library_by_folder.clear();
@@ -9391,15 +9390,30 @@ impl State {
         self.library_indexed_ptr = self.library.as_ptr() as usize;
     }
 
+    /// Marks the library indices out of date after an entry was replaced or moved in place
+    /// (its set or folder may differ): the next `ensure_library_indices` rebuilds them.
+    fn invalidate_library_indices(&mut self) {
+        self.library_indexed_len = usize::MAX;
+    }
+
+    /// Whether the indices still describe the library: none of its entries replaced in place
+    /// (`invalidate_library_indices`), none added or dropped, the list not swapped for another.
+    fn library_indices_current(&self) -> bool {
+        self.library_indexed_len == self.library.len()
+            && self.library_indexed_ptr == self.library.as_ptr() as usize
+    }
+
     fn ensure_library_indices(&mut self) {
-        if cfg!(test)
-            || self.library_indexed_len != self.library.len()
-            || self.library_indexed_ptr != self.library.as_ptr() as usize
-        {
+        // Tests edit `library` entries directly, without invalidating: always rebuilt there.
+        if cfg!(test) || !self.library_indices_current() {
             self.rebuild_library_indices();
         }
     }
 
+    /// The scan's list against the one up: what's new joins the end and what's changed takes its
+    /// place, so the indices handed out stay good. What's gone takes the list being rebuilt, which
+    /// waits for a next launch if anything could be holding on to one. A map the scan doesn't
+    /// cover (one opened by itself) stays while its file is there.
     fn check_library(&mut self, mut checked: Vec<Entry>) {
         let refreshing = self.refreshing.take();
         // Nothing where there were maps: the folder can't be reached just now (a drive
@@ -9505,7 +9519,7 @@ impl State {
             services::workers::run(move || drop(discarded));
         }
         if set_changed {
-            self.rebuild_library_indices();
+            self.invalidate_library_indices();
         }
         let (added, edited) = (fresh.len(), changed.len());
         self.maps_rewritten(changed);
@@ -9683,13 +9697,8 @@ impl State {
         let collections_changed = self.show_collections(Some(&db));
         services::workers::run(move || drop((index, db)));
         if collections_changed
-            || matches!(
-                self.select.sort,
-                ui::SortMode::Status | ui::SortMode::Played
-            )
-            || self.select.filter.contains("status")
-            || self.select.filter.contains("played")
-            || self.select.tabs.filters.statuses != 0
+            || self.select.lists_by_status()
+            || self.select.lists_by_played()
             || self.select.lens_ui.is_some()
         {
             self.select.refilter(&self.library);
@@ -10741,9 +10750,7 @@ impl State {
             self.status_saved = now;
         }
         // The list sorted (or searched) by status follows what the mirrors have said since.
-        let by_status = self.select.sort == ui::SortMode::Status
-            || self.select.filter.contains("status")
-            || self.select.tabs.filters.statuses != 0;
+        let by_status = self.select.lists_by_status();
         if self.status_new
             && by_status
             && now.saturating_duration_since(self.status_resorted) >= Duration::from_secs(10)
@@ -14789,12 +14796,7 @@ impl State {
                     for p in edited {
                         added |= self.select.edited.insert(p);
                     }
-                    if added
-                        && (self.select.sort == ui::SortMode::Status
-                            || self.select.filter.contains("status")
-                            || self.select.tabs.filters.statuses != 0
-                            || self.select.lens_ui.is_some())
-                    {
+                    if added && (self.select.lists_by_status() || self.select.lens_ui.is_some()) {
                         self.select.refilter(&self.library);
                     }
                     if outdated {
@@ -15096,6 +15098,9 @@ impl State {
                 }
             }
         }
+        if !changed.is_empty() {
+            self.invalidate_library_indices();
+        }
         self.maps_rewritten(changed);
         let mut added: Vec<Entry> = fresh.into_values().collect();
         added.sort_by(|a, b| a.path.cmp(&b.path));
@@ -15145,6 +15150,9 @@ impl State {
             }
         }
         let rewritten = changed.len();
+        if rewritten > 0 {
+            self.invalidate_library_indices();
+        }
         self.maps_rewritten(changed);
         let mut fresh: Vec<Entry> = scanned.into_values().collect();
         fresh.sort_by(|a, b| a.path.cmp(&b.path));

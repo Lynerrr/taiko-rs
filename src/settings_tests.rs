@@ -1555,6 +1555,52 @@ fn an_old_map_without_ids_in_its_file_goes_by_its_folders_set() {
 }
 
 #[test]
+fn a_map_rewritten_in_place_into_another_set_takes_that_sets_status() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let dir = std::env::temp_dir()
+        .join(format!("taiko-rs-set-moved-{}", std::process::id()))
+        .join(format!("{:?}", std::thread::current().id()).replace(['(', ')'], ""));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Band - Song (Someone) [Oni].osu");
+    std::fs::write(
+        &path,
+        "osu file format v14\n\n[General]\nMode: 1\n\n[Metadata]\nTitle:Song\nArtist:Band\nVersion:Oni\nBeatmapID:1\nBeatmapSetID:9020\n\n[HitObjects]\n256,192,1000,1,0\n",
+    )
+    .unwrap();
+    s.library[0].path = path.clone();
+    s.library[0].meta.set_id = Some(9010);
+    s.library[0].size = 0;
+    s.rebuild_library_indices();
+    assert!(s.library_indices_current());
+
+    // The folder watch reads the edited file again in place: same index, another set.
+    s.folder_changed(folder_watch::Changes {
+        changed: vec![path.clone()],
+        gone: Vec::new(),
+    });
+    assert_eq!(s.library[0].path, path);
+    assert_eq!(s.library[0].set_id(), Some(9020));
+    // Read as they are, not through `ensure_library_indices` (which tests always rebuild).
+    let in_set = |s: &State, set: u32| s.library_by_set.get(&set).is_some_and(|v| v.contains(&0));
+    assert!(
+        !s.library_indices_current() || (in_set(&s, 9020) && !in_set(&s, 9010)),
+        "an entry replaced in place leaves no stale set index behind"
+    );
+
+    // The mirrors' word on the new set reaches the map, not on the old one.
+    s.select.status.remove(&path);
+    s.set_status_tx
+        .send((9010, Some("graveyard".into())))
+        .unwrap();
+    s.set_status_tx.send((9020, Some("loved".into()))).unwrap();
+    s.poll_set_status(Instant::now());
+    assert!(s.library_indices_current());
+    assert_eq!(s.select.status.get(&path), Some(&search::LOVED));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_maps_status_comes_from_the_mirror_else_osu_db() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
