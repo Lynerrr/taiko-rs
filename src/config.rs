@@ -421,6 +421,8 @@ pub struct Config {
     pub lens_own: String,
     /// The collection song select shows, as `own:<name>` or `osu:<name>` (empty: all songs).
     pub collection: String,
+    /// The download tab leaves out the sets already installed.
+    pub download_hide_installed: bool,
     /// Countdown before play continues after the pause menu (ms).
     pub resume_delay_ms: f64,
     /// Menu animations (screen fades, sliding highlights, ...).
@@ -637,6 +639,7 @@ impl Default for Config {
             lens_tja: String::new(),
             lens_own: String::new(),
             collection: String::new(),
+            download_hide_installed: false,
             kiai_effects: true,
             preview_drum: true,
             menu_glitch: true,
@@ -1367,6 +1370,7 @@ impl Config {
                 "lens_tja" => cfg.lens_tja = v.to_string(),
                 "lens_own" => cfg.lens_own = v.to_string(),
                 "collection" => cfg.collection = v.to_string(),
+                "download_hide_installed" => cfg.download_hide_installed = v == "true",
                 "kiai_effects" => cfg.kiai_effects = v != "false",
                 "preview_drum" => cfg.preview_drum = v != "false",
                 "menu_glitch" => cfg.menu_glitch = v != "false",
@@ -1803,6 +1807,8 @@ impl Config {
              sort = {}\n\
              # the collection song select shows (own:name or osu:name; empty: all songs)\n\
              collection = {}\n\
+             # the download tab leaves out the maps already installed\n\
+             download_hide_installed = {}\n\
              kiai_effects = {}\n\
              # song select's preview shows the drum at the start of its lane\n\
              preview_drum = {}\n\
@@ -1882,6 +1888,7 @@ impl Config {
             self.resume_delay_ms,
             self.sort,
             self.collection,
+            self.download_hide_installed,
             self.kiai_effects,
             self.preview_drum,
             self.hide_great,

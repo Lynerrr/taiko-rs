@@ -172,6 +172,18 @@ impl Screen for Download {
 
     fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _frame: &Frame) -> Option<Scene> {
         let installed = state.installed_sets.take().unwrap_or_default();
+        state
+            .browse
+            .set_hide_installed(state.cfg.download_hide_installed);
+        {
+            let custom = &state.select.custom_folder;
+            state
+                .browse
+                .drop_installed(&|set: &download::SetInfo| match set.custom {
+                    Some(_) => custom.values().any(|&id| id == set.id),
+                    None => installed.contains(&set.id),
+                });
+        }
         let dir = state.songs_dir.display().to_string();
         let lw = Select::list_width(canvas.width, state.cfg.song_list_share);
         state.preview.size = preview::PREVIEW_SIZE.1;
