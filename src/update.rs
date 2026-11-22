@@ -262,7 +262,10 @@ impl Updater {
     /// Downloads and swaps in the available build. Status goes to `Installed` (then call
     /// `restart`) or `Failed`.
     pub fn install(&self) {
-        let Status::Available { urls, size, .. } = self.status() else {
+        let Status::Available {
+            urls, size, commit, ..
+        } = self.status()
+        else {
             return;
         };
         *self.status.lock().unwrap() = Status::Downloading;
@@ -270,7 +273,7 @@ impl Updater {
         self.total.store(size, Ordering::Relaxed);
         let (status, done, total) = (self.status.clone(), self.done.clone(), self.total.clone());
         std::thread::spawn(move || {
-            let result = install(&urls, &done, &total);
+            let result = install(&urls, &commit, &done, &total);
             *status.lock().unwrap() = match result {
                 Ok(()) => Status::Installed,
                 Err(e) => {
@@ -431,7 +434,12 @@ const RETRY_PAUSE: Duration = Duration::from_secs(3);
 #[cfg(test)]
 const RETRY_PAUSE: Duration = Duration::ZERO;
 
-fn install(urls: &[String], done: &AtomicU64, total: &AtomicU64) -> Result<(), String> {
+fn install(
+    urls: &[String],
+    commit: &str,
+    done: &AtomicU64,
+    total: &AtomicU64,
+) -> Result<(), String> {
     let exe = exe_path()?;
     let download = sibling(&exe, ".download");
     let new = sibling(&exe, ".new");
@@ -444,6 +452,15 @@ fn install(urls: &[String], done: &AtomicU64, total: &AtomicU64) -> Result<(), S
         let binary = unpack(&download)?;
         if binary.len() < 1 << 20 {
             return Err("the downloaded binary looks broken".into());
+        }
+        // Right after a release is published, GitHub's caches can hand out the release of one
+        // build and the archive of another. Swapping that in restarts into a build that finds
+        // the update again, over and over; refuse it, the next check tries again.
+        if !built_from(&binary, commit) {
+            return Err(format!(
+                "the download isn't build {} yet; try again in a few minutes",
+                short(commit)
+            ));
         }
         write_executable(&new, &binary)?;
         swap(&exe, &new)
@@ -563,12 +580,31 @@ fn swap(exe: &Path, new: &Path) -> Result<(), String> {
     std::fs::rename(new, exe).map_err(|e| format!("replacing {}: {e}", exe.display()))
 }
 
+/// Whether a CI binary was built from `commit`: it carries its `GITHUB_SHA` as text (`BUILD`).
+fn built_from(binary: &[u8], commit: &str) -> bool {
+    !commit.is_empty() && binary.windows(commit.len()).any(|w| w == commit.as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        BUILD_CHANNEL, Channel, Ordering, Status, Updater, first_working, release_name,
+        BUILD_CHANNEL, Channel, Ordering, Status, Updater, built_from, first_working, release_name,
         version_label,
     };
+
+    #[test]
+    fn a_download_counts_only_when_it_carries_the_release_commit() {
+        let binary = b"\x7fELF...0fa40e3d7d197bc80a5c826b311bcc1e18c81cc5...".as_slice();
+        assert!(built_from(
+            binary,
+            "0fa40e3d7d197bc80a5c826b311bcc1e18c81cc5"
+        ));
+        assert!(!built_from(
+            binary,
+            "c28158901397236a391c9889d471f0c3667d885e"
+        ));
+        assert!(!built_from(binary, ""));
+    }
 
     #[test]
     fn a_stable_build_is_called_by_its_version_and_a_test_build_by_its_commit_too() {
