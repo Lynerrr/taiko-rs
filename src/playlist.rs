@@ -12,9 +12,12 @@ pub struct Track {
     pub label: String,
     /// What the search looks through.
     find: String,
+    /// Normalized `(artist, title)` used to collapse multiple mapsets of the same song.
+    /// `None` when the title is empty, so untitled charts deduplicate only by audio path.
+    song_key: Option<(String, String)>,
     audio: PathBuf,
-    /// What favourites know it by: its folder and audio file, wherever Songs is.
-    key: String,
+    /// What favourites know this song by across all mapsets collapsed into this track.
+    keys: Vec<String>,
     pub genres: u32,
 }
 
@@ -76,9 +79,26 @@ fn roll(seed: &mut u64) -> u64 {
     *seed
 }
 
+/// Normalized song identity `(artist, title)` for deduplicating identical songs across mapsets.
+fn song_key(artist: &str, title: &str) -> Option<(String, String)> {
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some((artist.trim().to_lowercase(), title.to_lowercase()))
+}
+
 impl Playlist {
     /// Every song of `library`, by name, on the one `entry` belongs to.
     pub fn new(library: &[Entry], entry: Option<usize>) -> Playlist {
+        Self::with_favourites(library, entry, load_favourites())
+    }
+
+    fn with_favourites(
+        library: &[Entry],
+        entry: Option<usize>,
+        favourites: HashSet<String>,
+    ) -> Playlist {
         let audio = |e: &Entry| {
             e.path
                 .parent()
@@ -89,13 +109,16 @@ impl Playlist {
             .iter()
             .enumerate()
             .map(|(i, e)| {
-                let label = format!("{} - {}", e.meta.artist, e.meta.title);
+                let artist = e.meta.artist.trim();
+                let title = e.meta.title.trim();
+                let label = format!("{artist} - {title}");
                 Track {
                     entry: i,
                     find: label.to_lowercase(),
                     label,
+                    song_key: song_key(artist, title),
                     audio: audio(e),
-                    key: favourite_key(e),
+                    keys: vec![favourite_key(e)],
                     genres: e.meta.genres,
                 }
             })
@@ -103,23 +126,37 @@ impl Playlist {
         tracks.sort_by(|a, b| {
             a.find
                 .cmp(&b.find)
+                .then(a.song_key.cmp(&b.song_key))
                 .then(a.audio.cmp(&b.audio))
                 .then(a.entry.cmp(&b.entry))
         });
         tracks.dedup_by(|a, b| {
-            let same = a.audio == b.audio;
+            let same = a.audio == b.audio || (a.song_key.is_some() && a.song_key == b.song_key);
             if same {
                 b.genres |= a.genres;
+                for k in a.keys.drain(..) {
+                    if !b.keys.contains(&k) {
+                        b.keys.push(k);
+                    }
+                }
+                if entry == Some(a.entry) {
+                    b.entry = a.entry;
+                    b.audio = a.audio.clone();
+                }
             }
             same
         });
         let now = entry
             .and_then(|i| library.get(i))
-            .map(audio)
-            .and_then(|path| tracks.iter().position(|t| t.audio == path))
+            .and_then(|e| {
+                let path = audio(e);
+                let sk = song_key(&e.meta.artist, &e.meta.title);
+                tracks
+                    .iter()
+                    .position(|t| t.audio == path || (sk.is_some() && t.song_key == sk))
+            })
             .unwrap_or(0);
         let all: Vec<usize> = (0..tracks.len()).collect();
-        let favourites = load_favourites();
         Playlist {
             tracks,
             shown: all.clone(),
@@ -138,7 +175,7 @@ impl Playlist {
     pub fn is_favourite(&self, track: usize) -> bool {
         self.tracks
             .get(track)
-            .is_some_and(|t| self.favourites.contains(&t.key))
+            .is_some_and(|t| t.keys.iter().any(|k| self.favourites.contains(k)))
     }
 
     /// How many tracks a folder holds.
@@ -194,11 +231,15 @@ impl Playlist {
     }
 
     pub fn toggle_favourite(&mut self, track: usize, seed: u64) {
-        let Some(key) = self.tracks.get(track).map(|t| t.key.clone()) else {
+        let Some(keys) = self.tracks.get(track).map(|t| t.keys.clone()) else {
             return;
         };
-        if !self.favourites.remove(&key) {
-            self.favourites.insert(key);
+        if keys.iter().any(|k| self.favourites.contains(k)) {
+            for key in &keys {
+                self.favourites.remove(key);
+            }
+        } else if let Some(first) = keys.into_iter().next() {
+            self.favourites.insert(first);
         }
         if self.folder == Folder::Favourites {
             self.refresh(seed);
@@ -372,8 +413,9 @@ mod tests {
                 entry: i,
                 label: format!("song {i}"),
                 find: format!("song {i}"),
+                song_key: Some((String::new(), format!("song {i}"))),
                 audio: Path::new("a").join(i.to_string()),
-                key: format!("set/{i}"),
+                keys: vec![format!("set/{i}")],
                 genres: 0,
             })
             .collect();
@@ -391,6 +433,59 @@ mod tests {
             history: Vec::new(),
             shuffled: None,
         }
+    }
+
+    fn fake_entry(folder: &str, artist: &str, title: &str, audio: &str, genres: u32) -> Entry {
+        let meta = crate::beatmap::Meta {
+            artist: artist.into(),
+            title: title.into(),
+            audio_file: audio.into(),
+            genres,
+            ..Default::default()
+        };
+        Entry::from_parts(PathBuf::from(format!("Songs/{folder}/map.osu")), meta, 0, 0)
+    }
+
+    #[test]
+    fn identical_songs_from_different_mapsets_appear_once() {
+        let lib = vec![
+            fake_entry("100 Reol - No title", "Reol", "No title", "audio.mp3", 0b01),
+            fake_entry(
+                "200 Reol - No title",
+                "REOL ",
+                " No Title",
+                "song.ogg",
+                0b10,
+            ),
+            fake_entry("300 Camellia - Ghost", "Camellia", "Ghost", "audio.mp3", 0),
+            fake_entry("400 untitled a", "", "", "a.mp3", 0),
+            fake_entry("500 untitled b", "", "", "b.mp3", 0),
+        ];
+        let mut favs = HashSet::new();
+        favs.insert("200 Reol - No title/song.ogg".into());
+
+        // Starting from the second mapset keeps `now` on that track and preserves its entry.
+        let mut l = Playlist::with_favourites(&lib, Some(1), favs);
+        assert_eq!(
+            l.tracks.len(),
+            4,
+            "two Reol mapsets collapse into one track"
+        );
+        let reol = l
+            .tracks
+            .iter()
+            .position(|t| t.find == "reol - no title")
+            .unwrap();
+        assert_eq!(l.now(), reol);
+        assert_eq!(l.entry(), Some(1));
+        assert_eq!(l.tracks[reol].genres, 0b11, "genres merge across mapsets");
+        assert!(
+            l.is_favourite(reol),
+            "favourite on a collapsed mapset stays favourited"
+        );
+        l.toggle_favourite(reol, 1);
+        assert!(!l.is_favourite(reol));
+        assert!(l.favourites.is_empty());
     }
 
     #[test]
