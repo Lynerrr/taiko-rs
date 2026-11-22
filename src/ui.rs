@@ -556,11 +556,16 @@ const DIFF_BADGE_INSET: f32 = 18.0;
 /// mark), and how strong its brackets are next to the selected difficulty's.
 const OPEN_EDGE: f32 = 0.5;
 const OPEN_BRACKETS: f32 = 0.8;
-/// Where the line joining an open set's difficulties to its card runs down.
+/// Where the line joining an open set's difficulties to its card runs down (on the wave: in by
+/// the least of the set's rows' `list_wave`, one straight trunk for the whole set), and how far
+/// short of a difficulty's card its step into the row stops (clear of the selection's brackets,
+/// 3 out from the card).
 const DIFF_LINK_X: f32 = 34.0;
-const BOTTOM_FADE: f32 = 28.0;
-/// How much of a row's height going under the list's top edge takes it out entirely.
-const TOP_FADE: f32 = 0.3;
+const DIFF_LINK_GAP: f32 = 5.0;
+/// How much a row cut by the list's top or bottom edge dims, all of it once it's all but gone
+/// under the edge: it's cut by the list's clip, not faded out short of it (that left a hole a
+/// card tall under the source tabs).
+const EDGE_DIM: f32 = 0.35;
 const DIFF_BAR_DIM: f32 = 0.35;
 /// How long after the list has got to a new selection the banner's picture is read ahead.
 const PICTURE_SETTLE_MS: f32 = 60.0;
@@ -3214,11 +3219,28 @@ impl Select {
                 list_wave(cy, top, bottom)
             }
         };
+        // Each open set's trunk (`DIFF_LINK_X`): in by the least of its card's and its
+        // difficulties' waves, so it's inside its card and clear of every difficulty's left.
+        let mut trunks: Vec<(usize, f32)> = Vec::new();
+        for (row, ry, rh, _) in &rows {
+            let g = match row {
+                Row::Song(g) => self.group_of.get(g.start).copied(),
+                Row::Diff(i) => self.group_of.get(*i).copied(),
+                Row::Section(_) => None,
+            };
+            let Some(g) = g else { continue };
+            let dx = wave(top + ry - self.scroll + rh / 2.0);
+            match trunks.iter_mut().find(|(k, _)| *k == g) {
+                Some((_, x)) => *x = x.min(dx),
+                None => trunks.push((g, dx)),
+            }
+        }
         let mut lights = std::mem::take(&mut self.anim.card_light);
         let mut covers = std::mem::take(&mut self.anim.covers);
         for (row, ry, rh, alpha) in &rows {
             let y = top + ry - self.scroll;
-            if y + rh < top || y > bottom || *alpha < 0.02 {
+            // Drawn until wholly past an edge: the list's clip cuts the rest.
+            if y + rh <= top || y >= bottom || *alpha < 0.02 {
                 continue;
             }
             let row_start = c.shapes.len();
@@ -3527,18 +3549,24 @@ impl Select {
                             fill,
                             0.0,
                         );
-                        // Joined to its set's card by a line down the indent, a step into each
-                        // row (the last one's step its corner).
-                        let last = self
-                            .group_of
-                            .get(*i)
-                            .is_some_and(|&g| groups.get(g).is_some_and(|g| g.end == *i + 1));
+                        // Joined to its set's card by its trunk down the indent, a step into
+                        // each row (the last one's step its corner), short of the row's card.
+                        let set = self.group_of.get(*i).copied();
+                        let last =
+                            set.is_some_and(|g| groups.get(g).is_some_and(|g| g.end == *i + 1));
                         let mid = (y + (rh - 3.0) / 2.0).round();
                         let link = rgba(tone::EDGE, a);
                         let end = if last { mid + 1.0 } else { y + rh };
-                        let link_x = DIFF_LINK_X + dx;
+                        let trunk = trunks
+                            .iter()
+                            .find(|(g, _)| Some(*g) == set)
+                            .map_or(dx, |(_, x)| *x);
+                        let link_x = (DIFF_LINK_X + trunk).round();
                         c.rect(link_x, y - 4.0, 1.0, end - (y - 4.0), link);
-                        c.rect(link_x, mid, card[0] - link_x, 1.0, link);
+                        let step = card[0] - DIFF_LINK_GAP - link_x;
+                        if step > 0.0 {
+                            c.rect(link_x, mid, step, 1.0, link);
+                        }
                     }
                     if selected && !legacy {
                         // The brackets round it (`brackets`, the outline) and a light lift: no
@@ -3640,17 +3668,13 @@ impl Select {
                 if e > 0.0 {
                     c.fade_since(row_start, 1.0 - ARC_FADE * e * e, 1.0);
                 }
-                let over = (y + rh - (bottom - BOTTOM_FADE)).max(0.0);
-                let f = (1.0 - over / (rh + BOTTOM_FADE)).clamp(0.0, 1.0);
-                if f < 1.0 {
-                    c.fade_since(row_start, f * f * (3.0 - 2.0 * f), 1.0);
-                }
-                // And at the top, a row scrolled under the search row goes out as it goes: a
-                // third under it, none of it is left (no half a card cut off by the edge).
-                let under = (top - y).max(0.0);
-                let f = (1.0 - under / (rh * TOP_FADE)).clamp(0.0, 1.0);
-                if f < 1.0 {
-                    c.fade_since(row_start, f * f * (3.0 - 2.0 * f), 1.0);
+                // A row going under the list's top or bottom edge is cut by the list's clip,
+                // dimming a little as it goes (eased by how much of it is cut), not faded out
+                // short of the edge.
+                let cut = ((top - y).max(0.0) + (y + rh - bottom).max(0.0)) / rh.max(1.0);
+                let f = cut.clamp(0.0, 1.0);
+                if f > 0.0 {
+                    c.fade_since(row_start, 1.0 - EDGE_DIM * f * f * (3.0 - 2.0 * f), 1.0);
                 }
             }
             // A set just opened: its difficulties drop in one after another, out from the
