@@ -2461,10 +2461,27 @@ impl View {
         };
         let (mx, my) = self.mouse;
         let zone = 28.0;
+        // A box selection speeds up the further past the edge the pointer goes (as in osu!'s
+        // editor): slow at the border for fine control, many views a second well out, so a
+        // long stretch is boxed in a second. Anything else keeps a steady pace.
+        let boxing = matches!(
+            self.drag,
+            Drag::Box { .. } | Drag::StripBox { .. } | Drag::GBox { .. } | Drag::FxBox { .. }
+        );
+        let pace = |d: f32| {
+            let d = d / zone;
+            if !boxing {
+                d.min(2.0)
+            } else if d <= 1.0 {
+                d
+            } else {
+                (d * d).min(16.0)
+            }
+        };
         let push = if mx < l + zone {
-            -((l + zone - mx) / zone).min(2.0)
+            -pace(l + zone - mx)
         } else if mx > l + w - zone {
-            ((mx - (l + w - zone)) / zone).min(2.0)
+            pace(mx - (l + w - zone))
         } else {
             return;
         };
@@ -4628,6 +4645,43 @@ mod tests {
         let at = v.view_start;
         v.update(t0 + std::time::Duration::from_secs(5), None);
         assert_eq!(v.view_start, at);
+    }
+
+    /// Discord idea: boxing a long stretch crawled at one steady pace. Past the edge the box
+    /// now scrolls faster the further out the pointer is, and stays slow right at the border.
+    #[test]
+    fn a_box_scrolls_faster_the_further_past_the_edge() {
+        let mut v = view();
+        crowd(&mut v, 2000.0, 200_000.0);
+        draw(&mut v);
+        v.ed.tool = Tool::Select;
+        let above = v.lane_cy() - NOTE_R - 8.0;
+        let [l, _, w, _] = v.layout.timeline;
+        let span = w as f64 * v.ms_per_px;
+        // How many views a second the box scrolls with the pointer at `x`.
+        let pace = |v: &mut View, x: f32| {
+            v.view_start = 5000.0;
+            v.mouse_down(v.x_of(6000.0), above, Keys::default(), None);
+            v.mouse_move(x, above, Keys::default());
+            let t0 = Instant::now();
+            v.update(t0, None);
+            let start = v.view_start;
+            for i in 1..=10 {
+                v.update(t0 + std::time::Duration::from_millis(50 * i), None);
+            }
+            let views = (v.view_start - start) / span / 0.5;
+            v.mouse_up(x, above, Keys::default());
+            views
+        };
+        let border = pace(&mut v, l + w - 4.0);
+        let far = pace(&mut v, l + w + 120.0);
+        assert!(
+            border > 0.0 && border <= 1.0,
+            "slow at the border: {border}"
+        );
+        assert!(far >= 8.0, "fast well past the edge: {far} views a second");
+        let left = pace(&mut v, l - 120.0);
+        assert!(left < 0.0, "back to the start: {left}");
     }
 
     #[test]
