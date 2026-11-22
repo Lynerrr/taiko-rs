@@ -1888,9 +1888,9 @@ impl Preview {
         c.fade_since(start, p, 1.0);
     }
 
-    /// The map's picture over `[x, y, w, h]` (cover-cropped), whole down to `BANNER_WHOLE` of
-    /// it and then fading out strip by strip, a shade over it deepening downwards so the title
-    /// reads. It fades in when it first arrives; nothing until then.
+    /// The map's picture over `[x, y, w, h]` (cover-cropped), whole down to `whole` of it and
+    /// fading out downwards in its shader, with a shade over it darkening the left side under the
+    /// title. It fades in when it first arrives; nothing until then.
     fn draw_banner(
         &mut self,
         c: &mut Canvas,
@@ -1923,77 +1923,30 @@ impl Preview {
             None => 1.0,
         };
         let [x, y, w, h] = rect;
-        let sh = h / BANNER_STRIPS as f32;
-        // How much of the picture shows in strip `k`.
-        let keep = |k: usize| {
-            let mid = (k as f32 + 0.5) / BANNER_STRIPS as f32;
-            let t = ((mid - whole) / (1.0 - whole)).clamp(0.0, 1.0);
-            (1.0 - t * t * (3.0 - 2.0 * t)) * a
-        };
-        // Layers of the picture, each from the banner's top down to the end of its strip, so
-        // strip `k` is under layers `k..`: every edge belongs to one layer alone. Strips cut
-        // side by side would meet on shared edges, which the clip's rounding to whole pixels
-        // draws twice (a light line). Layer `k` adds what strip `k` needs over the layers
-        // below it.
         let dim = BANNER_BRIGHT;
-        let mut drawn = false;
-        for k in 0..BANNER_STRIPS {
-            let below = if k + 1 < BANNER_STRIPS {
-                1.0 - keep(k + 1)
-            } else {
-                1.0
-            };
-            let alpha = if below > 1e-4 {
-                1.0 - (1.0 - keep(k)) / below
-            } else {
-                0.0
-            };
-            let bottom = crate::render::snap_to_grid(y + (k + 1) as f32 * sh);
-            let clip = [x, y, w, bottom - y];
-            let tint = [dim, dim, dim, alpha.max(0.0)];
-            // At the top of the details' panel, its top corners as round as the panel's.
-            drawn |= c.picture_cover_round_top(&bg, rect, clip, tint, crate::style::radius::CARD);
-        }
+        // At the top of the details' panel, its top corners as round as the panel's, fading out
+        // downwards in the shader (one quad instead of stacked clipped layers).
+        let drawn = c.picture_cover_round_top(
+            &bg,
+            rect,
+            rect,
+            [dim, dim, dim, a],
+            crate::style::radius::CARD,
+            Some(whole),
+        );
         // A plate of the panel's tone over the banner, dark under the title and artist at its
-        // left and lighter to its right end in an eased sweep: in layers as the picture is, so it
-        // fades out downwards with it and no edge of it shows where the picture has gone.
+        // left and lighter to its right end in an eased sweep, fading out downwards with the
+        // picture so no edge shows where the picture has gone.
         if drawn {
-            let alphas: Vec<f32> = (0..BANNER_STRIPS)
-                .map(|k| {
-                    let below = if k + 1 < BANNER_STRIPS {
-                        1.0 - keep(k + 1)
-                    } else {
-                        1.0
-                    };
-                    if below > 1e-4 {
-                        (1.0 - (1.0 - keep(k)) / below).max(0.0)
-                    } else {
-                        0.0
-                    }
-                })
-                .collect();
-            // The layers all start at the banner's top, so there they're over one another: each
-            // takes the strength that makes them come to `BANNER_PLATE` together.
-            let (strength, rest) = (
-                stacked_strength(&alphas, plate.0),
-                stacked_strength(&alphas, plate.1),
+            let tone = crate::style::SURFACE_1;
+            c.shade_eased_fade_down(
+                [x, y],
+                [w, h],
+                crate::style::radius::CARD,
+                rgba(tone, plate.0 * a),
+                rgba(tone, plate.1 * a),
+                whole,
             );
-            for (k, &alpha) in alphas.iter().enumerate() {
-                if alpha <= 0.0 {
-                    continue;
-                }
-                let bottom = crate::render::snap_to_grid(y + (k + 1) as f32 * sh);
-                let start = c.shapes.len();
-                let plate = crate::style::SURFACE_1;
-                c.shade_eased(
-                    [x, y],
-                    [w, h],
-                    crate::style::radius::CARD,
-                    rgba(plate, strength * alpha),
-                    rgba(plate, rest * alpha),
-                );
-                c.clip_since(start, x, y, w, bottom - y);
-            }
         }
         if drawn && since.is_none() {
             self.banner_seen = Some((bg, crate::render::frame_now()));
@@ -2881,8 +2834,7 @@ const LEFT_OUT_H: f32 = 12.0;
 const BLOCK_GAP: f32 = 8.0;
 /// Bare, the room between the pp row and the preview under it.
 const PREVIEW_GAP: f32 = 10.0;
-/// The banner's strips (it fades out down them) and how far down it stays whole.
-const BANNER_STRIPS: usize = 12;
+/// How far down the banner's picture stays whole before fading out.
 const BANNER_WHOLE: f32 = 0.45;
 /// Split (song select's right column), the banner's height, its look (how far down the picture
 /// stays whole; the plate at its left and its right) and the room under its text. Tall enough
@@ -2893,24 +2845,6 @@ const SPLIT_BANNER: (f32, (f32, f32)) = (0.5, (0.55, 0.0));
 const SPLIT_BANNER_FOOT: f32 = 8.0;
 /// How bright the banner's picture is drawn: near its own, the plate under the text does the rest.
 const BANNER_BRIGHT: f32 = 0.85;
-/// How strong each of the layers `alphas` of a shade over one another must be (each `alpha` of
-/// it) for them to come to `target` together.
-fn stacked_strength(alphas: &[f32], target: f32) -> f32 {
-    let together = |s: f32| 1.0 - alphas.iter().map(|a| 1.0 - s * a).product::<f32>();
-    let (mut lo, mut hi) = (0.0f32, 1.0f32);
-    if together(hi) <= target {
-        return hi;
-    }
-    for _ in 0..24 {
-        let mid = (lo + hi) / 2.0;
-        if together(mid) < target {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    (lo + hi) / 2.0
-}
 
 /// The banner text's shadow: how far down it is, and how strong.
 const TEXT_SHADOW: (f32, f32) = (1.0, 0.6);

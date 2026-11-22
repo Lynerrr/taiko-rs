@@ -176,19 +176,22 @@ fn run(
 ) {
     let cache = load_cache();
     let mut todo = Vec::new();
-    {
+    let mut hits = Vec::new();
+    for (i, path, mtime, size) in maps {
+        match cache.get(&path) {
+            Some(&(m, s, info)) if m == mtime && s == size => hits.push((i, info)),
+            _ => todo.push((i, path, mtime, size)),
+        }
+    }
+    if !hits.is_empty() {
+        let hit_count = hits.len();
         let mut r = results.lock().unwrap();
-        for (i, path, mtime, size) in maps {
-            match cache.get(&path) {
-                Some(&(m, s, info)) if m == mtime && s == size => {
-                    if let Some(slot) = r.get_mut(i) {
-                        *slot = Some(info);
-                    }
-                    done.fetch_add(1, Ordering::Relaxed);
-                }
-                _ => todo.push((i, path, mtime, size)),
+        for (i, info) in hits {
+            if let Some(slot) = r.get_mut(i) {
+                *slot = Some(info);
             }
         }
+        done.fetch_add(hit_count, Ordering::Relaxed);
     }
     if todo.is_empty() {
         return;

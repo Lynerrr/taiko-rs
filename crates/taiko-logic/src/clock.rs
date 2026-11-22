@@ -289,6 +289,14 @@ impl FrameRate {
     }
 }
 
+/// Advances a fixed-grid frame deadline by one `period` (1 / cap) after finishing a frame at
+/// `now`. If the frame already ran past the next slot (`next < now`), resyncs to `now` instead of
+/// skipping ahead by an extra period (which turned a slight overrun into a 2x frame stall).
+pub fn next_frame_deadline(last: Instant, now: Instant, period: Duration) -> Instant {
+    let next = last + period;
+    if next < now { now } else { next }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,5 +533,21 @@ mod tests {
         let (mut r, mut t) = (FrameRate::default(), Instant::now());
         assert_eq!(run(&mut r, &mut t, 8000.0, 2.0, true), [true]);
         assert_eq!(run(&mut r, &mut t, 165.0, 1.0, false), [false]);
+    }
+
+    #[test]
+    fn frame_cap_keeps_grid_when_on_time() {
+        let last = Instant::now();
+        let period = Duration::from_secs_f64(1.0 / 340.0);
+        let now = last + period / 2;
+        assert_eq!(next_frame_deadline(last, now, period), last + period);
+    }
+
+    #[test]
+    fn frame_cap_resyncs_without_extra_stall_when_late() {
+        let last = Instant::now();
+        let period = Duration::from_secs_f64(1.0 / 340.0);
+        let now = last + period + Duration::from_micros(100);
+        assert_eq!(next_frame_deadline(last, now, period), now);
     }
 }

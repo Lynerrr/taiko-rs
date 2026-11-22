@@ -1,7 +1,7 @@
 //! Finds beatmaps: Songs folders, single map folders, `.osz` archives and `.osu` files.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 use crate::beatmap::{self, Meta};
@@ -174,12 +174,19 @@ pub struct Hasher {
     rx: Receiver<(usize, PathBuf, u64)>,
     /// Asked for and not in yet, by library index.
     asked: std::collections::HashSet<usize>,
+    /// Holds hashing while a song is played (`hold`).
+    paused: Arc<AtomicBool>,
+    /// Signals the thread to exit on drop even while paused.
+    stop: Arc<AtomicBool>,
 }
 
 impl Default for Hasher {
     fn default() -> Self {
         let (tx, jobs) = mpsc::channel::<(usize, PathBuf, bool)>();
         let (done, rx) = mpsc::channel();
+        let paused = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (thread_paused, thread_stop) = (paused.clone(), stop.clone());
         std::thread::Builder::new()
             .name("map hashes".into())
             .spawn(move || {
@@ -187,6 +194,9 @@ impl Default for Hasher {
                     crate::services::workers::Priority::BelowNormal,
                 );
                 for (i, path, tja) in jobs {
+                    if !crate::pictures::wait_turn(&thread_stop, &thread_paused) {
+                        return;
+                    }
                     let hash = work_out_hash(&path, tja);
                     if done.send((i, path, hash)).is_err() {
                         return;
@@ -198,11 +208,30 @@ impl Default for Hasher {
             tx,
             rx,
             asked: Default::default(),
+            paused,
+            stop,
         }
     }
 }
 
+impl Drop for Hasher {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
 impl Hasher {
+    /// Holds hashing while a song is played (`on`), or lets it go on.
+    pub fn hold(&self, on: bool) {
+        self.paused.store(on, Ordering::Relaxed);
+    }
+
+    /// Tests: hashing is held.
+    #[cfg(test)]
+    pub fn held(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
     /// Asks for the hash of `library`'s entry `i` if it isn't known or asked for already.
     pub fn want(&mut self, library: &[Entry], i: usize) {
         let Some(e) = library.get(i) else {
@@ -1430,6 +1459,39 @@ mod hash_tests {
         assert_eq!(path, bg.as_path());
         assert_eq!(key, crate::render::path_picture_key(&bg));
         assert!(entries[2].cover().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hasher_waits_while_held_and_finishes_when_released() {
+        let dir = std::env::temp_dir().join(format!("taiko-hasher-hold-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("0.osu");
+        std::fs::write(&path, "osu file format v14\n// hold\n").unwrap();
+        let entries = [Entry::from_parts(path, Meta::default(), 0, 0)];
+        let mut hasher = Hasher::default();
+        hasher.hold(true);
+        assert!(hasher.held());
+        hasher.want(&entries, 0);
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        hasher.take_in(&entries);
+        assert!(hasher.is_busy(), "held: stays queued");
+        assert_eq!(entries[0].known_hash(), None, "not hashed while held");
+
+        hasher.hold(false);
+        assert!(!hasher.held());
+        for _ in 0..2000 {
+            hasher.take_in(&entries);
+            if !hasher.is_busy() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!hasher.is_busy(), "released: finishes");
+        assert_eq!(
+            entries[0].known_hash(),
+            Some(work_out_hash(&entries[0].path, false))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
