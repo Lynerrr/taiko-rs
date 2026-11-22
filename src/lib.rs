@@ -572,6 +572,8 @@ struct State {
     board_fetch: Option<BoardFetch>,
     /// The pp simulator's last answer: for which map, pick, speed and mods, and the pp.
     sim_pp: Option<(SimKey, Option<f64>)>,
+    /// `sim_pp` being worked out.
+    sim_pp_job: Job<(SimKey, Option<f64>)>,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
     /// Mods of the play being loaded.
@@ -886,6 +888,10 @@ struct State {
     stars: stars::Stars,
     /// The pp the selected map could give (song select's details).
     potentials: pp::Potentials,
+    /// Library entries' hashes, worked out off the frame for song select's letters and board.
+    hasher: library::Hasher,
+    /// Each map's best letter from the plays, for song select's rows.
+    grades: scores::Grades,
     /// Background brightness for this frame (0 hides it).
     bg_brightness: f32,
     /// The idle screen, after a while with no input.
@@ -2577,6 +2583,48 @@ impl State {
 
     /// Play on the menu: the camera moves on along its lane to song select (`shifts`), or song
     /// select is simply there.
+    /// Library entry `i`'s hash once it's known (`library::Hasher`), asked for if it isn't: what
+    /// a frame draws doesn't wait on reading the map's file for it.
+    pub(crate) fn known_hash_of(&mut self, i: usize) -> Option<u64> {
+        let hash = self.library.get(i)?.known_hash();
+        if hash.is_none() {
+            self.hasher.want(&self.library, i);
+        }
+        hash
+    }
+
+    /// Song select's letter on each row (its best play's), by the hashes known; the entries
+    /// whose hash isn't known yet go into `unknown` (library indices) to be asked for.
+    pub(crate) fn row_grade<'a>(
+        library: &'a [library::Entry],
+        grades: &'a scores::Grades,
+        unknown: &'a std::cell::RefCell<Vec<usize>>,
+    ) -> impl Fn(&library::Entry) -> Option<&'static str> + 'a {
+        move |e| match e.known_hash() {
+            Some(hash) => grades.get(hash),
+            None => {
+                if let Some(i) = library::index_in(library, e) {
+                    unknown.borrow_mut().push(i);
+                }
+                None
+            }
+        }
+    }
+
+    /// The selected map's pp at full combo (`pp::Potentials`). Asked for only once the selection
+    /// settles on it, as the preview loads it (`Preview::settling_on`): a run of selections asked
+    /// the worker about every map passed by. What's known already shows at once.
+    pub(crate) fn selected_potential(&mut self, rate: f64) -> Option<[f64; 3]> {
+        let i = self.select.selected()?;
+        let (mods, scroll) = (self.cfg.mods, self.cfg.scroll_speed);
+        let path = &self.library.get(i)?.path;
+        if self.preview.settling_on(i) {
+            self.potentials.known(path, rate, mods, scroll)
+        } else {
+            self.potentials.get(path, rate, mods, scroll)
+        }
+    }
+
     /// The pp a play picked in the simulator would give on library entry `i` at speed `rate`
     /// with the mods on (None until the map is read, or for no pp with these mods); worked out
     /// again only when any of it changes.
@@ -2591,10 +2639,23 @@ impl State {
             self.cfg.mods,
             self.cfg.scroll_speed.to_bits(),
         );
+        if let Some(done) = self.sim_pp_job.poll() {
+            self.sim_pp = Some(done);
+        }
         if let Some((k, pp)) = &self.sim_pp
             && *k == key
         {
             return *pp;
+        }
+        // Worked out on a thread of its own, one at a time (a drag on the simulator's steps
+        // asks again and again): what it gave for the same map shows meanwhile.
+        let meanwhile = self
+            .sim_pp
+            .as_ref()
+            .filter(|(k, _)| k.0 == key.0)
+            .and_then(|(_, pp)| *pp);
+        if self.sim_pp_job.is_busy() {
+            return meanwhile;
         }
         let (great, ok, miss) = sim.counts(notes);
         let play = pp::Play {
@@ -2608,9 +2669,9 @@ impl State {
             seed: 0,
             half: Default::default(),
         };
-        let pp = pp::play_pp(&e.path, &play);
-        self.sim_pp = Some((key, pp));
-        pp
+        let path = e.path.clone();
+        self.sim_pp_job = Job::spawn(move || (key, pp::play_pp(&path, &play)));
+        meanwhile
     }
 
     /// The camera moves between the main menu and song select (not in 1.0's look, where song
@@ -12757,8 +12818,12 @@ impl State {
         }
         // So do song select's picture copies made ahead (`prewarm`): decoding a whole library's
         // backgrounds takes a core for minutes after an update, and a 2-core laptop stutters.
-        self.pictures.hold(in_song);
-        self.card_pictures.hold(in_song);
+        // And while song select's list is on the move: the cards and the banner coming in need
+        // what CPU a small machine has.
+        let browsing = self.scene.is_select() && !self.on_menu() && self.select.flying();
+        self.hasher.take_in(&self.library);
+        self.pictures.hold(in_song || browsing);
+        self.card_pictures.hold(in_song || browsing);
         self.refresh_play_offset();
         self.follow_map_skin();
         if self.volume_save_at.is_some_and(|at| now >= at) {
@@ -12799,13 +12864,17 @@ impl State {
         // The pictures the last frame drew, then the ones the renderer has for this one.
         self.avatars.update(&canvas.avatars_wanted);
         let picture_dir = self.picture_dir();
-        self.pictures.update(
+        // The banner first, then the cards' strips, within one frame's budget for the GPU.
+        let mut budget = UPLOAD_BUDGET;
+        self.pictures.update_within(
             picture_dir.as_deref(),
             &canvas.pictures_wanted,
             &canvas.picture_times,
             &canvas.picture_paths,
+            &mut budget,
         );
-        self.card_pictures.update(&canvas.cards_wanted);
+        self.card_pictures
+            .update_within(&canvas.cards_wanted, &mut budget);
         canvas.clear(width);
         canvas.input_editor = self
             .sync_text_input()
@@ -12905,6 +12974,13 @@ impl State {
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
             self.preview.mods = self.shown_mods();
+            // Song select's main look shows the autoplay on its Preview tab only.
+            self.preview.autoplay_hidden = self.scene.is_select()
+                && !self.on_menu()
+                && !self.select.legacy
+                && !self.select.classic
+                && !mobile::active()
+                && !self.column_preview;
             self.preview.update(
                 now,
                 entries,
@@ -14152,6 +14228,9 @@ impl State {
             ),
             ("the replay's music", self.replay_speed_rx.is_busy()),
             ("the live pp", live_pp),
+            ("the map hashes", self.hasher.is_busy()),
+            ("the selected map's pp", self.potentials.is_busy()),
+            ("the pp simulator", self.sim_pp_job.is_busy()),
             ("the download browser", self.browse.is_busy()),
             (
                 "the account server",
@@ -15588,6 +15667,11 @@ const STATUS_ROUND_SECS: u64 = 45;
 
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
+
+/// How many bytes of pictures go up to the GPU in one frame at most (song select's banner, the
+/// cards' strips and a new background): a fast scroll used to send over 13 MB in one frame, a
+/// hitch on an integrated GPU. The first thing in a frame always goes, whatever its size.
+pub(crate) const UPLOAD_BUDGET: usize = 3 << 20;
 
 /// How long the exit question takes to slide in.
 const QUIT_SLIDE_MS: f32 = 160.0;

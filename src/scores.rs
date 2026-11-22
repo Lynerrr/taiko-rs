@@ -179,13 +179,62 @@ fn row_grade(row: &ScoreRow) -> &'static str {
     crate::online::grade(1, u32::from(row.accuracy < 1.0), row.miss, row.accuracy)
 }
 
-/// The best letter of the plays on a map, like osu!'s song select shows.
+/// The best letter of the plays on a map, like osu!'s song select shows (`Grades` keeps them
+/// for all maps).
+#[cfg(test)]
 pub fn best_grade(rows: &[ScoreRow], map_hash: u64) -> Option<&'static str> {
     let rank = |g: &str| ["D", "C", "B", "A", "S", "SS"].iter().position(|l| *l == g);
     rows.iter()
         .filter(|r| r.map_hash == map_hash)
         .map(row_grade)
         .max_by_key(|g| rank(g))
+}
+
+/// Each map's best letter (`best_grade`), worked out once for all the plays: song select shows
+/// one on every row, and looking each up along all the plays was a scan of them a row a frame.
+/// Worked out again when the plays change (`refresh`).
+#[derive(Default)]
+pub struct Grades {
+    /// What the plays it was worked out from come to (`fingerprint`).
+    seen: Option<u64>,
+    best: std::collections::HashMap<u64, &'static str>,
+}
+
+impl Grades {
+    /// Follows `rows`: works the letters out again if they changed since.
+    pub fn refresh(&mut self, rows: &[ScoreRow]) {
+        let now = fingerprint(rows);
+        if self.seen == Some(now) {
+            return;
+        }
+        self.seen = Some(now);
+        self.best.clear();
+        let rank = |g: &str| ["D", "C", "B", "A", "S", "SS"].iter().position(|l| *l == g);
+        for row in rows {
+            let grade = row_grade(row);
+            let best = self.best.entry(row.map_hash).or_insert(grade);
+            if rank(grade) > rank(best) {
+                *best = grade;
+            }
+        }
+    }
+
+    /// The best letter on the map `map_hash`, as `best_grade` has it.
+    pub fn get(&self, map_hash: u64) -> Option<&'static str> {
+        self.best.get(&map_hash).copied()
+    }
+}
+
+/// What the plays come to, in what decides their letters: changes when one is added, taken
+/// away or changed (a cheap mix, not a hash of everything).
+fn fingerprint(rows: &[ScoreRow]) -> u64 {
+    let mix = |h: u64, x: u64| (h.rotate_left(5) ^ x).wrapping_mul(0x517c_c1b7_2722_0a95);
+    rows.iter().fold(rows.len() as u64, |h, r| {
+        mix(
+            mix(mix(h, r.map_hash), r.accuracy.to_bits()),
+            u64::from(r.miss),
+        )
+    })
 }
 
 /// "3d" style age of a Unix time (for "3d ago").
@@ -201,5 +250,50 @@ pub fn age(date: u64) -> String {
         3600..=86_399 => tr!("{}h", "{}時間", "{}ч"; [s / 3600] []),
         86_400..=2_591_999 => tr!("{}d", "{}日", "{}д"; [s / 86_400] []),
         _ => tr!("{}mo", "{}ヶ月", "{}мес"; [s / 2_592_000] []),
+    }
+}
+
+#[cfg(test)]
+mod grade_tests {
+    use super::*;
+
+    fn row(map_hash: u64, accuracy: f64, miss: u32) -> ScoreRow {
+        ScoreRow {
+            map_hash,
+            date: 0,
+            score: 0,
+            accuracy,
+            max_combo: 0,
+            miss,
+            rate: 1.0,
+            player: String::new(),
+            file: PathBuf::new(),
+            mods: String::new(),
+            pp: None,
+        }
+    }
+
+    #[test]
+    fn the_letters_kept_for_all_maps_are_the_ones_looked_up_and_follow_the_plays() {
+        let mut rows = vec![
+            row(1, 0.80, 9),
+            row(1, 0.97, 0),
+            row(2, 0.70, 30),
+            row(3, 1.0, 0),
+        ];
+        let mut grades = Grades::default();
+        grades.refresh(&rows);
+        for hash in [1, 2, 3, 4] {
+            assert_eq!(grades.get(hash), best_grade(&rows, hash), "map {hash}");
+        }
+        // A better play comes in: its letter shows.
+        rows.push(row(2, 1.0, 0));
+        grades.refresh(&rows);
+        assert_eq!(grades.get(2), best_grade(&rows, 2));
+        assert_eq!(grades.get(2), Some("SS"));
+        // A play deleted: it goes with it.
+        rows.retain(|r| r.map_hash != 3);
+        grades.refresh(&rows);
+        assert_eq!(grades.get(3), None);
     }
 }

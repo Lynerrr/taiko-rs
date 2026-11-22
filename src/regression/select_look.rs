@@ -3749,3 +3749,78 @@ fn the_right_column_leans_with_the_pointer_as_one_its_actions_with_it() {
         );
     }
 }
+
+#[test]
+fn picture_copies_made_ahead_wait_while_the_list_flies_and_go_on_once_it_rests() {
+    // The copies take a core a small machine needs for the cards and banner coming into view.
+    let (mut s, _songs, mut now) = many_sets("select-look-flying");
+    settled(&mut s, &mut now);
+    let held = |s: &State| (s.pictures.held(), s.card_pictures.held());
+    assert!(!s.select.flying());
+    assert_eq!(held(&s), (false, false), "the list at rest: they go on");
+    // Dragged, then wheeled: each frame's hold follows the list as the frame before left it.
+    let mut flown = 0;
+    drag_then_wheel(&mut s, &mut now, 600.0, 12, |s, _, how| {
+        if s.select.flying() {
+            flown += 1;
+            assert_eq!(held(s), (true, true), "{how}: on the move, they wait");
+        }
+    });
+    assert!(flown > 0, "the list flew");
+    settled(&mut s, &mut now);
+    assert!(!s.select.flying(), "come to rest");
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(held(&s), (false, false), "at rest again: they go on");
+}
+
+#[test]
+fn the_autoplay_is_not_played_on_while_a_board_s_tab_hides_it() {
+    let (mut s, _songs, mut now) = menu_look("select-look-autoplay-hidden");
+    settled(&mut s, &mut now);
+    assert!(!s.preview.autoplay_hidden, "the preview's tab shows it");
+    on_board(&mut s, &mut now, false);
+    assert!(s.preview.autoplay_hidden, "the local board's tab");
+    on_board(&mut s, &mut now, true);
+    assert!(s.preview.autoplay_hidden, "the online board's tab");
+    s.click(Hit::PreviewTab, None);
+    settled(&mut s, &mut now);
+    assert!(!s.preview.autoplay_hidden, "back on the preview's tab");
+    // Legacy shows the autoplay beside its board: it plays on there.
+    on_board(&mut s, &mut now, false);
+    s.cfg.main_menu = false;
+    settled(&mut s, &mut now);
+    assert!(s.select.legacy);
+    assert!(!s.preview.autoplay_hidden, "the Legacy look");
+}
+
+#[test]
+fn a_rows_letter_and_the_board_wait_for_the_maps_hash_worked_out_off_the_frame() {
+    let (mut s, _songs, mut now) = menu_look("select-look-hash-later");
+    let i = s.select.selected().expect("a map selected");
+    // A play on it, as one made before.
+    settled(&mut s, &mut now);
+    let hash = s.library[i]
+        .known_hash()
+        .expect("worked out for its row and board");
+    assert!(!s.hasher.is_busy());
+    s.scores.push(scores::ScoreRow {
+        map_hash: hash,
+        date: 0,
+        score: 1_000_000,
+        accuracy: 1.0,
+        max_combo: 10,
+        miss: 0,
+        rate: 1.0,
+        player: "me".into(),
+        file: Default::default(),
+        mods: String::new(),
+        pp: None,
+    });
+    let c = settled(&mut s, &mut now);
+    assert!(
+        c.texts.iter().any(|(_, t)| t.trim() == "SS"),
+        "the new play's letter shows on its row"
+    );
+    assert_eq!(s.grades.get(hash), Some("SS"));
+}

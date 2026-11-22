@@ -721,6 +721,11 @@ pub struct BgImage {
     pub luma: Vec<u8>,
     /// Cb, Cr pairs for each 2x2 block (`chroma_size`).
     pub chroma: Vec<u8>,
+    /// The small blurred copies of both (`blurred_size`), for the idle screen to fade into. Made
+    /// with the image, on the thread that reads it: on the render thread they held up the frame
+    /// a new background came in on.
+    luma_blur: Vec<u8>,
+    chroma_blur: Vec<u8>,
 }
 
 impl BgImage {
@@ -759,12 +764,23 @@ impl BgImage {
                 );
             }
         }
+        let (sw, sh) = blurred_size(width, height);
+        let (cw, ch) = (cw as u32, ch as u32);
+        let luma_blur = shrink_blur(&luma, width, height, 1, sw, sh);
+        let chroma_blur = shrink_blur(&chroma, cw, ch, 2, sw, sh);
         BgImage {
             width,
             height,
             luma,
             chroma,
+            luma_blur,
+            chroma_blur,
         }
+    }
+
+    /// What it takes to send to the GPU, blurred copies and all.
+    pub fn bytes(&self) -> usize {
+        self.luma.len() + self.chroma.len() + self.luma_blur.len() + self.chroma_blur.len()
     }
 
     pub fn chroma_size(width: u32, height: u32) -> (u32, u32) {
@@ -773,10 +789,13 @@ impl BgImage {
 
     fn is_valid(&self) -> bool {
         let (cw, ch) = Self::chroma_size(self.width, self.height);
+        let (sw, sh) = blurred_size(self.width, self.height);
         self.width > 0
             && self.height > 0
             && self.luma.len() == (self.width * self.height) as usize
             && self.chroma.len() == (cw * ch * 2) as usize
+            && self.luma_blur.len() == (sw * sh) as usize
+            && self.chroma_blur.len() == (sw * sh * 2) as usize
     }
 }
 
@@ -2334,7 +2353,7 @@ impl Renderer {
             sh,
             wgpu::TextureFormat::R8Unorm,
             1,
-            &shrink_blur(&img.luma, w, h, 1, sw, sh),
+            &img.luma_blur,
         );
         let chroma_blur = plane(
             "background chroma blurred",
@@ -2342,7 +2361,7 @@ impl Renderer {
             sh,
             wgpu::TextureFormat::Rg8Unorm,
             2,
-            &shrink_blur(&img.chroma, cw, ch, 2, sw, sh),
+            &img.chroma_blur,
         );
         // Each layer has its own uniform: its crop depends on its own aspect.
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -3917,6 +3936,8 @@ pub struct Canvas<H> {
     /// Card pictures asked for this frame: picture key, file, and whether a card draws it now
     /// (`card_picture`) or it is only read ahead (`want_card`).
     pub cards_wanted: Vec<(String, std::path::PathBuf, bool)>,
+    /// Where each key is in `cards_wanted`.
+    pub card_index: std::collections::HashMap<String, usize>,
 }
 
 // By hand: a derive would ask `H: Default` of the hit type.
@@ -3951,6 +3972,7 @@ impl<H> Default for Canvas<H> {
             card_slots: Default::default(),
             card_colours: Default::default(),
             cards_wanted: Default::default(),
+            card_index: Default::default(),
         }
     }
 }
@@ -4151,6 +4173,7 @@ impl<H> Canvas<H> {
         self.picture_paths.clear();
         self.picture_times.clear();
         self.cards_wanted.clear();
+        self.card_index.clear();
         self.disc = None;
         self.glitch = None;
         self.hits.clear();
@@ -4648,14 +4671,29 @@ impl<H> Canvas<H> {
     pub fn card_picture(
         &mut self,
         path: &std::path::Path,
-        [x, y, w, h]: [f32; 4],
+        rect: [f32; 4],
         tint: [f32; 4],
         radius: f32,
         greys: [f32; 2],
         come: Option<[f32; 2]>,
     ) -> bool {
         let key = path_picture_key(path);
-        let slot = self.card_slots.get(&key).copied();
+        self.card_picture_keyed(&key, path, rect, tint, radius, greys, come)
+    }
+
+    /// `card_picture`, its key (`path_picture_key`) worked out already.
+    #[allow(clippy::too_many_arguments)]
+    pub fn card_picture_keyed(
+        &mut self,
+        key: &str,
+        path: &std::path::Path,
+        [x, y, w, h]: [f32; 4],
+        tint: [f32; 4],
+        radius: f32,
+        greys: [f32; 2],
+        come: Option<[f32; 2]>,
+    ) -> bool {
+        let slot = self.card_slots.get(key).copied();
         self.ask_card(key, path, true);
         let Some(slot) = slot else {
             return false;
@@ -4732,19 +4770,35 @@ impl<H> Canvas<H> {
     /// Asks for the card picture of the map picture at `path` without drawing it, so it's in
     /// before its card comes into view.
     pub fn want_card(&mut self, path: &std::path::Path) {
-        self.ask_card(path_picture_key(path), path, false);
+        self.ask_card(&path_picture_key(path), path, false);
     }
 
-    fn ask_card(&mut self, key: String, path: &std::path::Path, drawn: bool) {
-        match self.cards_wanted.iter_mut().find(|w| w.0 == key) {
-            Some(w) => w.2 |= drawn,
-            None => self.cards_wanted.push((key, path.to_path_buf(), drawn)),
+    /// `want_card`, its key (`path_picture_key`) worked out already.
+    pub fn want_card_keyed(&mut self, key: &str, path: &std::path::Path) {
+        self.ask_card(key, path, false);
+    }
+
+    fn ask_card(&mut self, key: &str, path: &std::path::Path, drawn: bool) {
+        // Looked up by key, not along the list: it holds a hundred and more a frame.
+        match self.card_index.get(key) {
+            Some(&i) => self.cards_wanted[i].2 |= drawn,
+            None => {
+                self.card_index
+                    .insert(key.to_string(), self.cards_wanted.len());
+                self.cards_wanted
+                    .push((key.to_string(), path.to_path_buf(), drawn));
+            }
         }
     }
 
     /// The average colour of the card picture of the map picture at `path`, once known.
     pub fn card_colour(&self, path: &std::path::Path) -> Option<[f32; 3]> {
-        self.card_colours.get(&path_picture_key(path)).copied()
+        self.card_colour_keyed(&path_picture_key(path))
+    }
+
+    /// `card_colour` by its picture key (`path_picture_key`).
+    pub fn card_colour_keyed(&self, key: &str) -> Option<[f32; 3]> {
+        self.card_colours.get(key).copied()
     }
 
     /// Where an animated picture `file` is to be in its frames this frame: `since` ms into them
@@ -5808,6 +5862,47 @@ mod tests {
 #[cfg(test)]
 mod shape_limit_tests {
     use super::*;
+
+    #[test]
+    fn a_background_comes_with_its_blurred_copies_made_where_it_was_read() {
+        let (w, h) = (37, 21);
+        let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i * 7 % 251) as u8).collect();
+        let img = BgImage::from_rgba(w, h, &rgba);
+        assert!(img.is_valid());
+        let (sw, sh) = blurred_size(w, h);
+        let (cw, ch) = BgImage::chroma_size(w, h);
+        // What the render thread made of it when it went up, made ahead.
+        assert_eq!(img.luma_blur, shrink_blur(&img.luma, w, h, 1, sw, sh));
+        assert_eq!(img.chroma_blur, shrink_blur(&img.chroma, cw, ch, 2, sw, sh));
+        assert_eq!(
+            img.bytes(),
+            img.luma.len() + img.chroma.len() + (sw * sh * 3) as usize
+        );
+    }
+
+    #[test]
+    fn a_card_picture_asked_for_twice_in_a_frame_is_one_and_drawn_if_either_draws_it() {
+        let mut c = Canvas::<()>::default();
+        c.clear(800.0);
+        let (a, b) = (
+            std::path::Path::new("/s/a/bg.jpg"),
+            std::path::Path::new("/s/b/bg.jpg"),
+        );
+        c.want_card(a);
+        c.want_card_keyed(&path_picture_key(b), b);
+        c.card_picture(a, [0.0, 0.0, 10.0, 10.0], [1.0; 4], 0.0, [0.0; 2], None);
+        c.want_card(b);
+        let wanted: Vec<_> = c.cards_wanted.iter().map(|w| (w.0.clone(), w.2)).collect();
+        assert_eq!(
+            wanted,
+            [(path_picture_key(a), true), (path_picture_key(b), false)]
+        );
+        c.clear(800.0);
+        assert!(c.cards_wanted.is_empty());
+        c.want_card(b);
+        assert_eq!(c.cards_wanted.len(), 1, "a new frame asks afresh");
+        assert_eq!(c.card_colour(a), c.card_colour_keyed(&path_picture_key(a)));
+    }
 
     #[test]
     fn a_frame_never_asks_for_a_bigger_buffer_than_the_card_has() {

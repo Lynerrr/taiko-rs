@@ -154,6 +154,10 @@ pub(super) fn render_loop(
     canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
     let mut layout_seen = std::collections::HashSet::new();
     let mut frames = 0u32;
+    // How many frames a new background has waited behind pictures going up (`UPLOAD_BUDGET`).
+    let mut bg_waited = 0u32;
+    /// A background waits behind pictures going up for at most this many frames.
+    const BG_MAX_WAIT: u32 = 3;
     loop {
         frames = frames.saturating_add(1);
         if frames == gpu_start::FRAMES {
@@ -227,13 +231,19 @@ pub(super) fn render_loop(
         }
         let present = renderer.present;
         renderer.pixel_scale = pixel_scale;
+        // What goes up to the GPU this frame, for a new background to wait its turn behind
+        // (`UPLOAD_BUDGET`).
+        let mut uploaded = 0;
         for (slot, rgba) in avatar_uploads {
+            uploaded += rgba.len();
             renderer.set_avatar(slot, &rgba);
         }
         for (slot, rgba) in picture_uploads {
+            uploaded += rgba.len();
             renderer.set_picture(slot, &rgba);
         }
         for (slot, rgba) in card_uploads {
+            uploaded += rgba.len();
             renderer.set_card(slot, &rgba);
         }
         if let Some(atlas) = atlas {
@@ -374,7 +384,22 @@ pub(super) fn render_loop(
                 }
                 let _ = proxy.send_event(UserEvent::HideCursor(hide));
             }
-            let background = s.preview.bg_upload.take();
+            // A new background (3 MB and more) waits a frame or two while pictures are going up,
+            // so the two never land on the GPU in one frame.
+            let background = match &s.preview.bg_upload {
+                Some(image) => {
+                    let bytes = image.as_ref().map_or(0, render::BgImage::bytes);
+                    let crowded = uploaded > 0 && uploaded + bytes > crate::UPLOAD_BUDGET;
+                    if crowded && bg_waited < BG_MAX_WAIT {
+                        bg_waited += 1;
+                        None
+                    } else {
+                        bg_waited = 0;
+                        s.preview.bg_upload.take()
+                    }
+                }
+                None => None,
+            };
             if background.is_some() {
                 s.bg_changed = Some(Instant::now());
             }
@@ -1325,6 +1350,7 @@ impl State {
             online_boards: std::collections::HashMap::new(),
             board_fetch: None,
             sim_pp: None,
+            sim_pp_job: Default::default(),
             pending_replay: None,
             changelog: None,
             pending_changelog,
@@ -1491,6 +1517,8 @@ impl State {
             preview: preview::Preview::default(),
             stars: stars::Stars::new(stars::read),
             potentials: pp::Potentials::new(stars::read),
+            hasher: Default::default(),
+            grades: Default::default(),
             bg_brightness: 0.0,
             idle: idle::Idle::new(Instant::now()),
             resolutions: Vec::new(),

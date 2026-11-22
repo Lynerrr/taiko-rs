@@ -16,6 +16,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use crate::render::{PICTURE_CELL, PICTURE_SLOTS};
+use crate::services::workers::{self, Ticket};
 
 /// Larger files are left alone (a picture this big is a mistake, and a slow one).
 const MAX_BYTES: u64 = 24 * 1024 * 1024;
@@ -38,6 +39,11 @@ fn external(name: &str) -> bool {
 const MAX_PATH_READS: usize = 3;
 /// How many read pictures go into their slots (and up to the GPU) a frame.
 const PLACE_PER_FRAME: usize = 3;
+/// How many of them may be pictures read by path (song select's banner, 2.7 MB each): one, or a
+/// fast scroll sent several up in one frame beside the cards' strips and the background.
+const PATH_PLACE_PER_FRAME: usize = 1;
+/// What one picture takes to send up: its cell, RGBA.
+const PICTURE_BYTES: usize = (PICTURE_CELL * PICTURE_CELL * 4) as usize;
 
 /// How long a picture that couldn't be read waits before it is looked for again.
 const RETRY: Duration = Duration::from_secs(2);
@@ -102,15 +108,17 @@ impl Image {
     }
 }
 
-type Loaded = (PathBuf, String, Result<Image, String>);
+/// A picture read (none: called off before its turn, see `workers::Ticket`).
+type Loaded = (PathBuf, String, Option<Result<Image, String>>);
 
 pub struct Pictures {
     dir: Option<PathBuf>,
     slots: Arc<HashMap<String, (u32, f32)>>,
     /// What each slot holds, by slot.
     held: Vec<Option<String>>,
-    /// Being read, or unreadable (and not asked again for this folder).
-    pending: Vec<String>,
+    /// Being read (each with the ticket that calls it off), or unreadable (and not asked again
+    /// for this folder).
+    pending: HashMap<String, Ticket>,
     failed: Vec<String>,
     /// When the failed ones are tried again (a file put in the folder later, or fixed).
     retry_at: Instant,
@@ -136,7 +144,7 @@ impl Default for Pictures {
             dir: None,
             slots: Arc::default(),
             held: vec![None; PICTURE_SLOTS as usize],
-            pending: Vec::new(),
+            pending: HashMap::new(),
             failed: Vec::new(),
             retry_at: Instant::now(),
             uploads: Vec::new(),
@@ -229,12 +237,29 @@ impl Pictures {
 
     /// Follows the map folder `dir`, loads the pictures `wanted` (lowercase file names) and
     /// moves the animated ones to their frames at `times` (ms into them, by name).
+    /// Tests: with a whole frame's budget each call.
+    #[cfg(test)]
     pub fn update(
         &mut self,
         dir: Option<&Path>,
         wanted: &[String],
         times: &[(String, f64)],
         paths: &[(String, PathBuf)],
+    ) {
+        self.update_within(dir, wanted, times, paths, &mut crate::UPLOAD_BUDGET.clone());
+    }
+
+    /// `update`, the pictures read by path (song select's banner) going up to the GPU within
+    /// `budget` (bytes this frame, what's left of it after them): one of them a frame at most,
+    /// and none once something else took the budget. A map's own pictures and the covers go up
+    /// as they did.
+    pub fn update_within(
+        &mut self,
+        dir: Option<&Path>,
+        wanted: &[String],
+        times: &[(String, f64)],
+        paths: &[(String, PathBuf)],
+        budget: &mut usize,
     ) {
         if self.dir.as_deref() != dir {
             // The covers and the pictures read by path don't come from the folder: they stay.
@@ -248,7 +273,7 @@ impl Pictures {
                     *h = None;
                 }
             }
-            self.pending.retain(cover);
+            self.pending.retain(|n, _| cover(n));
             self.arrived.retain(|(n, _)| cover(n));
             self.failed.retain(cover);
             self.playing.retain(|n, _| cover(n));
@@ -264,7 +289,11 @@ impl Pictures {
             if !ours {
                 continue;
             }
-            self.pending.retain(|n| *n != name);
+            // Called off: nothing came, and it's asked again if it's wanted again.
+            let Some(got) = got else {
+                continue;
+            };
+            self.pending.remove(&name);
             match got {
                 Ok(image) => self.arrived.push((name, image)),
                 Err(e) => {
@@ -277,6 +306,7 @@ impl Pictures {
         // A few a frame go into their slots and up to the GPU (up to 3 MB each: many in one frame
         // is a hitch), the ones drawn now first. Read ones no longer drawn wait their turn; past a
         // texture's worth the oldest are let go.
+        let mut by_path = 0;
         for _ in 0..PLACE_PER_FRAME {
             let next = self
                 .arrived
@@ -286,19 +316,37 @@ impl Pictures {
             let Some(i) = next else {
                 break;
             };
+            if self.arrived[i].0.starts_with(PATH_PREFIX) {
+                // A banner is most of a frame's budget: one a frame, the first thing to go up.
+                let spent = *budget < crate::UPLOAD_BUDGET;
+                if by_path >= PATH_PLACE_PER_FRAME || (spent && *budget < PICTURE_BYTES) {
+                    break;
+                }
+                by_path += 1;
+                *budget = budget.saturating_sub(PICTURE_BYTES);
+            }
             let (name, image) = self.arrived.remove(i);
             self.place(name, image, wanted);
         }
         let over = self.arrived.len().saturating_sub(PICTURE_SLOTS as usize);
         self.arrived.drain(..over);
+        // A picture read by path no longer drawn (the banner of a set the selection has left) is
+        // called off: the reading threads skip it instead of decoding it for nothing.
+        self.pending.retain(|n, ticket| {
+            let keep = !n.starts_with(PATH_PREFIX) || wanted.contains(n);
+            if !keep {
+                ticket.cancel();
+            }
+            keep
+        });
         let mut path_reads = self
             .pending
-            .iter()
+            .keys()
             .filter(|n| n.starts_with(PATH_PREFIX))
             .count();
         for name in wanted {
             if self.slots.contains_key(name)
-                || self.pending.contains(name)
+                || self.pending.contains_key(name)
                 || self.failed.contains(name)
                 || self.arrived.iter().any(|(n, _)| n == name)
             {
@@ -317,12 +365,15 @@ impl Pictures {
                     continue;
                 }
                 path_reads += 1;
-                self.pending.push(name.clone());
+                let ticket = Ticket::default();
+                self.pending.insert(name.clone(), ticket.clone());
                 let (tx, name) = (self.tx.clone(), name.clone());
                 let file = file.to_string_lossy().into_owned();
                 let thumbs = self.thumbs.clone();
-                std::thread::spawn(move || {
-                    let got = read_by_path(&dir, &file, thumbs.as_deref());
+                workers::run(move || {
+                    let got = ticket
+                        .wanted()
+                        .then(|| read_by_path(&dir, &file, thumbs.as_deref()));
                     let _ = tx.send((dir, name, got));
                 });
                 continue;
@@ -339,11 +390,12 @@ impl Pictures {
                 self.retry_at = Instant::now() + RETRY;
                 continue;
             }
-            self.pending.push(name.clone());
+            // A map's own pictures and the covers are read whenever they were asked for.
+            self.pending.insert(name.clone(), Ticket::default());
             let (tx, name, file) = (self.tx.clone(), name.clone(), file.to_string());
-            std::thread::spawn(move || {
+            workers::run(move || {
                 let got = read(&dir, &file);
-                let _ = tx.send((dir, name, got));
+                let _ = tx.send((dir, name, Some(got)));
             });
         }
         for (name, t) in times {
@@ -683,15 +735,11 @@ pub(crate) fn wait_turn(
     !stop.load(Ordering::Relaxed)
 }
 
-/// Puts the calling thread at the lowest priority (Linux: nice 19, for this thread alone), so
-/// work made ahead only takes the CPU the game and the desktop leave.
+/// Puts the calling thread at the lowest priority (Linux: nice 19, Windows: the lowest thread
+/// priority; this thread alone), so work made ahead only takes the CPU the game and the desktop
+/// leave.
 pub(crate) fn lower_priority() {
-    #[cfg(target_os = "linux")]
-    // SAFETY: plain syscalls on this thread's own id; a failure only leaves the priority as it was.
-    unsafe {
-        let tid = libc::gettid();
-        libc::setpriority(libc::PRIO_PROCESS, tid as libc::id_t, 19);
-    }
+    workers::set_priority(workers::Priority::Lowest);
 }
 
 #[cfg(test)]
@@ -934,8 +982,8 @@ mod tests {
             p.update(None, &wanted, &[], &paths);
             most = most.max(p.pending.len());
             assert!(
-                p.take_uploads().len() <= PLACE_PER_FRAME,
-                "a few go up a frame"
+                p.take_uploads().len() <= PATH_PLACE_PER_FRAME,
+                "one goes up a frame"
             );
             if p.slots().len() == paths.len() {
                 break;
@@ -945,6 +993,54 @@ mod tests {
         assert_eq!(p.slots().len(), paths.len(), "all read in the end");
         assert!(most <= MAX_PATH_READS);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_banner_goes_up_one_a_frame_and_not_after_the_budget_is_spent() {
+        let still = || Image {
+            frames: vec![Vec::new()],
+            ends: vec![0.0],
+            side: PICTURE_CELL,
+            aspect: 1.0,
+        };
+        let mut p = Pictures::default();
+        for i in 0..3 {
+            p.arrived.push((format!("{PATH_PREFIX}{i:016x}"), still()));
+        }
+        let mut budget = crate::UPLOAD_BUDGET;
+        p.update_within(None, &[], &[], &[], &mut budget);
+        assert_eq!(p.slots().len(), 1, "one banner a frame");
+        assert_eq!(budget, crate::UPLOAD_BUDGET - PICTURE_BYTES);
+        // Something else took the frame's budget first: none this frame.
+        let mut budget = PICTURE_BYTES - 1;
+        p.update_within(None, &[], &[], &[], &mut budget);
+        assert_eq!(p.slots().len(), 1, "it waits");
+        let mut budget = crate::UPLOAD_BUDGET;
+        p.update_within(None, &[], &[], &[], &mut budget);
+        assert_eq!(p.slots().len(), 2, "the next frame it goes");
+    }
+
+    #[test]
+    fn a_banner_no_longer_drawn_is_called_off_and_a_maps_own_pictures_are_not() {
+        let dir =
+            std::env::temp_dir().join(format!("taiko-rs-pictures-off-{}", std::process::id()));
+        let path = dir.join("gone.png");
+        let key = crate::render::path_picture_key(&path);
+        let paths = vec![(key.clone(), path)];
+        let mut p = Pictures::default();
+        p.update(None, std::slice::from_ref(&key), &[], &paths);
+        let ticket = p.pending.get(&key).cloned().expect("asked for");
+        // The selection moved on: its banner isn't drawn any more.
+        p.update(None, &[], &[], &paths);
+        assert!(!p.pending.contains_key(&key), "no longer waited for");
+        assert!(!ticket.wanted() || p.failed.contains(&key));
+        // A map's own picture (no path of its own) is read whether drawn this frame or not.
+        p.update(Some(&dir), &["layer.png".to_string()], &[], &[]);
+        let own = p.pending.get("layer.png").cloned();
+        p.update(Some(&dir), &[], &[], &[]);
+        if let Some(own) = own {
+            assert!(own.wanted(), "a map's own picture isn't called off");
+        }
     }
 
     #[test]
@@ -1134,7 +1230,7 @@ mod tests {
         // Without its path given there's nothing to read: it isn't asked for or failed.
         let other = crate::render::path_picture_key(&dir.join("nope.png"));
         p.update(None, std::slice::from_ref(&other), &[], &[]);
-        assert!(!p.pending.contains(&other) && !p.failed.contains(&other));
+        assert!(!p.pending.contains_key(&other) && !p.failed.contains(&other));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

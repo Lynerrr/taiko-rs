@@ -15,13 +15,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::render::{CARD_ASPECT, CARD_CELL, CARD_SLOTS, path_picture_key};
+use crate::services::workers::{self, Ticket};
 
 /// Larger files are left alone, as `pictures` does.
 const MAX_BYTES: u64 = 24 * 1024 * 1024;
 /// Strips read at once: one takes a ms or two from its copy.
 const MAX_READS: usize = 4;
-/// Strips that go into their slots (and up to the GPU) a frame: 256 KB each.
+/// Strips that go into their slots (and up to the GPU) a frame: 256 KB each, within the frame's
+/// budget (`UPLOAD_BUDGET`) with the banner.
 const PLACE_PER_FRAME: usize = 8;
+/// What one strip takes to send up: its cell, RGBA.
+const STRIP_BYTES: usize = (CARD_CELL[0] * CARD_CELL[1] * 4) as usize;
 /// How long a strip that couldn't be read waits before it is tried again.
 const RETRY: Duration = Duration::from_secs(2);
 /// The copies' kind, in their folder's name: a new one leaves the old folder to be removed.
@@ -29,8 +33,9 @@ const CARD_VERSION: u32 = 1;
 /// How often the colours found are handed on to the canvas (a copy of the whole map each time).
 const COLOURS_EVERY: Duration = Duration::from_millis(250);
 
-/// A strip read: `CARD_CELL` premultiplied RGBA.
-type Read = (String, Result<Vec<u8>, String>);
+/// A strip read: `CARD_CELL` premultiplied RGBA (none: called off before its turn, see
+/// `workers::Ticket`).
+type Read = (String, Option<Result<Vec<u8>, String>>);
 
 /// The average colours found, by picture key, and whether any came since they were handed on.
 #[derive(Default)]
@@ -58,7 +63,8 @@ pub struct CardPictures {
     held: Vec<Option<String>>,
     used: Vec<u64>,
     frame: u64,
-    pending: Vec<String>,
+    /// Being read, each with the ticket that calls it off.
+    pending: HashMap<String, Ticket>,
     /// Unreadable, and when they're tried again.
     failed: HashMap<String, Instant>,
     /// Read and waiting for a slot.
@@ -85,7 +91,7 @@ impl Default for CardPictures {
             held: vec![None; CARD_SLOTS as usize],
             used: vec![0; CARD_SLOTS as usize],
             frame: 0,
-            pending: Vec::new(),
+            pending: HashMap::new(),
             failed: HashMap::new(),
             arrived: Vec::new(),
             uploads: Vec::new(),
@@ -190,10 +196,22 @@ impl CardPictures {
 
     /// Reads and keeps in the strips `wanted` (picture key, file, whether a card draws it now):
     /// the drawn ones first, then the others in their order, as many as there are slots.
+    /// Tests: with a whole frame's budget each call.
+    #[cfg(test)]
     pub fn update(&mut self, wanted: &[(String, PathBuf, bool)]) {
+        self.update_within(wanted, &mut crate::UPLOAD_BUDGET.clone());
+    }
+
+    /// `update`, the strips going up to the GPU within `budget` (bytes this frame, what's left
+    /// of it after them); the first always goes when nothing else took any of it.
+    pub fn update_within(&mut self, wanted: &[(String, PathBuf, bool)], budget: &mut usize) {
         self.frame += 1;
         while let Ok((key, got)) = self.rx.try_recv() {
-            self.pending.retain(|k| *k != key);
+            // Called off: nothing came, and it's asked again if it's wanted again.
+            let Some(got) = got else {
+                continue;
+            };
+            self.pending.remove(&key);
             match got {
                 Ok(px) => {
                     self.arrived.retain(|(k, _)| *k != key);
@@ -214,6 +232,15 @@ impl CardPictures {
             .take(CARD_SLOTS as usize)
             .collect();
         let keep: HashSet<&str> = order.iter().map(|w| w.0.as_str()).collect();
+        // The strips of cards scrolled away while they waited their turn are called off: the
+        // reading threads skip them instead of decoding pictures long gone by.
+        self.pending.retain(|key, ticket| {
+            let wanted = keep.contains(key.as_str());
+            if !wanted {
+                ticket.cancel();
+            }
+            wanted
+        });
         for w in &order {
             if let Some(&slot) = self.slots.get(&w.0) {
                 self.used[slot as usize] = self.frame;
@@ -227,6 +254,11 @@ impl CardPictures {
             let Some(i) = next else {
                 break;
             };
+            let spent = *budget < crate::UPLOAD_BUDGET;
+            if spent && *budget < STRIP_BYTES {
+                break;
+            }
+            *budget = budget.saturating_sub(STRIP_BYTES);
             let (key, px) = self.arrived.remove(i);
             self.place(key, px, &keep);
         }
@@ -237,17 +269,18 @@ impl CardPictures {
                 break;
             }
             if self.slots.contains_key(key)
-                || self.pending.contains(key)
+                || self.pending.contains_key(key)
                 || self.failed.contains_key(key)
                 || self.arrived.iter().any(|(k, _)| k == key)
             {
                 continue;
             }
-            self.pending.push(key.clone());
+            let ticket = Ticket::default();
+            self.pending.insert(key.clone(), ticket.clone());
             let (tx, key, path) = (self.tx.clone(), key.clone(), path.clone());
             let (dir, found) = (self.dir.clone(), self.found.clone());
-            std::thread::spawn(move || {
-                let got = read(&path, dir.as_deref(), &found);
+            workers::run(move || {
+                let got = ticket.wanted().then(|| read(&path, dir.as_deref(), &found));
                 let _ = tx.send((key, got));
             });
         }
@@ -482,6 +515,44 @@ mod tests {
     }
 
     #[test]
+    fn strips_go_up_within_what_the_banner_left_of_the_frames_budget() {
+        let mut p = CardPictures::default();
+        for i in 0..PLACE_PER_FRAME + 4 {
+            p.arrived
+                .push((format!("@path/{i:016x}"), vec![0; STRIP_BYTES]));
+        }
+        // A whole frame's budget: as many as go a frame.
+        let mut budget = crate::UPLOAD_BUDGET;
+        p.update_within(&[], &mut budget);
+        assert_eq!(p.take_uploads().len(), PLACE_PER_FRAME);
+        assert_eq!(budget, crate::UPLOAD_BUDGET - PLACE_PER_FRAME * STRIP_BYTES);
+        // The banner took all but one strip's worth: one.
+        let mut budget = STRIP_BYTES + 1;
+        p.update_within(&[], &mut budget);
+        assert_eq!(p.take_uploads().len(), 1, "what's left of the budget");
+        // Nothing left: they wait for the next frame.
+        let mut budget = 0;
+        p.update_within(&[], &mut budget);
+        assert!(p.take_uploads().is_empty(), "the budget's gone");
+        assert!(!p.arrived.is_empty(), "still there for later");
+    }
+
+    #[test]
+    fn a_strip_scrolled_away_before_its_turn_is_called_off() {
+        let mut p = CardPictures::default();
+        let path = std::env::temp_dir().join(format!("taiko-card-gone-{}.png", std::process::id()));
+        let key = path_picture_key(&path);
+        p.update(&[(key.clone(), path, true)]);
+        let ticket = p.pending.get(&key).cloned().expect("asked for");
+        // The list moved on: the card isn't drawn or ahead any more.
+        p.update(&[]);
+        assert!(p.pending.is_empty(), "no longer waited for");
+        // Unless its turn came first (here the file isn't there, so that's quick), the reading
+        // threads skip it.
+        assert!(!ticket.wanted() || p.failed.contains_key(&key));
+    }
+
+    #[test]
     fn strips_drawn_now_are_never_let_go_for_others() {
         let mut p = CardPictures::default();
         let key = |i: usize| format!("@path/{i:016x}");
@@ -518,7 +589,7 @@ mod tests {
         p.update(&wanted);
         assert_eq!(p.pending.len(), MAX_READS, "only a few read at once");
         assert!(
-            p.pending.contains(&wanted[MAX_READS + 2].0),
+            p.pending.contains_key(&wanted[MAX_READS + 2].0),
             "the drawn one among them"
         );
         let until = Instant::now() + Duration::from_secs(20);

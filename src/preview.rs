@@ -15,6 +15,7 @@ use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
 use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 use crate::services::jobs::Job;
+use crate::services::workers::Ticket;
 
 mod classic;
 
@@ -232,6 +233,11 @@ pub struct Preview {
     last_change: Option<Instant>,
     requested: Option<usize>,
     map_rx: Job<LoadedMap>,
+    /// Calls off the map and background being read for a selection since moved on from: their
+    /// threads stop before the slow part instead of working for nothing (a run of selections a
+    /// little apart left every one of them parsing and decoding beside the game).
+    map_ticket: Ticket,
+    bg_ticket: Ticket,
     /// Speed (and keep-pitch) the loaded preview was prepared for.
     requested_rate: (f64, bool),
     /// The fullscreen preview is paused: the music holds, and the notes with it.
@@ -346,6 +352,11 @@ pub struct Preview {
     /// would give, which song select works out.
     pub sim: Option<PpSim>,
     pub sim_pp: Option<f64>,
+    /// The autoplay isn't shown (song select's Local and Online tabs): it isn't played on, its
+    /// notes and drum aren't worked out every frame for nothing. The music plays on.
+    pub autoplay_hidden: bool,
+    /// It wasn't played on while hidden: it starts over where the music is when shown again.
+    autoplay_behind: bool,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
     /// changes per unit of that (for dragging the panel's bottom edge).
     pub size: f32,
@@ -408,9 +419,17 @@ pub(crate) fn background_path(e: &Entry) -> Option<PathBuf> {
         .map(|b| e.path.parent().unwrap_or(Path::new(".")).join(b))
 }
 
-/// Decodes a background, shrunk to at most 1920x1200 (GPU texture limits, memory).
-fn load_image(path: &Path) -> Option<Image> {
+/// Decodes a background, shrunk to at most 1920x1200 (GPU texture limits, memory); given up
+/// (None) as soon as it isn't `wanted` any more: before the file is read, and between decoding
+/// it and making the GPU's copy of it.
+fn load_image_while(path: &Path, wanted: impl Fn() -> bool) -> Option<Image> {
+    if !wanted() {
+        return None;
+    }
     let img = image::open(path).ok()?;
+    if !wanted() {
+        return None;
+    }
     let img = if img.width() > 1920 || img.height() > 1200 {
         img.resize(1920, 1200, image::imageops::FilterType::Triangle)
     } else {
@@ -459,6 +478,7 @@ impl Preview {
         self.map = None;
         self.game = None;
         self.map_rx.cancel();
+        self.map_ticket.cancel();
         self.pending_seek = None;
     }
 
@@ -516,6 +536,12 @@ impl Preview {
         self.audio.as_ref().filter(same).map(|s| s.track.clone())
     }
 
+    /// Whether the selection is still settling on library entry `i` (`DEBOUNCE`): the preview
+    /// waits to read it, and other work for the map can wait with it.
+    pub fn settling_on(&self, i: usize) -> bool {
+        self.seen == Some(i) && self.requested != Some(i)
+    }
+
     /// Puts `image` up in place of the background, until `forget_background`.
     pub fn show_image(&mut self, image: Image) {
         self.bg_upload = Some(Some(image));
@@ -540,11 +566,19 @@ impl Preview {
         self.bg_path = path.clone();
         match path {
             Some(p) => {
+                self.bg_ticket.cancel();
+                let ticket = Ticket::default();
+                self.bg_ticket = ticket.clone();
                 self.bg_rx = Job::spawn(move || {
+                    let wanted = || ticket.wanted();
                     let img = file
                         .as_deref()
-                        .and_then(load_image)
-                        .or_else(|| drawn.as_ref().map(crate::backdrop::image));
+                        .and_then(|f| load_image_while(f, wanted))
+                        .or_else(|| {
+                            wanted()
+                                .then(|| drawn.as_ref().map(crate::backdrop::image))
+                                .flatten()
+                        });
                     (p, img)
                 });
             }
@@ -627,7 +661,24 @@ impl Preview {
             if let Some(i) = self.seen.filter(|&i| i < library.len()) {
                 let e = &library[i];
                 let path = e.path.clone();
+                self.map_ticket.cancel();
+                let ticket = Ticket::default();
+                self.map_ticket = ticket.clone();
                 self.map_rx = Job::spawn(move || {
+                    // Called off (the selection moved on before this thread got going): nobody
+                    // takes what it would make.
+                    let off = || {
+                        (
+                            i,
+                            Err("called off".to_string()),
+                            None,
+                            lane_reach(),
+                            Vec::new(),
+                        )
+                    };
+                    if !ticket.wanted() {
+                        return off();
+                    }
                     // A TJA course with what it leaves out, from the one read of its file.
                     let (map, left_out) = if crate::tja_maps::is_course(&path) {
                         match crate::tja_maps::course(&path) {
@@ -643,6 +694,10 @@ impl Preview {
                         .and_then(|m| m.notes.first())
                         .map(|n| n.time)
                         .unwrap_or(0.0);
+                    // The strain curve is the slow part.
+                    if !ticket.wanted() {
+                        return off();
+                    }
                     let curve = std::panic::catch_unwind(|| {
                         crate::stars::strain_curve(&path, speed, first)
                     })
@@ -887,10 +942,26 @@ impl Preview {
             return;
         }
         let Some(game) = &mut self.game else { return };
+        let music = engine.position_ms(now).map(|p| (p - offset) * speed);
+        if self.autoplay_hidden {
+            // Nobody sees the autoplay (song select's Local and Online tabs): it isn't played,
+            // only its clock is kept for the beat and kiai the rest of the screen goes by.
+            if let Some(t) = music {
+                self.last_time = t;
+                self.autoplay_behind = true;
+            }
+            return;
+        }
         // Where the music is, in map time, before the game expires anything: notes skipped over
         // are marked played first, so jumping in never shows misses.
-        if let Some(t) = engine.position_ms(now).map(|p| (p - offset) * speed) {
-            if t < self.last_time - 1000.0 {
+        if let Some(t) = music {
+            if std::mem::take(&mut self.autoplay_behind) {
+                // Shown again: it starts over where the music is, as on a jump.
+                if let Some((_, map, _, _)) = &self.map {
+                    *game = new_preview_game(map, speed);
+                    game.skip_to(t - 50.0);
+                }
+            } else if t < self.last_time - 1000.0 {
                 // The music looped: start the preview over from the preview point.
                 if let Some((_, map, _, _)) = &self.map {
                     *game = new_preview_game(map, speed);
