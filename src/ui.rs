@@ -521,11 +521,10 @@ const SONG_ROW_H_UI: f32 = 44.0;
 const DIFF_ROW_H_UI: f32 = 26.0;
 const SECTION_ROW_H_UI: f32 = 24.0;
 
-/// The cards of the main menu's look: how far in a set's card sits unless it's open, how far one
-/// under the pointer comes out, how bright the sets not open are, the corners, how long a card's
+/// The cards of the main menu's look: how far one under the pointer comes out (out of the
+/// list's wave, `list_wave`), how bright the sets not open are, the corners, how long a card's
 /// picture takes to fade in, the shade over it (left, under the title, to right), how far up the
 /// list's bottom the last cards fade out, and how bright a difficulty's bar is unless selected.
-const CARD_INSET: f32 = 12.0;
 const CARD_HOVER: f32 = 4.0;
 const CARD_DIM: f32 = 0.7;
 const CARD_RADIUS: f32 = crate::style::radius::CARD;
@@ -566,19 +565,29 @@ const PICTURE_SETTLE_MS: f32 = 60.0;
 const CARD_AHEAD_MS: f32 = 400.0;
 const CARD_AHEAD_TAU: f32 = 80.0;
 
-/// The list as a lane through the selection's target brackets: the cards stay straight near the
-/// target (`ARC_STRAIGHT` of the list's height), then bend away from it along an arc, `ARC_K`
-/// units per (list height)² beyond that, at most `ARC_MAX`, and fade by up to `ARC_FADE`
-/// (all of it `ARC_FADE_REACH` of the list's height beyond the straight part). A song or
-/// difficulty landing in the target flashes it for `LAND_FLASH_MS`, its brackets opening out
-/// `LAND_FLASH_GROW` units, like a note hit on the menu's target.
+/// The list as a wave about the middle of its view: a card's left edge goes in by
+/// `list_wave` of how far its middle is from the view's (none in the middle, `WAVE_MAX` at the
+/// view's top and bottom edges, along one soft symmetric arc), its right edge staying put. Cards
+/// far from the selection's target fade by up to `ARC_FADE` (all of it `ARC_FADE_REACH` of the
+/// list's height beyond `ARC_STRAIGHT` of it from the target). A song or difficulty landing in the target flashes it
+/// for `LAND_FLASH_MS`, its brackets opening out `LAND_FLASH_GROW` units, like a note hit on
+/// the menu's target.
 const ARC_STRAIGHT: f32 = 0.12;
-const ARC_K: f32 = 64.0;
-const ARC_MAX: f32 = 24.0;
+pub(crate) const WAVE_MAX: f32 = 16.0;
 const ARC_FADE: f32 = 0.3;
 const ARC_FADE_REACH: f32 = 0.5;
 const LAND_FLASH_MS: f32 = 300.0;
 const LAND_FLASH_GROW: f32 = 6.0;
+
+/// How far in a card's left edge goes with its middle at `cy` in a list whose view runs from
+/// `top` to `bottom`: none in the view's middle, `WAVE_MAX` at its edges (and past them), on
+/// a soft arc symmetric about the middle. Tied to where the card is on the screen alone, so the
+/// cards keep one smooth curve however the list is scrolled.
+pub(crate) fn list_wave(cy: f32, top: f32, bottom: f32) -> f32 {
+    let half = ((bottom - top) / 2.0).max(1.0);
+    let d = ((cy - (top + bottom) / 2.0) / half).clamp(-1.0, 1.0);
+    WAVE_MAX * d * d
+}
 
 /// What a song's name starts with, as its heading when the list is by artist or title.
 fn initial(name: &str) -> String {
@@ -1510,7 +1519,7 @@ impl Select {
         }
     }
 
-    fn list_bottom(&self) -> f32 {
+    pub(crate) fn list_bottom(&self) -> f32 {
         if self.legacy {
             LIST_BOTTOM_LEGACY
         } else if self.banner {
@@ -3126,9 +3135,18 @@ impl Select {
                 }
             }
         }
-        // How far a row's middle is from the target's, beyond the straight part (list heights).
+        // How far a row's middle is from the target's, beyond the straight part (list heights:
+        // it fades with it), and how far in its card goes for where it is in the view
+        // (`list_wave`): the main menu's look only.
         let target_y = outline + diff_h / 2.0;
         let away = |cy: f32| ((cy - target_y).abs() / view.max(1.0) - ARC_STRAIGHT).max(0.0);
+        let wave = |cy: f32| {
+            if legacy {
+                0.0
+            } else {
+                list_wave(cy, top, bottom)
+            }
+        };
         let mut lights = std::mem::take(&mut self.anim.card_light);
         let mut covers = std::mem::take(&mut self.anim.covers);
         for (row, ry, rh, alpha) in &rows {
@@ -3207,9 +3225,9 @@ impl Select {
                     }
                     // Under the pointer by where the row is, not where its card has moved to.
                     let hover = !open && c.hovered(24.0, y, lw, rh - 4.0);
-                    // The main menu's look: a card with the map's picture. The open set's card
-                    // slides out to the list's left edge, the others sit in by CARD_INSET, and
-                    // one under the pointer comes out a little and brightens.
+                    // The main menu's look: a card with the map's picture, its left edge on the
+                    // list's wave (`list_wave`) and its right edge on the list's; one under the
+                    // pointer comes out a little and brightens.
                     let light = if legacy {
                         0.0
                     } else {
@@ -3221,18 +3239,7 @@ impl Select {
                     let (x0, rw) = if legacy {
                         (24.0, lw)
                     } else {
-                        let out = if Some(g.start) == open_g {
-                            open_f
-                        } else if Some(g.start) == closing_g {
-                            closing_f
-                        } else {
-                            0.0
-                        };
-                        // Farther from the target, bent away along the lane's arc (not the open
-                        // set's card as it slides out).
-                        let e = away(y + rh / 2.0);
-                        let bend = (ARC_K * e * e).min(ARC_MAX) * (1.0 - out);
-                        let inset = (CARD_INSET * (1.0 - out) + bend - CARD_HOVER * light).max(0.0);
+                        let inset = (wave(y + rh / 2.0) - CARD_HOVER * light).max(0.0);
                         (24.0 + inset, lw - inset)
                     };
                     if legacy {
@@ -3431,13 +3438,17 @@ impl Select {
                     if selected {
                         cursor_row = drawn - 1;
                     }
+                    // On the list's wave as the sets' cards are: its left edge in by it, its right
+                    // edge on the list's (`dl`, `dw`: the row's card).
+                    let dx = wave(y + rh / 2.0);
+                    let (dl, dw) = (44.0 + dx, lw - 20.0 - dx);
                     // The main menu's look: a slimmer card, a bar of its rating's colour at its
                     // left (full on the selected one).
                     if !legacy {
                         use crate::style::tone;
                         let [r, g, b, fa] =
                             crate::style::surface_fill(crate::style::Surface::Raised);
-                        let card = [44.0, y, lw - 20.0, rh - 3.0];
+                        let card = [dl, y, dw, rh - 3.0];
                         // No line round it (the selected one has the brackets): a tone a step
                         // lighter than the list's panel and the room between rows part them.
                         let fill = [r, g, b, fa * a];
@@ -3458,16 +3469,17 @@ impl Select {
                         let mid = (y + (rh - 3.0) / 2.0).round();
                         let link = rgba(tone::EDGE, a);
                         let end = if last { mid + 1.0 } else { y + rh };
-                        c.rect(DIFF_LINK_X, y - 4.0, 1.0, end - (y - 4.0), link);
-                        c.rect(DIFF_LINK_X, mid, card[0] - DIFF_LINK_X, 1.0, link);
+                        let link_x = DIFF_LINK_X + dx;
+                        c.rect(link_x, y - 4.0, 1.0, end - (y - 4.0), link);
+                        c.rect(link_x, mid, card[0] - link_x, 1.0, link);
                     }
                     if selected && !legacy {
                         // The brackets round it (`brackets`, the outline) and a light lift: no
                         // line of its own round it.
                         let lift = 0.07 + 0.03 * crate::style::pulse();
                         c.round_rect(
-                            [44.0, y],
-                            [lw - 20.0, rh - 3.0],
+                            [dl, y],
+                            [dw, rh - 3.0],
                             DIFF_ROUND,
                             rgba(0xffffff, lift * a),
                             rgba(0, 0.0),
@@ -3476,17 +3488,17 @@ impl Select {
                     } else if selected {
                         let col = crate::style::selector_colour();
                         c.round_rect(
-                            [44.0, y],
-                            [lw - 20.0, rh - 3.0],
+                            [dl, y],
+                            [dw, rh - 3.0],
                             DIFF_ROUND,
                             rgba(col, (0.12 + 0.05 * crate::style::pulse()) * a),
                             rgba(col, 0.0),
                             1.0,
                         );
-                    } else if c.hovered(44.0, y, lw - 20.0, rh - 3.0) {
+                    } else if c.hovered(dl, y, dw, rh - 3.0) {
                         c.round_rect(
-                            [44.0, y],
-                            [lw - 20.0, rh - 3.0],
+                            [dl, y],
+                            [dw, rh - 3.0],
                             DIFF_ROUND,
                             hover_fill(a),
                             rgba(0, 0.0),
@@ -3498,12 +3510,12 @@ impl Select {
                     if !legacy {
                         let bar = crate::style::role::rating(e.meta.level, stars(self.visible[*i]));
                         let lit = if selected { 1.0 } else { DIFF_BAR_DIM };
-                        c.rect(44.0, y + 3.0, 3.0, rh - 9.0, rgba(bar, lit * a));
+                        c.rect(dl, y + 3.0, 3.0, rh - 9.0, rgba(bar, lit * a));
                     }
                     if legacy {
                         c.rect(52.0, y + rh - 2.0, lw - 36.0, 1.0, rgba(0x1d1d27, a));
                     }
-                    c.hit(44.0, y, lw - 20.0, *rh, Hit::SongRow(*i));
+                    c.hit(dl, y, dw, *rh, Hit::SongRow(*i));
                     let col = match (selected, legacy) {
                         (true, _) => crate::style::ink::PRIMARY,
                         (false, true) => 0xc8c8d8,
@@ -3535,11 +3547,11 @@ impl Select {
                         c.text_right(right, gy, 9.0, rgba(grade_colour(g), a), g);
                     }
                     c.text(
-                        56.0,
+                        dl + 12.0,
                         y + 6.0 * dk,
                         8.0,
                         rgba(col, a),
-                        &fit(format!("{}{convert}", e.meta.version), 8.0, lw - 170.0),
+                        &fit(format!("{}{convert}", e.meta.version), 8.0, lw - 170.0 - dx),
                     );
                 }
             }
@@ -3627,7 +3639,9 @@ impl Select {
         let oy = outline;
         let outline_start = c.shapes.len();
         if !self.visible.is_empty() && !cursor_hidden && oy > top - diff_h && oy < bottom {
-            let target = [41.0, oy - 3.0, lw - 14.0, diff_h + 3.0];
+            // On the list's wave, with the selected difficulty's card.
+            let dx = wave(oy + diff_h / 2.0);
+            let target = [41.0 + dx, oy - 3.0, lw - 14.0 - dx, diff_h + 3.0];
             // In Play's colour, a kiai or not (its gold read as a stray yellow on the list).
             let mark = crate::style::role::primary();
             crate::style::brackets_in(c, target, 1.0, mark);
@@ -3867,7 +3881,17 @@ impl Select {
                 );
             }
             let tint = [1.0, 1.0, 1.0, a];
+            // The curtain's plate ends here, worked out from the card as it's drawn now (on the
+            // list's wave, under the pointer): the picture is only drawn right of it, so however
+            // the card's alpha, its picture's fade-in or its place change, none of it can show
+            // under the title and artist.
+            let from = inner[0] + inner[2] * CURTAIN.0;
+            let picture = c.shapes.len();
             let drawn = c.card_picture(&bg, inner, tint, round, self.card_greys);
+            if drawn {
+                let [_, cy, cw, ch] = inner;
+                c.clip_since(picture, from, cy, inner[0] + cw - from, ch);
+            }
             if drawn && since.is_none() {
                 covers.insert(key, crate::render::frame_now());
             }
@@ -3886,7 +3910,6 @@ impl Select {
                 } else {
                     CURTAIN.1 + (CURTAIN.2 - CURTAIN.1) * light
                 };
-                let from = cx + cw * CURTAIN.0;
                 // The plate runs on under the sweep's start, as dark there as it: the plate's
                 // end and the sweep's round corners at its start are both out of sight.
                 c.round_rect(
@@ -4836,13 +4859,14 @@ impl Select {
         };
         let bh = (rows.len() as f32 * row + if phone { 46.0 } else { 56.0 }).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
+        // Song select's panel: its tone and a thin neutral edge (the accent is the selection's).
         c.round_rect(
             [bx, by],
             [bw, bh],
             8.0,
-            rgba(0x15151d, 0.98),
-            rgba(accent(), 0.8),
-            1.5,
+            rgba(crate::style::PANEL_COLD, 0.98),
+            rgba(crate::style::tone::EDGE, 1.0),
+            crate::style::tone::LINE,
         );
         let title_size = if phone { 12.0 } else { 9.0 };
         c.text(

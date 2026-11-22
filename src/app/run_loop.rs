@@ -1320,6 +1320,7 @@ impl State {
             me_fetch: Job::idle(),
             me_due: None,
             board_online: false,
+            column_preview: true,
             profile: None,
             online_boards: std::collections::HashMap::new(),
             board_fetch: None,

@@ -20,10 +20,10 @@ text  434,63   Mods
 text  494,66   basics
 text  721,71   Leaderboard >
 text  494,85   Regression
+text   32,92   SORT BY
 text   44,92   basics
-text   32,93   SORT BY
-text  176,93   THEN BY
-text  300,93   FILTER
+text  176,92   THEN BY
+text  300,92   FILTER
 text  416,97   1 diff
 text  494,104  mapped by tests
 text  731,104  NOT SUBMITTED
@@ -54,18 +54,18 @@ text  559,153  Don
 text  586,153  32
 text  610,153  Kat
 text  637,153  32
-text  310,154  1
-text  334,154  2
-text  359,154  3
-text  384,154  4
-text  408,154  5
-text  433,154  6
-text  458,154  7
-text  483,154  8
-text  508,154  9
-text  529,154  10+
 text   48,155  length
 text  191,155  stars
+text  310,155  1
+text  334,155  2
+text  359,155  3
+text  384,155  4
+text  408,155  5
+text  433,155  6
+text  458,155  7
+text  483,155  8
+text  508,155  9
+text  529,155  10+
 text   44,162  Regression  |  mapped by tests
 text  494,165  SS
 text  514,165  93pp
@@ -112,7 +112,7 @@ text   47,275  headings: off
 text   45,284  low-od
 text  416,289  1 diff
 text   32,296  7 songs in all sources
-text  320,296  arrows move  Enter pick  Esc or Ctrl+S close
+text  320,297  arrows move  Enter pick  Esc or Ctrl+S close
 text  490,297  0:00 / 0:10
 text  675,297  peak 7.0 notes/s at 0:01
 text   44,298  Regression  |  mapped by tests

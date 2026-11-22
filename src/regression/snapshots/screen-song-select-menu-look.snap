@@ -7,48 +7,47 @@ text  340,33   SORT
 text  361,33   artist
 text  420,37   basics
 text  420,52   Regression
-text   24,54   basics
-text   24,66   Regression  |  mapped by tests
+text   33,54   basics
+text   33,66   Regression  |  mapped by tests
 text  791,67   3.08
 text  425,68   basics
 text  473,68   by
 text  491,68   tests
 text  701,68   NOT SUBMITTED
 text  366,82   3.08
-text   37,83   basics
-text  465,86   OD
-text  564,86   BPM
-text  658,86   LENGTH
-text  763,86   NOTES
-text  458,92   5.0
-text  560,92   200
-text  658,92   0:09
-text  768,92   64
-text   32,101  big-notes
-text  420,110  32 DON
-text  794,110  32 KAT
-text   32,112  Regression  |  mapped by tests
-text  425,126  SS
-text  438,126  93pp
-text  560,126  99%
-text  579,126  82pp
-text  696,126  98%
-text  714,126  69pp
-text   32,130  rolls-and-swells
-text   32,142  Regression  |  mapped by tests
-text   32,159  sv-and-kiai
-text  427,165  Local
-text  473,165  Online
-text  784,166  Website
-text   32,171  Regression  |  mapped by tests
-text   33,189  stream
-text   33,200  Regression  |  mapped by tests
-text   35,218  low-od
-text  556,226  No plays on this map yet
-text   34,230  Regression  |  mapped by tests
-text  573,241  Show online scores
-text   36,247  high-od
-text   36,259  Regression  |  mapped by tests
+text   44,83   basics
+text  420,84   OD
+text  433,84   5.0
+text  521,84   BPM
+text  539,84   200
+text  623,84   LENGTH
+text  656,84   0:09
+text  724,84   NOTES
+text  752,84   64
+text  420,97   32 DON
+text  794,97   32 KAT
+text   29,101  big-notes
+text   29,112  Regression  |  mapped by tests
+text  438,113  93pp
+text  579,113  82pp
+text  714,113  69pp
+text  425,114  SS
+text  560,114  99%
+text  696,114  98%
+text   27,130  rolls-and-swells
+text  427,135  Preview
+text  484,135  Local
+text  531,135  Online
+text  784,136  Website
+text   27,142  Regression  |  mapped by tests
+text   26,159  sv-and-kiai
+text   26,171  Regression  |  mapped by tests
+text   25,189  stream
+text   25,200  Regression  |  mapped by tests
+text   25,218  low-od
+text   24,230  Regression  |  mapped by tests
+text   24,247  high-od
+text   24,259  Regression  |  mapped by tests
 text  420,406  0:00 / 0:10
 text  692,406  peak 7.0 notes/s at 0:01
 text  726,444  Play
@@ -57,23 +56,23 @@ text  479,445  Random
 hit    17,28     43x16   ToMenu
 hit   324,28     74x16   SortList
 hit    69,28    252x16   TextField
-hit    16,49    387x29   SongHeader(0)
-hit    29,79    373x17   SongRow(0)
-hit    24,96    379x29   SongHeader(1)
-hit    24,125   379x29   SongHeader(2)
-hit    24,155   378x29   SongHeader(3)
-hit    25,184   378x29   SongHeader(4)
-hit    26,213   377x29   SongHeader(5)
-hit    28,243   375x29   SongHeader(6)
+hit    25,49    377x29   SongHeader(0)
+hit    36,79    366x17   SongRow(0)
+hit    21,96    381x29   SongHeader(1)
+hit    19,125   383x29   SongHeader(2)
+hit    18,155   385x29   SongHeader(3)
+hit    17,184   386x29   SongHeader(4)
+hit    16,213   386x29   SongHeader(5)
+hit    16,243   387x29   SongHeader(6)
 hit     3,49     13x413  SongScrollbar
 hit   681,67     11x9    SelectLike
-hit   420,125   405x11   PpSim
-hit   420,301   399x79   Preview
-hit   419,384   408x21   Preview
-hit   420,163    41x12   BoardTab(false)
-hit   467,163    47x12   BoardTab(true)
-hit   779,163    47x12   BoardWebsite
-hit   565,237   116x13   BoardTab(true)
+hit   420,112   405x11   PpSim
+hit   420,153   399x189  Preview
+hit   419,347   408x59   Preview
+hit   420,133    52x12   PreviewTab
+hit   478,133    41x12   BoardTab(false)
+hit   524,133    47x12   BoardTab(true)
+hit   779,133    47x12   BoardWebsite
 hit   416,437    43x23   ModsButton
 hit   463,437    55x23   Key(F2)
 hit   696,437   133x23   Key(Enter)
