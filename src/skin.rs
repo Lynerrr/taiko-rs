@@ -671,13 +671,20 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
             ..Default::default()
         };
     }
+    let mut images: Vec<_> = images
+        .into_iter()
+        .map(|(sprite, img, size)| {
+            let (img, trim) = trimmed(img);
+            (sprite, img, size, trim)
+        })
+        .collect();
     // Tallest first, so each row wastes little height.
-    images.sort_by_key(|(_, img, _)| std::cmp::Reverse(img.height()));
+    images.sort_by_key(|(_, img, _, _)| std::cmp::Reverse(img.height()));
     // Each image sits in a cell one pixel bigger all round, filled with copies of its edge, so
     // filtering at the edge (or across a stretched roll body) never picks up a neighbour.
     let mut cells = Vec::new();
     let (mut x, mut y, mut row_h, mut width) = (0, 0, 0, 0);
-    for (_, img, _) in &images {
+    for (_, img, _, _) in &images {
         let (cw, ch) = (img.width() + 2, img.height() + 2);
         if x > 0 && x + cw > ROW {
             (x, y, row_h) = (0, y + row_h, 0);
@@ -693,7 +700,7 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
         layout,
         ..Default::default()
     };
-    for ((sprite, img, size), (cx, cy)) in images.into_iter().zip(cells) {
+    for ((sprite, img, size, trim), (cx, cy)) in images.into_iter().zip(cells) {
         let (iw, ih) = (img.width(), img.height());
         for py in 0..ih + 2 {
             for px in 0..iw + 2 {
@@ -712,8 +719,41 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
             ih as f32 / height as f32,
         ];
         atlas.sprites[sprite as usize] = Some((uv, size));
+        atlas.trims[sprite as usize] = trim;
     }
     atlas
+}
+
+/// `img` without the clear rows and columns round it but one (so filtering still fades its edge
+/// into clear as before), and what it lost on each side ([left, top, right, bottom], as fractions
+/// of its width and height). Skins often put a small part on a big clear canvas: `scorebar-bg`
+/// as a whole screen with the bar in its corner, which drawn whole cost a screen of pixels.
+fn trimmed(img: image::RgbaImage) -> (image::RgbaImage, [f32; 4]) {
+    let (w, h) = img.dimensions();
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for (x, y, p) in img.enumerate_pixels() {
+        if p[3] > 0 {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+        }
+    }
+    // All clear: nothing to keep a part of.
+    if x0 >= x1 {
+        return (img, [0.0; 4]);
+    }
+    let (x0, y0) = (x0.saturating_sub(1), y0.saturating_sub(1));
+    let (x1, y1) = ((x1 + 1).min(w), (y1 + 1).min(h));
+    if (x0, y0, x1, y1) == (0, 0, w, h) {
+        return (img, [0.0; 4]);
+    }
+    let kept = image::imageops::crop_imm(&img, x0, y0, x1 - x0, y1 - y0).to_image();
+    let (fw, fh) = (w as f32, h as f32);
+    let trim = [
+        x0 as f32 / fw,
+        y0 as f32 / fh,
+        (w - x1) as f32 / fw,
+        (h - y1) as f32 / fh,
+    ];
+    (kept, trim)
 }
 
 pub struct Skin {
@@ -1182,6 +1222,56 @@ mod tests {
         // Extracted once: a second call reuses the folder.
         assert_eq!(super::extract_osk(&osk).unwrap(), skin);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn atlas_cuts_the_clear_margins_off_a_skins_images() {
+        let dir = std::env::temp_dir().join(format!("taiko-rs-atlas-trim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A health bar as many skins have it: a whole 1366x768 screen of clear with the bar in
+        // its corner, and a note with no margin at all.
+        let mut bar = image::RgbaImage::new(1366, 768);
+        for (x, y, p) in bar.enumerate_pixels_mut() {
+            if (10..610).contains(&x) && (5..65).contains(&y) {
+                *p = image::Rgba([200, 100, 50, 255]);
+            }
+        }
+        bar.save(dir.join("scorebar-bg.png")).unwrap();
+        image::RgbaImage::from_pixel(128, 128, image::Rgba([255, 0, 0, 255]))
+            .save(dir.join("taikohitcircle.png"))
+            .unwrap();
+        let atlas = atlas_of(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // The bar keeps one clear pixel round it; its size is still the whole image's, so it's
+        // laid out as before.
+        let (uv, size) = atlas.sprites[Sprite::HealthBg as usize].unwrap();
+        assert_eq!(size, [1366.0 / 128.0, 768.0 / 128.0]);
+        let (w, h) = (atlas.width as f32, atlas.height as f32);
+        assert_eq!(
+            [(uv[2] * w).round(), (uv[3] * h).round()],
+            [602.0, 62.0],
+            "{uv:?} in {w}x{h}"
+        );
+        let t = atlas.trims[Sprite::HealthBg as usize];
+        let expect = [9.0 / 1366.0, 4.0 / 768.0, 755.0 / 1366.0, 702.0 / 768.0];
+        assert!(
+            t.iter().zip(expect).all(|(a, b)| (a - b).abs() < 1e-6),
+            "{t:?}"
+        );
+        // Its kept edge is the clear pixel, then the bar.
+        let (x, y) = ((uv[0] * w).round() as u32, (uv[1] * h).round() as u32);
+        let px = |x: u32, y: u32| {
+            let at = ((y * atlas.width + x) * 4) as usize;
+            atlas.rgba[at..at + 4].to_vec()
+        };
+        assert_eq!(px(x, y + 30), [0, 0, 0, 0]);
+        assert_eq!(px(x + 1, y + 30)[3], 255);
+        // Nothing to cut off the note.
+        assert_eq!(atlas.trims[Sprite::HitCircle as usize], [0.0; 4]);
+        // The whole atlas is about the bar's size now, not a screen's.
+        assert!(atlas.width * atlas.height < 800 * 200, "{w}x{h}");
     }
 
     #[test]

@@ -288,6 +288,46 @@ fn flip_x(sh: &mut Shape) {
     }
 }
 
+/// `shapes` with each skin image's quad cut down to the part of its image the atlas kept
+/// (`Atlas::trims`), into `out`: the clear margins round it, which every pixel of went through
+/// the shader for nothing, are no longer drawn (a skin's `scorebar-bg` is often a whole screen of
+/// clear with the bar in a corner). What's drawn is the same, pixel for pixel. False (and `out`
+/// untouched) when the skin's images have no margins to cut.
+pub(crate) fn trim_sprites(
+    shapes: &[Shape],
+    trims: &PerSprite<[f32; 4]>,
+    out: &mut Vec<Shape>,
+) -> bool {
+    if trims.iter().all(|t| *t == [0.0; 4]) {
+        return false;
+    }
+    out.clear();
+    out.extend(shapes.iter().map(|&sh| trim_sprite(sh, trims)));
+    true
+}
+
+fn trim_sprite(mut sh: Shape, trims: &PerSprite<[f32; 4]>) -> Shape {
+    // The shader's sprites: `SPRITE_BASE` + index, read as the nearest whole index.
+    let k = sh.params[3] - SPRITE_BASE;
+    if !(-0.5..SPRITES as f32 - 0.5).contains(&k) {
+        return sh;
+    }
+    let [l, t, r, b] = trims[k.round() as usize];
+    if [l, t, r, b] == [0.0; 4] {
+        return sh;
+    }
+    // In the shape's own frame (turned by its angle, mirrored by a negative half), the part
+    // kept sits `l` of the width in from the left and `t` of the height down from the top.
+    let (dx, dy) = ((l - r) * sh.half[0], (t - b) * sh.half[1]);
+    let (sin, cos) = sh.angle.sin_cos();
+    sh.center = [
+        sh.center[0] + dx * cos - dy * sin,
+        sh.center[1] + dx * sin + dy * cos,
+    ];
+    sh.half = [sh.half[0] * (1.0 - l - r), sh.half[1] * (1.0 - t - b)];
+    sh
+}
+
 /// What a skin says about laying its images out, besides their sizes.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SkinLayout {
@@ -345,6 +385,10 @@ pub struct Atlas {
     pub height: u32,
     pub rgba: Vec<u8>,
     pub sprites: PerSprite<Option<([f32; 4], [f32; 2])>>,
+    /// What each image lost to the clear margins cut off round it ([left, top, right, bottom],
+    /// as fractions of its width and height): its UV rect is the part kept, its size still the
+    /// whole image's. The renderer cuts its quads down to match (`trim_sprites`).
+    pub trims: PerSprite<[f32; 4]>,
     pub layout: SkinLayout,
 }
 
@@ -454,6 +498,9 @@ pub struct Renderer {
     /// The shapes' bind group: globals, then the skin atlas (its UV rects, texture and sampler).
     shape_layout: wgpu::BindGroupLayout,
     sprite_rects: wgpu::Buffer,
+    /// The skin's `Atlas::trims`, and the frame's shapes cut down to them on their way up.
+    sprite_trims: PerSprite<[f32; 4]>,
+    trimmed: Vec<Shape>,
     sampler: wgpu::Sampler,
     /// The font's glyphs (`font::atlas`), for text quads.
     font_view: wgpu::TextureView,
@@ -2049,6 +2096,8 @@ impl Renderer {
             bind_group,
             shape_layout: bgl,
             sprite_rects,
+            sprite_trims: PerSprite::default(),
+            trimmed: Vec::new(),
             sampler,
             font_view,
             font_texture,
@@ -2107,6 +2156,30 @@ impl Renderer {
         avg
     }
 
+    /// `shapes` into the instance buffer, skin images cut down to what the atlas kept of them.
+    fn upload_shapes(&mut self, shapes: &[Shape]) {
+        let mut trimmed = std::mem::take(&mut self.trimmed);
+        let drawn = if trim_sprites(shapes, &self.sprite_trims, &mut trimmed) {
+            &trimmed[..]
+        } else {
+            shapes
+        };
+        self.queue
+            .write_buffer(&self.instances, 0, bytemuck::cast_slice(drawn));
+        self.trimmed = trimmed;
+    }
+
+    /// `shapes` as the GPU gets them (skin images cut down, `trim_sprites`): what
+    /// `TAIKO_PROFILE` measures the frame's overdraw by.
+    pub fn as_drawn<'a>(&self, shapes: &'a [Shape]) -> std::borrow::Cow<'a, [Shape]> {
+        let mut out = Vec::new();
+        if trim_sprites(shapes, &self.sprite_trims, &mut out) {
+            std::borrow::Cow::Owned(out)
+        } else {
+            std::borrow::Cow::Borrowed(shapes)
+        }
+    }
+
     /// The most shapes a frame can have: what the graphics card takes in one buffer. A frame with
     /// more loses the rest for that frame, rather than the game crashing on it.
     fn shape_limit(&self) -> usize {
@@ -2124,6 +2197,7 @@ impl Renderer {
 
     /// Uploads a skin's images; an empty atlas removes them.
     pub fn set_sprites(&mut self, atlas: &Atlas) {
+        self.sprite_trims = atlas.trims;
         self.bind_group = Self::shape_bind_group(
             &self.device,
             &self.queue,
@@ -2719,8 +2793,7 @@ impl Renderer {
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !shapes.is_empty() {
-            self.queue
-                .write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
+            self.upload_shapes(shapes);
         }
         if self.bg_mix >= 1.0 {
             self.bg_prev = None;
@@ -2982,8 +3055,7 @@ impl Renderer {
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !shapes.is_empty() {
-            self.queue
-                .write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
+            self.upload_shapes(shapes);
         }
         let screen = w as f32 / h.max(1) as f32;
         if let Some(l) = &mut self.bg {
@@ -6039,6 +6111,104 @@ mod tests {
 #[cfg(test)]
 mod shape_limit_tests {
     use super::*;
+
+    /// Where in its image (in the image's own pixels) the sprite shape `sh` drawn over the atlas
+    /// rect for `[x0, y0, w, h]` of it samples at screen point `p`, as the shader works it out;
+    /// None where it draws nothing.
+    fn sampled(sh: &Shape, part: [f32; 4], p: [f32; 2]) -> Option<[f32; 2]> {
+        let (sin, cos) = sh.angle.sin_cos();
+        let (dx, dy) = (p[0] - sh.center[0], p[1] - sh.center[1]);
+        let local = [dx * cos + dy * sin, -dx * sin + dy * cos];
+        let uv = [
+            local[0] / (2.0 * sh.half[0]) + 0.5,
+            local[1] / (2.0 * sh.half[1]) + 0.5,
+        ];
+        uv.iter()
+            .all(|u| (0.0..=1.0).contains(u))
+            .then(|| [part[0] + uv[0] * part[2], part[1] + uv[1] * part[3]])
+    }
+
+    #[test]
+    fn a_trimmed_sprite_samples_its_image_where_the_whole_one_did() {
+        // A 100x50 image of which [10, 5]..[70, 35] was kept, drawn turned and mirrored.
+        let (iw, ih) = (100.0, 50.0);
+        let kept = [10.0, 5.0, 60.0, 30.0];
+        let mut trims = PerSprite::<[f32; 4]>::default();
+        trims[Sprite::HealthBg as usize] = [
+            kept[0] / iw,
+            kept[1] / ih,
+            (iw - kept[0] - kept[2]) / iw,
+            (ih - kept[1] - kept[3]) / ih,
+        ];
+        let sprite = |half: [f32; 2], angle: f32| Shape {
+            center: [300.0, 200.0],
+            half,
+            fill: [1.0; 4],
+            border: [1.0; 4],
+            params: [
+                0.0,
+                0.0,
+                0.0,
+                SPRITE_BASE + Sprite::HealthBg as usize as f32,
+            ],
+            angle,
+        };
+        let plain = Shape {
+            params: [0.0, 0.0, 0.0, 0.0],
+            ..sprite([50.0, 25.0], 0.0)
+        };
+        let other = Shape {
+            params: [
+                0.0,
+                0.0,
+                0.0,
+                SPRITE_BASE + Sprite::HitCircle as usize as f32,
+            ],
+            ..sprite([50.0, 25.0], 0.0)
+        };
+        for whole in [
+            sprite([100.0, 40.0], 0.0),
+            sprite([100.0, 40.0], 0.7),
+            sprite([-100.0, 40.0], -2.1),
+        ] {
+            let mut out = Vec::new();
+            assert!(trim_sprites(&[plain, whole, other], &trims, &mut out));
+            // Only the trimmed image's shape changes.
+            let bytes = bytemuck::bytes_of::<Shape>;
+            assert!(bytes(&out[0]) == bytes(&plain) && bytes(&out[2]) == bytes(&other));
+            let cut = out[1];
+            assert!(
+                (cut.half[0] * cut.half[1]).abs() < 0.4 * (whole.half[0] * whole.half[1]).abs()
+            );
+            for i in 0..=200 {
+                for j in 0..=200 {
+                    let p = [180.0 + i as f32 * 1.2, 80.0 + j as f32 * 1.2];
+                    let a = sampled(&whole, [0.0, 0.0, iw, ih], p);
+                    let b = sampled(&cut, kept, p);
+                    match (a, b) {
+                        (Some(a), Some(b)) => assert!(
+                            (a[0] - b[0]).abs() < 1e-2 && (a[1] - b[1]).abs() < 1e-2,
+                            "{p:?}: {a:?} vs {b:?}"
+                        ),
+                        // What the cut shape leaves out is the clear outside the kept part.
+                        (Some(a), None) => assert!(
+                            a[0] <= kept[0] + 1e-2
+                                || a[1] <= kept[1] + 1e-2
+                                || a[0] >= kept[0] + kept[2] - 1e-2
+                                || a[1] >= kept[1] + kept[3] - 1e-2,
+                            "{p:?}: {a:?}"
+                        ),
+                        (None, Some(b)) => panic!("{p:?}: {b:?} drawn outside the image"),
+                        (None, None) => {}
+                    }
+                }
+            }
+        }
+        // A skin without margins anywhere sends the shapes up as they are.
+        let mut out = Vec::new();
+        assert!(!trim_sprites(&[plain], &PerSprite::default(), &mut out));
+        assert!(out.is_empty());
+    }
 
     #[test]
     fn a_background_comes_with_its_blurred_copies_made_where_it_was_read() {
