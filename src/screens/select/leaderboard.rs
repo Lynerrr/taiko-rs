@@ -674,14 +674,18 @@ fn board_row(
     c.avatar(l.player, x + 42.0, mid, 10.0, accent(), 1.0);
     let tx = x + 58.0;
     let mut right = x + w - 8.0;
-    if let Some(video) = video {
+    // The video button only on the row under the pointer: the rest keep its room for the
+    // name and what the play was (a narrow board, 4:3, cut both).
+    // It sits on the top line, so the line under it keeps the row's whole width.
+    let full_right = right;
+    if let Some(video) = video.filter(|_| hover) {
         let bw = score_video_width();
         right -= bw;
         c.button(
             right,
-            mid - 7.0,
+            ry + 3.0,
             bw,
-            14.0,
+            12.0,
             score_video_label(),
             6.0,
             video,
@@ -704,24 +708,33 @@ fn board_row(
         white,
         right - score_w - 10.0 - tx,
     );
-    // Under it: how it went, and misses and age at the right.
-    let when = misses_and_age(l.miss, l.date);
-    let when_w = Canvas::text_width(6.5, &when);
-    c.text_right(right, under, 6.5, rgba(0x6f6f86, 1.0), &when);
-    let mut parts = vec![
-        (format!("{:.2}%", l.accuracy * 100.0), 0xdedeea),
-        (format!("{}x", l.combo), 0x9a9ab0),
-    ];
-    if let Some(pp) = l.pp {
-        parts.push((format!("{pp:.0}pp"), 0xff8ad8));
+    // What the play was played with comes right after the accuracy, so a narrow board cuts
+    // the combo rather than the mods and the speed.
+    let mut parts = vec![(format!("{:.2}%", l.accuracy * 100.0), 0xdedeea)];
+    if !l.mods.is_empty() {
+        parts.push((format!("+{}", l.mods), 0xFFC66B));
     }
     if (l.rate - 1.0).abs() > 1e-6 {
         parts.push((format!("{:.2}x", l.rate), 0x4fb4ff));
     }
-    if !l.mods.is_empty() {
-        parts.push((format!("+{}", l.mods), 0xFFC66B));
+    if let Some(pp) = l.pp {
+        parts.push((format!("{pp:.0}pp"), 0xff8ad8));
     }
-    let end = right - when_w - 10.0;
+    parts.push((format!("{}x", l.combo), 0x9a9ab0));
+    // Misses and age at the right; the age gives way when the accuracy, mods and speed
+    // (the parts before pp) wouldn't fit beside it.
+    let first: f32 = parts
+        .iter()
+        .take_while(|(t, _)| !t.ends_with("pp"))
+        .map(|(t, _)| Canvas::text_width(6.5, t) + 8.0)
+        .sum();
+    let mut when = misses_and_age(l.miss, l.date);
+    if tx + first + 2.0 + Canvas::text_width(6.5, &when) > full_right {
+        when = miss_label(l.miss);
+    }
+    let when_w = Canvas::text_width(6.5, &when);
+    c.text_right(full_right, under, 6.5, rgba(0x6f6f86, 1.0), &when);
+    let end = full_right - when_w - 10.0;
     let mut px = tx;
     for (text, colour) in parts {
         let shown = Canvas::fit(6.5, end - px, &text);
@@ -896,4 +909,56 @@ pub(crate) fn fetch_board(
         let _ = tx.send(rows);
     });
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::regression::harness::shows;
+
+    /// Discord idea "See mods and rates on the leaderboards" (a 4:3 screen's narrow board): the
+    /// mods and the speed come right after the accuracy, so the row cuts the combo instead, and
+    /// the video button only takes room on the row under the pointer.
+    #[test]
+    fn a_narrow_board_row_keeps_the_name_mods_and_speed() {
+        let line = BoardLine {
+            place: 4,
+            player: "WinterSnowfall",
+            score: 987_654,
+            accuracy: 0.9712,
+            combo: 812,
+            pp: Some(321.0),
+            rate: 1.25,
+            mods: "HD,HR".into(),
+            miss: 3,
+            date: 0,
+            mine: false,
+        };
+        let draw = |mouse: (f32, f32)| {
+            let mut c = Canvas {
+                audit: true,
+                ..Default::default()
+            };
+            c.clear(640.0);
+            c.mouse = mouse;
+            let video = Some(hit::Hit::ScoreVideo(0));
+            board_row(&mut c, 0.0, 0.0, 230.0, &line, hit::Hit::ScoreRow(0), video);
+            c
+        };
+        let c = draw((-1000.0, -1000.0));
+        assert!(shows(&c, "WinterSnowfall"), "the whole name");
+        assert!(shows(&c, "+HD,HR"), "the mods");
+        assert!(shows(&c, "1.25x"), "the speed: {:?}", c.texts);
+        assert!(shows(&c, "3 miss"), "the misses: {:?}", c.texts);
+        assert!(
+            !c.hits.iter().any(|h| h.hit == hit::Hit::ScoreVideo(0)),
+            "no video button off the pointer"
+        );
+        let c = draw((100.0, 10.0));
+        assert!(
+            c.hits.iter().any(|h| h.hit == hit::Hit::ScoreVideo(0)),
+            "the video button under the pointer"
+        );
+        assert!(shows(&c, "+HD,HR"), "the mods still");
+    }
 }

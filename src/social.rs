@@ -1039,12 +1039,23 @@ pub fn styled_name(
     let a = colour[3];
     let right = x + max_w;
     let mut nx = x;
-    // Tags while the name keeps some room; then the name, cut to what's left.
-    for tag in &tags {
+    // Tags while the name keeps some room, and none that would cut a name that fits without
+    // them: the name matters more than its tags. Then the name, cut to what's left.
+    let gap = 3.0 * size / CHAT_SIZE;
+    let name_w = Canvas::text_width(size, name);
+    let mut keep = tags.len();
+    while keep > 0 && name_w <= max_w {
+        let tags_w: f32 = tags[..keep].iter().map(|t| tag_width(t, size) + gap).sum();
+        if x + tags_w + name_w <= right {
+            break;
+        }
+        keep -= 1;
+    }
+    for tag in &tags[..keep] {
         if nx + tag_width(tag, size) > right - 40.0 * size / CHAT_SIZE {
             break;
         }
-        nx += group_tag(c, nx, y, size, tag, a) + 3.0 * size / CHAT_SIZE;
+        nx += group_tag(c, nx, y, size, tag, a) + gap;
     }
     // A hair of slack: room measured with `styled_name_width` must not cut the name.
     let shown = Canvas::fit(size, right - nx + 0.01, name);
@@ -3340,6 +3351,46 @@ mod tests {
         s.set_groups(vec![("semfi".into(), tags(&["200"]))]);
         assert!(s.tags_of("auneu").is_empty());
         assert_eq!(s.tags_of("semfi"), ["200"]);
+    }
+
+    /// Discord: "names are cut off for anyone who has a tag in their name". A name that fits
+    /// without its tags drops them rather than being cut; with room for all, they show.
+    #[test]
+    fn tags_give_way_to_a_name_that_fits_without_them() {
+        let mut social = Social::default();
+        social.set_groups(vec![(
+            "WinterSnowfall".into(),
+            vec!["DEV".into(), "LOVED".into()],
+        )]);
+        let name = "WinterSnowfall";
+        let size = 8.0;
+        let alone = Canvas::text_width(size, name);
+        let draw = |room: f32| {
+            let mut c = Canvas {
+                audit: true,
+                ..Default::default()
+            };
+            c.clear(640.0);
+            let w = styled_name(&mut c, 0.0, 0.0, size, name, rgba(0xffffff, 1.0), room);
+            (w, c)
+        };
+        // Room for the name and one tag, not two: one tag, the whole name.
+        let one = tag_width("DEV", size) + 3.0 * size / CHAT_SIZE;
+        let (w, c) = draw(alone + one + 1.0);
+        let letters = c
+            .texts
+            .iter()
+            .filter(|(_, s)| s.chars().count() == 1)
+            .count();
+        assert_eq!(letters, name.chars().count(), "the whole name");
+        assert!((w - (alone + one)).abs() < 0.5, "with one tag: {w}");
+        // Room for the name alone: no tags.
+        let (w, _) = draw(alone + 1.0);
+        assert!((w - alone).abs() < 0.5, "no tags: {w} vs {alone}");
+        // Room for all: both tags.
+        let (w, _) = draw(styled_name_width(name, size) + 1.0);
+        assert!((w - styled_name_width(name, size)).abs() < 0.5, "all: {w}");
+        social.set_groups(Vec::new());
     }
 
     #[test]
