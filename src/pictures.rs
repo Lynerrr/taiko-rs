@@ -39,6 +39,11 @@ fn external(name: &str) -> bool {
 const MAX_PATH_READS: usize = 3;
 /// How many read pictures go into their slots (and up to the GPU) a frame.
 const PLACE_PER_FRAME: usize = 3;
+/// How many of them may be pictures read by path (song select's banner, 2.7 MB each): one, or a
+/// fast scroll sent several up in one frame beside the cards' strips and the background.
+const PATH_PLACE_PER_FRAME: usize = 1;
+/// What one picture takes to send up: its cell, RGBA.
+const PICTURE_BYTES: usize = (PICTURE_CELL * PICTURE_CELL * 4) as usize;
 
 /// How long a picture that couldn't be read waits before it is looked for again.
 const RETRY: Duration = Duration::from_secs(2);
@@ -232,12 +237,29 @@ impl Pictures {
 
     /// Follows the map folder `dir`, loads the pictures `wanted` (lowercase file names) and
     /// moves the animated ones to their frames at `times` (ms into them, by name).
+    /// Tests: with a whole frame's budget each call.
+    #[cfg(test)]
     pub fn update(
         &mut self,
         dir: Option<&Path>,
         wanted: &[String],
         times: &[(String, f64)],
         paths: &[(String, PathBuf)],
+    ) {
+        self.update_within(dir, wanted, times, paths, &mut crate::UPLOAD_BUDGET.clone());
+    }
+
+    /// `update`, the pictures read by path (song select's banner) going up to the GPU within
+    /// `budget` (bytes this frame, what's left of it after them): one of them a frame at most,
+    /// and none once something else took the budget. A map's own pictures and the covers go up
+    /// as they did.
+    pub fn update_within(
+        &mut self,
+        dir: Option<&Path>,
+        wanted: &[String],
+        times: &[(String, f64)],
+        paths: &[(String, PathBuf)],
+        budget: &mut usize,
     ) {
         if self.dir.as_deref() != dir {
             // The covers and the pictures read by path don't come from the folder: they stay.
@@ -284,6 +306,7 @@ impl Pictures {
         // A few a frame go into their slots and up to the GPU (up to 3 MB each: many in one frame
         // is a hitch), the ones drawn now first. Read ones no longer drawn wait their turn; past a
         // texture's worth the oldest are let go.
+        let mut by_path = 0;
         for _ in 0..PLACE_PER_FRAME {
             let next = self
                 .arrived
@@ -293,6 +316,15 @@ impl Pictures {
             let Some(i) = next else {
                 break;
             };
+            if self.arrived[i].0.starts_with(PATH_PREFIX) {
+                // A banner is most of a frame's budget: one a frame, the first thing to go up.
+                let spent = *budget < crate::UPLOAD_BUDGET;
+                if by_path >= PATH_PLACE_PER_FRAME || (spent && *budget < PICTURE_BYTES) {
+                    break;
+                }
+                by_path += 1;
+                *budget = budget.saturating_sub(PICTURE_BYTES);
+            }
             let (name, image) = self.arrived.remove(i);
             self.place(name, image, wanted);
         }
@@ -950,8 +982,8 @@ mod tests {
             p.update(None, &wanted, &[], &paths);
             most = most.max(p.pending.len());
             assert!(
-                p.take_uploads().len() <= PLACE_PER_FRAME,
-                "a few go up a frame"
+                p.take_uploads().len() <= PATH_PLACE_PER_FRAME,
+                "one goes up a frame"
             );
             if p.slots().len() == paths.len() {
                 break;
@@ -961,6 +993,54 @@ mod tests {
         assert_eq!(p.slots().len(), paths.len(), "all read in the end");
         assert!(most <= MAX_PATH_READS);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_banner_goes_up_one_a_frame_and_not_after_the_budget_is_spent() {
+        let still = || Image {
+            frames: vec![Vec::new()],
+            ends: vec![0.0],
+            side: PICTURE_CELL,
+            aspect: 1.0,
+        };
+        let mut p = Pictures::default();
+        for i in 0..3 {
+            p.arrived.push((format!("{PATH_PREFIX}{i:016x}"), still()));
+        }
+        let mut budget = crate::UPLOAD_BUDGET;
+        p.update_within(None, &[], &[], &[], &mut budget);
+        assert_eq!(p.slots().len(), 1, "one banner a frame");
+        assert_eq!(budget, crate::UPLOAD_BUDGET - PICTURE_BYTES);
+        // Something else took the frame's budget first: none this frame.
+        let mut budget = PICTURE_BYTES - 1;
+        p.update_within(None, &[], &[], &[], &mut budget);
+        assert_eq!(p.slots().len(), 1, "it waits");
+        let mut budget = crate::UPLOAD_BUDGET;
+        p.update_within(None, &[], &[], &[], &mut budget);
+        assert_eq!(p.slots().len(), 2, "the next frame it goes");
+    }
+
+    #[test]
+    fn a_banner_no_longer_drawn_is_called_off_and_a_maps_own_pictures_are_not() {
+        let dir =
+            std::env::temp_dir().join(format!("taiko-rs-pictures-off-{}", std::process::id()));
+        let path = dir.join("gone.png");
+        let key = crate::render::path_picture_key(&path);
+        let paths = vec![(key.clone(), path)];
+        let mut p = Pictures::default();
+        p.update(None, std::slice::from_ref(&key), &[], &paths);
+        let ticket = p.pending.get(&key).cloned().expect("asked for");
+        // The selection moved on: its banner isn't drawn any more.
+        p.update(None, &[], &[], &paths);
+        assert!(!p.pending.contains_key(&key), "no longer waited for");
+        assert!(!ticket.wanted() || p.failed.contains(&key));
+        // A map's own picture (no path of its own) is read whether drawn this frame or not.
+        p.update(Some(&dir), &["layer.png".to_string()], &[], &[]);
+        let own = p.pending.get("layer.png").cloned();
+        p.update(Some(&dir), &[], &[], &[]);
+        if let Some(own) = own {
+            assert!(own.wanted(), "a map's own picture isn't called off");
+        }
     }
 
     #[test]

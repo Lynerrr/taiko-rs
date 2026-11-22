@@ -21,8 +21,11 @@ use crate::services::workers::{self, Ticket};
 const MAX_BYTES: u64 = 24 * 1024 * 1024;
 /// Strips read at once: one takes a ms or two from its copy.
 const MAX_READS: usize = 4;
-/// Strips that go into their slots (and up to the GPU) a frame: 256 KB each.
+/// Strips that go into their slots (and up to the GPU) a frame: 256 KB each, within the frame's
+/// budget (`UPLOAD_BUDGET`) with the banner.
 const PLACE_PER_FRAME: usize = 8;
+/// What one strip takes to send up: its cell, RGBA.
+const STRIP_BYTES: usize = (CARD_CELL[0] * CARD_CELL[1] * 4) as usize;
 /// How long a strip that couldn't be read waits before it is tried again.
 const RETRY: Duration = Duration::from_secs(2);
 /// The copies' kind, in their folder's name: a new one leaves the old folder to be removed.
@@ -193,10 +196,22 @@ impl CardPictures {
 
     /// Reads and keeps in the strips `wanted` (picture key, file, whether a card draws it now):
     /// the drawn ones first, then the others in their order, as many as there are slots.
+    /// Tests: with a whole frame's budget each call.
+    #[cfg(test)]
     pub fn update(&mut self, wanted: &[(String, PathBuf, bool)]) {
+        self.update_within(wanted, &mut crate::UPLOAD_BUDGET.clone());
+    }
+
+    /// `update`, the strips going up to the GPU within `budget` (bytes this frame, what's left
+    /// of it after them); the first always goes when nothing else took any of it.
+    pub fn update_within(&mut self, wanted: &[(String, PathBuf, bool)], budget: &mut usize) {
         self.frame += 1;
         while let Ok((key, got)) = self.rx.try_recv() {
-            self.pending.retain(|k| *k != key);
+            // Called off: nothing came, and it's asked again if it's wanted again.
+            let Some(got) = got else {
+                continue;
+            };
+            self.pending.remove(&key);
             match got {
                 Ok(px) => {
                     self.arrived.retain(|(k, _)| *k != key);
@@ -239,6 +254,11 @@ impl CardPictures {
             let Some(i) = next else {
                 break;
             };
+            let spent = *budget < crate::UPLOAD_BUDGET;
+            if spent && *budget < STRIP_BYTES {
+                break;
+            }
+            *budget = budget.saturating_sub(STRIP_BYTES);
             let (key, px) = self.arrived.remove(i);
             self.place(key, px, &keep);
         }
@@ -492,6 +512,44 @@ mod tests {
         assert!((colour[1] - 128.0 / 255.0).abs() < 1e-6 && colour[0] == 1.0);
         assert_eq!(parse_name("0123456789abcdef-ff8000.png.part"), None);
         assert_eq!(parse_name("notes.txt"), None);
+    }
+
+    #[test]
+    fn strips_go_up_within_what_the_banner_left_of_the_frames_budget() {
+        let mut p = CardPictures::default();
+        for i in 0..PLACE_PER_FRAME + 4 {
+            p.arrived
+                .push((format!("@path/{i:016x}"), vec![0; STRIP_BYTES]));
+        }
+        // A whole frame's budget: as many as go a frame.
+        let mut budget = crate::UPLOAD_BUDGET;
+        p.update_within(&[], &mut budget);
+        assert_eq!(p.take_uploads().len(), PLACE_PER_FRAME);
+        assert_eq!(budget, crate::UPLOAD_BUDGET - PLACE_PER_FRAME * STRIP_BYTES);
+        // The banner took all but one strip's worth: one.
+        let mut budget = STRIP_BYTES + 1;
+        p.update_within(&[], &mut budget);
+        assert_eq!(p.take_uploads().len(), 1, "what's left of the budget");
+        // Nothing left: they wait for the next frame.
+        let mut budget = 0;
+        p.update_within(&[], &mut budget);
+        assert!(p.take_uploads().is_empty(), "the budget's gone");
+        assert!(!p.arrived.is_empty(), "still there for later");
+    }
+
+    #[test]
+    fn a_strip_scrolled_away_before_its_turn_is_called_off() {
+        let mut p = CardPictures::default();
+        let path = std::env::temp_dir().join(format!("taiko-card-gone-{}.png", std::process::id()));
+        let key = path_picture_key(&path);
+        p.update(&[(key.clone(), path, true)]);
+        let ticket = p.pending.get(&key).cloned().expect("asked for");
+        // The list moved on: the card isn't drawn or ahead any more.
+        p.update(&[]);
+        assert!(p.pending.is_empty(), "no longer waited for");
+        // Unless its turn came first (here the file isn't there, so that's quick), the reading
+        // threads skip it.
+        assert!(!ticket.wanted() || p.failed.contains_key(&key));
     }
 
     #[test]

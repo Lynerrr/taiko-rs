@@ -12803,13 +12803,17 @@ impl State {
         // The pictures the last frame drew, then the ones the renderer has for this one.
         self.avatars.update(&canvas.avatars_wanted);
         let picture_dir = self.picture_dir();
-        self.pictures.update(
+        // The banner first, then the cards' strips, within one frame's budget for the GPU.
+        let mut budget = UPLOAD_BUDGET;
+        self.pictures.update_within(
             picture_dir.as_deref(),
             &canvas.pictures_wanted,
             &canvas.picture_times,
             &canvas.picture_paths,
+            &mut budget,
         );
-        self.card_pictures.update(&canvas.cards_wanted);
+        self.card_pictures
+            .update_within(&canvas.cards_wanted, &mut budget);
         canvas.clear(width);
         canvas.input_editor = self
             .sync_text_input()
@@ -15592,6 +15596,11 @@ const STATUS_ROUND_SECS: u64 = 45;
 
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
+
+/// How many bytes of pictures go up to the GPU in one frame at most (song select's banner, the
+/// cards' strips and a new background): a fast scroll used to send over 13 MB in one frame, a
+/// hitch on an integrated GPU. The first thing in a frame always goes, whatever its size.
+pub(crate) const UPLOAD_BUDGET: usize = 3 << 20;
 
 /// How long the exit question takes to slide in.
 const QUIT_SLIDE_MS: f32 = 160.0;
