@@ -7464,6 +7464,11 @@ impl State {
                 let y = y / self.select_scale.max(1e-3);
                 self.select.scroll_to(y, &self.library);
             }
+            // A right click on the search box clears what's typed (Delete does the same).
+            Some((_, _, Some(hit::Hit::TextField))) if !self.social.open => {
+                self.select.filter.clear();
+                self.select.refilter(&self.library);
+            }
             _ => {}
         }
     }
