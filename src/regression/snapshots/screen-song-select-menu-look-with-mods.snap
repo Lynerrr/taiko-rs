@@ -1,7 +1,6 @@
 text  723,7    log in
 text  778,7    what's new
-text   33,33   Menu
-text   85,33   click to search...
+text   32,33   click to search...
 text  285,33   ctrl+f
 text  340,33   SORT
 text  361,33   artist
@@ -28,18 +27,18 @@ text  420,150  OD
 text  521,150  BPM
 text  623,150  LENGTH
 text  724,150  NOTES
-text   26,159  sv-and-kiai
+text   25,159  sv-and-kiai
 text  420,163  32 DON
 text  794,163  32 KAT
-text   26,171  Regression  |  mapped by tests
+text   25,171  Regression  |  mapped by tests
 text  425,179  SS
 text  439,179  130pp
 text  560,179  99%
 text  580,179  117pp
 text  696,179  98%
 text  714,179  99pp
-text   25,189  stream
-text   25,200  Regression  |  mapped by tests
+text   24,189  stream
+text   24,200  Regression  |  mapped by tests
 text  427,201  Preview
 text  484,201  Local
 text  531,201  Online
@@ -51,22 +50,23 @@ text   24,259  Regression  |  mapped by tests
 text  420,406  0:00 / 0:10
 text  692,406  peak 7.0 notes/s at 0:01
 text  726,444  Play
+text   31,445  Menu
 text  431,445  Mods
 text  479,445  Random
 text  529,446  HR
 text  549,446  HD
-hit    17,28     43x16   ToMenu
+hit    16,437    43x23   ToMenu
 hit   324,28     74x16   SortList
-hit    69,28    252x16   TextField
-hit    25,49    377x29   SongHeader(0)
-hit    36,79    366x17   SongRow(0)
-hit    21,96    381x29   SongHeader(1)
-hit    19,125   383x29   SongHeader(2)
-hit    18,155   385x29   SongHeader(3)
-hit    17,184   386x29   SongHeader(4)
-hit    16,213   386x29   SongHeader(5)
+hit    16,28    304x16   TextField
+hit    25,49    378x29   SongHeader(0)
+hit    36,79    367x17   SongRow(0)
+hit    21,96    382x29   SongHeader(1)
+hit    19,125   384x29   SongHeader(2)
+hit    17,155   385x29   SongHeader(3)
+hit    16,184   386x29   SongHeader(4)
+hit    16,213   387x29   SongHeader(5)
 hit    16,243   387x29   SongHeader(6)
-hit     3,49     13x413  SongScrollbar
+hit     3,49     13x380  SongScrollbar
 hit   681,127    11x9    SelectLike
 hit   420,178   405x11   PpSim
 hit   420,219   399x126  Preview

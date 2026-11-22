@@ -241,7 +241,7 @@ fn surfaces_are_parted_by_tone_with_lines_only_round_what_is_pressed_or_selected
                     | Hit::Preview
                     | Hit::BoardTab(false)
                     | Hit::PpSim
-            ) && h.rect[2] < 400.0
+            ) && (h.rect[2] < 400.0 || h.hit == Hit::TextField)
                 // (A button, the search field, or the list's grip down its side.)
                 && (h.rect[3] < 60.0 || h.rect[2] <= 24.0)
                 && inside(p, h.rect, 0.5)
@@ -451,15 +451,17 @@ fn the_cards_sit_on_the_lists_wave_the_rest_dimmed_and_one_under_the_pointer_com
         .map(|(_, r)| r)
         .find(|r| (r[1] - first[1]).abs() < 0.5)
         .expect("the card under the pointer");
-    assert_eq!(moved[0], first[0] - 4.0, "it comes out under the pointer");
+    assert!(
+        (moved[0] - (first[0] - 4.0)).abs() < 1e-3,
+        "it comes out under the pointer: {moved:?} from {first:?}"
+    );
 }
 
 #[test]
 fn the_last_card_fades_out_at_the_lists_bottom() {
     let (mut s, _songs, mut now) = menu_look_with("select-look-bottom", &many());
     let c = settled(&mut s, &mut now);
-    let [_, end] = s.select.frame_span();
-    let bottom = end - 4.0;
+    let bottom = s.select.list_bottom();
     let lw = s.select.list_w(c.width);
     let cut = cards(&c)
         .into_iter()
@@ -1020,7 +1022,7 @@ fn card_picture(s: &Shape) -> bool {
 
 /// The cards wholly in the list's view (their hits not cut by its ends): first row and where.
 fn cards_in_view(c: &Canvas, s: &State) -> Vec<(usize, [f32; 4])> {
-    let [_, end] = s.select.frame_span();
+    let end = s.select.list_bottom() + 4.0;
     cards(c)
         .into_iter()
         .filter(|(_, r)| r[1] >= s.select.list_top() && r[1] + r[3] <= end && r[3] > 25.0)
@@ -1352,7 +1354,7 @@ fn cards_lie_on_one_wave_about_the_views_middle_however_the_list_is_scrolled() {
     let c = songs_on(&mut s, &mut now, 1);
     let t = target(&c, &s);
     let ty = t[1] + t[3] / 2.0;
-    let [_, end] = s.select.frame_span();
+    let end = s.select.list_bottom() + 4.0;
     let open = open_card(&c, &s);
     let mut closed: Vec<(f32, [f32; 4])> = cards(&c)
         .into_iter()
@@ -1528,10 +1530,47 @@ fn the_timeline_is_quiet_and_its_kiai_in_gold() {
         .filter(|(i, _)| !in_text(*i))
         .map(|(_, sh)| sh)
         .filter(|sh| plain(sh) && sh.center[0] > 28.0 + lw)
-        .filter(|sh| sh.half[0] * 2.0 < 3.0 && sh.center[1] > top && sh.center[1] < bottom)
+        .filter(|sh| sh.half[0] * 2.0 < 8.0 && sh.center[1] > top && sh.center[1] < bottom)
+        // The bins, not their top edges.
+        .filter(|sh| sh.half[1] * 2.0 > style::tone::LINE + 0.01)
         .filter(|sh| !same_rgb(sh.fill, green))
         .collect();
     assert!(bars.len() > 20, "a timeline of bars: {}", bars.len());
+    // Blocky, side by side: as wide as each other, each starting where the one before ends (no
+    // pixel of room between them), their heights in whole steps.
+    let mut bins: Vec<[f32; 4]> = bars
+        .iter()
+        .map(|sh| rect(sh))
+        .filter(|r| r[2] > 3.0)
+        .collect();
+    bins.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    assert!(bins.len() > 20, "the bins: {bins:?}");
+    for w in bins.windows(2) {
+        assert!(
+            (w[0][0] + w[0][2] - w[1][0]).abs() < 0.01,
+            "no gap between bins: {:?} {:?}",
+            w[0],
+            w[1]
+        );
+    }
+    let base = bins[0][1] + bins[0][3];
+    assert!(
+        bins.iter().all(|r| (r[1] + r[3] - base).abs() < 0.01),
+        "on one base line"
+    );
+    // Each with a crisp top: a line of its colour, stronger than it, along its top.
+    for r in &bins {
+        let fill = c.shapes.iter().find(|sh| rect(sh) == *r).expect("the bin");
+        let cap = c.shapes.iter().any(|sh| {
+            let e = rect(sh);
+            (e[0] - r[0]).abs() < 0.01
+                && (e[1] - r[1]).abs() < 0.01
+                && (e[3] - style::tone::LINE).abs() < 0.01
+                && same_rgb(sh.fill, fill.fill)
+                && sh.fill[3] > fill.fill[3]
+        });
+        assert!(cap, "a top edge on {r:?}");
+    }
     // The playhead a plain line among the bars: nothing glows round it.
     let glows: Vec<[f32; 4]> = c
         .shapes
@@ -1901,18 +1940,23 @@ fn the_map_s_picture_behind_song_select_is_blurred_to_a_field_of_colour() {
 fn the_search_row_sits_under_the_performance_readout_its_buttons_blocks_of_one_height() {
     let (mut s, _songs, mut now) = menu_look("select-look-under-readout");
     let c = settled(&mut s, &mut now);
-    let menu = hit_rect(&c, |h| *h == Hit::ToMenu).expect("Menu");
     let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
     let sort = hit_rect(&c, |h| *h == Hit::SortList).expect("Sort");
     // The readout (`show_fps`) takes 6 to 22 at the top left: the row starts below it.
-    for r in [menu, search, sort] {
+    for r in [search, sort] {
         assert!(r[1] >= 24.0, "below the readout: {r:?}");
         assert!(
-            (r[1] + r[3] / 2.0 - (menu[1] + menu[3] / 2.0)).abs() < 0.5,
-            "one row: {r:?} {menu:?}"
+            (r[1] + r[3] / 2.0 - (search[1] + search[3] / 2.0)).abs() < 0.5,
+            "one row: {r:?} {search:?}"
         );
     }
-    for b in [menu, sort] {
+    // No way back in it (it's under the list): the search from the row's start.
+    assert!(
+        search[0] <= 24.0 + 0.5,
+        "the search from the left: {search:?}"
+    );
+    {
+        let b = sort;
         assert!(
             (b[3] - style::BLOCK_H).abs() < 0.01,
             "a block's height: {b:?}"
@@ -1930,9 +1974,48 @@ fn the_search_row_sits_under_the_performance_readout_its_buttons_blocks_of_one_h
         .map(|(_, r)| r[1])
         .fold(f32::MAX, f32::min);
     assert!(
-        top > menu[1] + menu[3] + 4.0,
+        top > search[1] + search[3] + 4.0,
         "the list under the row: {top}"
     );
+}
+
+#[test]
+fn the_way_back_is_under_the_list_at_the_bottom_left_on_the_actions_line() {
+    let (mut s, _songs, mut now) = menu_look("select-look-back-below");
+    let c = settled(&mut s, &mut now);
+    let menu = hit_rect(&c, |h| *h == Hit::ToMenu).expect("Menu");
+    let mods = hit_rect(&c, |h| *h == Hit::ModsButton).expect("Mods");
+    let play = hit_rect(&c, |h| *h == Hit::Key(KeyCode::Enter)).expect("Play");
+    let search = hit_rect(&c, |h| *h == Hit::TextField).expect("the search");
+    // At the bottom left, level with the list's cards, on the middle line of Mods and Play and
+    // as tall as their blocks: bigger than the search row's.
+    assert!((menu[0] - 24.0).abs() < 0.5, "at the list's left: {menu:?}");
+    let mid = |r: [f32; 4]| r[1] + r[3] / 2.0;
+    for r in [mods, play] {
+        assert!(
+            (mid(menu) - mid(r)).abs() < 0.5,
+            "on one line: {menu:?} {r:?}"
+        );
+    }
+    assert!(
+        (menu[3] - mods[3]).abs() < 0.5,
+        "as tall as Mods: {menu:?} {mods:?}"
+    );
+    assert!(menu[3] > style::BLOCK_H + 4.0, "a big target: {menu:?}");
+    assert!(menu[1] > search[1] + 200.0, "not in the search row");
+    // Under the list: its cards end above it.
+    let lowest = cards(&c)
+        .into_iter()
+        .map(|(_, r)| r[1] + r[3])
+        .fold(0.0, f32::max);
+    assert!(
+        lowest <= menu[1] + 0.5,
+        "the cards above it: {lowest} vs {menu:?}"
+    );
+    assert!(s.select.list_bottom() <= menu[1], "the list ends above it");
+    // It goes back.
+    s.click(Hit::ToMenu, None);
+    assert!(s.on_menu(), "back to the menu");
 }
 
 #[test]
@@ -2812,7 +2895,7 @@ fn a_set_picked_after_wheeling_glides_to_the_target_without_a_jump() {
     }
     let c = settled(&mut s, &mut now);
     // A set low on the screen, far from the target.
-    let [_, end] = s.select.frame_span();
+    let end = s.select.list_bottom() + 4.0;
     let (row, r) = cards(&c)
         .into_iter()
         .rev()
@@ -3295,9 +3378,10 @@ fn the_collection_button_is_on_the_search_row_once_there_are_collections() {
     let sort = hit_rect(&c, |h| *h == Hit::SortList).expect("Sort");
     let pick = hit_rect(&c, |h| *h == Hit::CollectionPick).expect("the collection button");
     assert!(
-        (pick[1] + pick[3] / 2.0 - (menu[1] + menu[3] / 2.0)).abs() < 0.5,
-        "on the search row: {pick:?} {menu:?}"
+        (pick[1] + pick[3] / 2.0 - (search[1] + search[3] / 2.0)).abs() < 0.5,
+        "on the search row: {pick:?} {search:?}"
     );
+    let _ = menu;
     let apart = |a: [f32; 4], b: [f32; 4]| a[0] + a[2] <= b[0] + 0.5 || b[0] + b[2] <= a[0] + 0.5;
     assert!(
         apart(pick, search) && apart(pick, sort),
@@ -3621,4 +3705,47 @@ fn the_preview_s_notes_run_along_a_corridor_as_tall_as_the_lane_not_through_empt
         .filter(|&ly| (ly - cy).abs() < 0.01 || (ly + style::tone::LINE - (cy + ch)).abs() < 0.01)
         .collect();
     assert_eq!(lines.len(), 2, "a line along its top and bottom: {lines:?}");
+}
+
+#[test]
+fn the_right_column_leans_with_the_pointer_as_one_its_actions_with_it() {
+    let (mut s, _songs, mut now) = menu_look("select-look-lean");
+    s.cfg.animations = true;
+    let c = settled(&mut s, &mut now);
+    let (w, h) = (c.width, c.height);
+    let mut at = |s: &mut State, x: f32, y: f32| -> Canvas {
+        let (px, py) = to_pixels(s, x, y);
+        s.mouse_moved(px, py);
+        s.mouse = (px, py);
+        let mut c = frame(s, now);
+        for _ in 0..120 {
+            now += Duration::from_millis(16);
+            c = frame(s, now);
+        }
+        c
+    };
+    let parts = |c: &Canvas, s: &State| {
+        let hit = |want: Hit| hit_rect(c, |h| *h == want).expect("a button");
+        [
+            column_panel(c, s).expect("the column's panel"),
+            hit(Hit::ModsButton),
+            hit(Hit::Key(KeyCode::F2)),
+            hit(Hit::Key(KeyCode::Enter)),
+            hit(Hit::PreviewTab),
+        ]
+    };
+    // The pointer in the middle leans nothing; at the top left the column leans away.
+    let still = parts(&at(&mut s, w / 2.0, h / 2.0), &s);
+    let leant = parts(&at(&mut s, 30.0, 60.0), &s);
+    let moved = |a: [f32; 4], b: [f32; 4]| [b[0] - a[0], b[1] - a[1]];
+    let panel = moved(still[0], leant[0]);
+    assert!(panel[0].abs() > 0.5, "the column leans: {panel:?}");
+    // Mods, Random and Play (their hits too) and the tabs go with it, as one.
+    for (a, b) in still.iter().zip(&leant).skip(1) {
+        let d = moved(*a, *b);
+        assert!(
+            (d[0] - panel[0]).abs() < 0.01 && (d[1] - panel[1]).abs() < 0.01,
+            "{b:?} moved {d:?}, the column {panel:?}"
+        );
+    }
 }

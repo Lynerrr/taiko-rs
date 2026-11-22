@@ -274,6 +274,25 @@ pub mod role {
         level.or(stars).map_or(NEUTRAL, crate::stars::color)
     }
 
+    /// Where a rating's colour is drawn as a mark on the dark (a badge's edge and diamond, a
+    /// row's bar): the colour itself, or for the near-black top of the star spectrum, which
+    /// vanished there, a muted gold that stands out from the dark.
+    pub fn rating_mark(col: u32) -> u32 {
+        let luma = 0.299 * (col >> 16 & 0xff) as f32
+            + 0.587 * (col >> 8 & 0xff) as f32
+            + 0.114 * (col & 0xff) as f32;
+        if luma < DARK_RATING_LUMA {
+            DARK_RATING_MARK
+        } else {
+            col
+        }
+    }
+
+    /// How light (0 to 255) a rating's colour is at least to mark it on the dark itself.
+    pub const DARK_RATING_LUMA: f32 = 56.0;
+    /// The top ratings' mark: a muted gold.
+    pub const DARK_RATING_MARK: u32 = 0xC9A75A;
+
     /// The selected difficulty's text in its rating colour, white without a rating.
     pub fn rating_ink(level: Option<f32>, stars: Option<f32>) -> u32 {
         match level.or(stars) {
@@ -1315,12 +1334,14 @@ const BADGE_INK_LUMA: f32 = 175.0;
 /// A badge as the mods' (`HR`, `HD`) are, over `[x, y, w, h]`: a dark tint of `col`, a line
 /// of it round, for text in it (`badge_ink`).
 pub fn badge(c: &mut Canvas, [x, y, w, h]: [f32; 4], col: u32) {
+    // A dark fill of its colour whatever it is; its edge one that shows on the dark
+    // (`role::rating_mark`).
     c.round_rect(
         [x, y],
         [w, h],
         radius::SMALL,
         rgba(crate::menu::tint(col, 0x000000, 0.78), 0.92),
-        rgba(col, 0.9),
+        rgba(role::rating_mark(col), 0.9),
         1.0,
     );
 }
@@ -1354,8 +1375,9 @@ fn rated_badge(c: &mut Canvas, right: f32, y: f32, size: f32, col: u32, text: &s
     let x = right - w;
     badge(c, [x, y - 3.0, w, h], col);
     let ink = rgba(badge_ink(col), 1.0);
-    // The diamond in the rating's own colour, the text lifted off its tint.
-    let dot = rgba(col, 1.0);
+    // The diamond in the rating's own colour (or a mark of it that shows), the text lifted off
+    // its tint.
+    let dot = rgba(role::rating_mark(col), 1.0);
     let d = size * 0.32;
     let (dx, dy) = (x + size * 0.6 + 2.0, y - 3.0 + h / 2.0);
     c.round_rect([dx - d, dy - d], [d * 2.0, d * 2.0], d * 0.4, dot, dot, 0.0);
@@ -1420,6 +1442,44 @@ fn rating_pill(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_top_rating_s_badge_has_an_edge_and_a_diamond_that_show_on_the_dark() {
+        use super::*;
+        let luma = |c: u32| {
+            0.299 * (c >> 16 & 0xff) as f32
+                + 0.587 * (c >> 8 & 0xff) as f32
+                + 0.114 * (c & 0xff) as f32
+        };
+        // Around 8.5 stars and up the rating's colour goes all but black.
+        for stars in [8.5, 9.0, 10.0, 12.0] {
+            let col = role::rating(None, Some(stars));
+            assert!(luma(col) < role::DARK_RATING_LUMA, "{stars}: {col:06x}");
+            let mut c = Canvas::default();
+            star_chip(&mut c, 400.0, 100.0, 10.0, None, Some(stars));
+            // The badge still a dark plate, its edge and diamond a mark light enough to see, the
+            // number light.
+            let mark = rgba(role::DARK_RATING_MARK, 1.0);
+            let chip = &c.shapes[0];
+            assert!(
+                chip.fill[0].max(chip.fill[1]).max(chip.fill[2]) < 0.15,
+                "dark: {:?}",
+                chip.fill
+            );
+            assert_eq!(&chip.border[..3], &mark[..3], "{stars}: its edge");
+            assert!(chip.params[1] >= 1.0, "an edge");
+            let diamond = &c.shapes[1];
+            assert_eq!(&diamond.fill[..3], &mark[..3], "{stars}: its diamond");
+            assert!(luma(role::DARK_RATING_MARK) > 120.0);
+            assert!(
+                luma(badge_ink(col)) >= BADGE_INK_LUMA - 1.0,
+                "a light number"
+            );
+        }
+        // Below that, the rating's own colour.
+        let col = role::rating(None, Some(5.36));
+        assert_eq!(role::rating_mark(col), col);
+    }
+
     #[test]
     fn the_details_rating_is_a_badge_as_the_mods_are_dark_with_its_colour_on_the_edge_and_diamond()
     {

@@ -624,6 +624,10 @@ const LIST_BOTTOM_LEGACY: f32 = 440.0;
 /// Its frame (4 below) runs down to just over the status line, or stops at 436 while a
 /// banner (picking a map) takes the band under the panels.
 const LIST_BOTTOM: f32 = 454.0;
+/// The row at the column's foot in the main menu's look (song select's actions beside the list,
+/// the way back under it), and how far in from its ends its blocks are.
+pub(crate) const FOOT_ROW_H: f32 = 50.0;
+pub(crate) const FOOT_ROW_INSET: f32 = 8.0;
 const LIST_BOTTOM_BANNER: f32 = 432.0;
 
 pub enum SelectAction {
@@ -1521,7 +1525,8 @@ impl Select {
         }
     }
 
-    pub(crate) fn list_bottom(&self) -> f32 {
+    /// Where the list's column ends: the list's bottom, or under it the row with the way back.
+    fn column_end(&self) -> f32 {
         if self.legacy {
             LIST_BOTTOM_LEGACY
         } else if self.banner {
@@ -1531,9 +1536,47 @@ impl Select {
         }
     }
 
-    /// The top and bottom of the song list's frame, for the panel beside it to line up with.
+    pub(crate) fn list_bottom(&self) -> f32 {
+        let below = if self.back_below() { FOOT_ROW_H } else { 0.0 };
+        self.column_end() - below
+    }
+
+    /// In the main menu's look the way back is under the list at the bottom left, on the line
+    /// of the actions beside it (Mods, Random, Play), rather than in the search row.
+    pub(crate) fn back_below(&self) -> bool {
+        self.in_ui_space() && !crate::mobile::active()
+    }
+
+    /// The way back under the list (`back_below`): a block as tall as the actions', on their
+    /// middle line.
+    fn draw_back_below(&self, c: &mut Canvas) {
+        if !self.back_below() {
+            return;
+        }
+        let back = if self.to_menu {
+            tr!("Menu", "メニュー", "Меню")
+        } else {
+            tr!("Back", "戻る", "Назад")
+        };
+        let mid = self.column_end() + 4.0 - FOOT_ROW_H / 2.0;
+        // A block's rect starts 6 left of where it's put: level with the list's cards.
+        crate::style::block_button(
+            c,
+            [24.0 + 6.0, mid],
+            &crate::style::BACK,
+            back,
+            None,
+            8.0,
+            false,
+            Hit::ToMenu,
+            FOOT_ROW_H - 2.0 * FOOT_ROW_INSET,
+        );
+    }
+
+    /// The top and bottom of the song list's frame, for the panel beside it to line up with
+    /// (in the main menu's look down to the row under it).
     pub fn frame_span(&self) -> [f32; 2] {
-        [self.frame_top() - 4.0, self.list_bottom() + 4.0]
+        [self.frame_top() - 4.0, self.column_end() + 4.0]
     }
 
     /// The wheel: moves the list `notches` on, the selection staying where it is.
@@ -2345,6 +2388,7 @@ impl Select {
     ) {
         self.open_cursor_section();
         self.height = c.height;
+        self.draw_back_below(c);
         let w = c.width;
         let mode = if self.show_converts {
             "taiko + converts"
@@ -2391,10 +2435,13 @@ impl Select {
             } else {
                 tr!("Back", "戻る", "Назад")
             };
-            left += 8.0;
-            if self.covered {
+            if self.back_below() {
+                // Under the list instead (`draw_back_below`): the search has its room.
+            } else if self.covered {
+                left += 8.0;
                 left += crate::style::icon_button_width(back, None, 8.0) + 6.0;
             } else {
+                left += 8.0;
                 let at = [left, row + 12.0];
                 let (icon, hit) = (&crate::style::BACK, Hit::ToMenu);
                 let bw = if blocks {
@@ -3510,7 +3557,9 @@ impl Select {
                     // The rating's bar over the light (under it, its ends stuck out past the
                     // light's round corners: a few unlit pixels at the row's left).
                     if !legacy {
-                        let bar = crate::style::role::rating(e.meta.level, stars(self.visible[*i]));
+                        let rating =
+                            crate::style::role::rating(e.meta.level, stars(self.visible[*i]));
+                        let bar = crate::style::role::rating_mark(rating);
                         let lit = if selected { 1.0 } else { DIFF_BAR_DIM };
                         c.rect(dl, y + 3.0, 3.0, rh - 9.0, rgba(bar, lit * a));
                     }

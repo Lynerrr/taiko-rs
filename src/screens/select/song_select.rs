@@ -431,7 +431,7 @@ fn draw_menu(state: &mut State, canvas: &mut Canvas, frame: &Frame, layer: Layer
 
 /// The lane of actions under song select's preview in the main menu's look (all but Legacy):
 /// its height, and how much of the screen's width its Play end takes.
-const ACTIONS_H: f32 = 50.0;
+const ACTIONS_H: f32 = crate::ui::FOOT_ROW_H;
 const PLAY_SHARE: f32 = 0.16;
 /// How long the die rolls when Random is pressed, a face to each `style::DICE_ROLL` step.
 pub(crate) const DICE_ROLL_MS: f32 = 300.0;
@@ -446,7 +446,7 @@ const MOD_GROUP_GAP: f32 = 10.0;
 /// The least Play gets on a narrow column, for Mods and Random to keep their words.
 const PLAY_MIN_W: f32 = 90.0;
 /// How far the lane's buttons are in from its edges, and the room between two of them.
-const ACTIONS_INSET: f32 = 8.0;
+const ACTIONS_INSET: f32 = crate::ui::FOOT_ROW_INSET;
 const ACTIONS_GAP: f32 = 6.0;
 
 /// The mods that are on as badges from `x` along `y` within `room` (the lane of actions), each
@@ -977,6 +977,16 @@ fn draw_songs(
         let actions_h = if bare { ACTIONS_H } else { PAGE_BUTTON_H };
         let panel_h = panel_end - panel_top - actions_h - style::space::SECTION;
         let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
+        // The column leans against the pointer a little, the other way to what's behind: all of
+        // it as one, the actions' lane at its foot with the rest. What's under the pointer is
+        // worked out where it will be drawn (the pointer taken back by as much meanwhile).
+        let lean = if bare && shift.is_none() {
+            state.select.parallax.map(|v| -v * DETAILS_LEAN / PARALLAX)
+        } else {
+            [0.0; 2]
+        };
+        let mouse = canvas.mouse;
+        canvas.mouse = (mouse.0 - lean[0], mouse.1 - lean[1]);
         let pages = canvas.shapes.len();
         // The main menu's look: the details, the leaderboard and the preview, each a section of
         // its own (no pages to slide between).
@@ -1139,17 +1149,6 @@ fn draw_songs(
             }
         }
         canvas.clip_since(board_start, clip[0], clip[1], clip[2], clip[3]);
-        // The pages lean against the pointer a little, the other way to what's behind.
-        if bare && shift.is_none() {
-            let [lx, ly] = state.select.parallax.map(|v| -v * DETAILS_LEAN / PARALLAX);
-            if lx != 0.0 || ly != 0.0 {
-                canvas.transform_since(pages, [0.0, 0.0], 1.0, lx, ly);
-                if let Some((_, area)) = state.frame_clip.as_mut() {
-                    area.x += lx / (canvas.width + 2.0 * canvas.left).max(1.0);
-                    area.y += ly / canvas.height;
-                }
-            }
-        }
         let play = if state.picking_lobby_map {
             tr!("Pick", "選ぶ", "Выбрать")
         } else if state.pick_to_edit {
@@ -1232,8 +1231,18 @@ fn draw_songs(
                 inner_h,
             ];
             let (at, r) = style::lane_end_disc([bar[0], bar[1], bar[3]]);
+            let at = [at[0] + lean[0], at[1] + lean[1]];
             state.play_icon_at = Some((space.to_screen(at), r * k));
             style::lane_end_button(canvas, "select-play", bar, play, hit, !play_away);
+        }
+        canvas.mouse = mouse;
+        let [lx, ly] = lean;
+        if lx != 0.0 || ly != 0.0 {
+            canvas.transform_since(pages, [0.0, 0.0], 1.0, lx, ly);
+            if let Some((_, area)) = state.frame_clip.as_mut() {
+                area.x += lx / (canvas.width + 2.0 * canvas.left).max(1.0);
+                area.y += ly / canvas.height;
+            }
         }
         // The song list's right edge: the gap between the list's box (`ui`, ending
         // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
