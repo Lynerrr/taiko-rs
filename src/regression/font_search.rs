@@ -234,3 +234,63 @@ fn desktop_font_picker_search_snapshots() {
         super::snapshot::assert_snapshot(name, &harness::screen(&c, &[]));
     }
 }
+
+/// Discord idea: with many skins installed, the skin list and each skin part's list can be
+/// searched like the font list, typing straight into it; Enter takes the row found, and
+/// Backspace with nothing typed still goes from a part's skins back to the parts.
+#[test]
+fn skin_lists_are_searchable_and_backspace_still_goes_back_to_the_parts() {
+    lang::set(lang::Lang::En);
+    let skins = [
+        "built-in",
+        "Aqua Drums",
+        "Blue Lagoon",
+        "aqua classic",
+        "Ember",
+    ];
+    let mut p = Choices::new(
+        Item::Skin,
+        skins.iter().map(|s| s.to_string()).collect(),
+        Some(0),
+        String::new(),
+    );
+    assert!(p.searchable());
+    p.set_search("AQUA".into());
+    assert_eq!(p.visible(), [1, 3]);
+    assert_eq!(p.selected(), Some(1));
+    let mut c = hit::Canvas::default();
+    c.clear(853.3);
+    p.draw(&mut c);
+    assert!(c.hits.iter().any(|h| h.hit == hit::Hit::ChoiceSearch));
+
+    // Through the settings screen: one part's skins, typed into.
+    let mut s = harness::state_with(harness::config(), Vec::new());
+    harness::frame(&mut s, Instant::now());
+    s.open_settings();
+    s.settings_ui.choices = Some(Choices::new(
+        Item::SkinPart(0),
+        skins.iter().map(|s| s.to_string()).collect(),
+        Some(0),
+        String::new(),
+    ));
+    let typed = |s: &mut State, code: KeyCode, text: Option<&str>| {
+        s.key(code, false, text, Instant::now(), None);
+    };
+    typed(&mut s, KeyCode::KeyE, Some("em"));
+    let list = s.settings_ui.choices.as_ref().unwrap();
+    assert_eq!(list.search, "em");
+    assert_eq!(list.visible(), [4], "Ember alone");
+    typed(&mut s, KeyCode::Backspace, None);
+    typed(&mut s, KeyCode::Backspace, None);
+    let list = s.settings_ui.choices.as_ref().unwrap();
+    assert_eq!(list.search, "", "Backspace takes what's typed first");
+    assert!(matches!(list.item, Item::SkinPart(0)));
+    typed(&mut s, KeyCode::Backspace, None);
+    assert!(
+        matches!(
+            s.settings_ui.choices.as_ref().map(|c| c.item),
+            Some(Item::SkinParts)
+        ),
+        "then back to the parts"
+    );
+}

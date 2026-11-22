@@ -2924,6 +2924,10 @@ impl State {
         {
             let mut query = p.search.clone();
             match code {
+                // With nothing typed, Backspace in one part's skins goes back to the parts.
+                KeyCode::Backspace if query.is_empty() && matches!(p.item, Item::SkinPart(_)) => {
+                    return false;
+                }
                 KeyCode::Backspace => {
                     query.pop();
                 }

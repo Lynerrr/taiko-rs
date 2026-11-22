@@ -2047,8 +2047,9 @@ impl Choices {
         }
     }
 
+    /// The lists long enough to search: fonts, and skins (for the whole skin or one part).
     pub fn searchable(&self) -> bool {
-        self.item == Item::UiFont
+        matches!(self.item, Item::UiFont | Item::Skin | Item::SkinPart(_))
     }
 
     /// Indices stay in the original list, so selecting a filtered row picks the right family.
@@ -2093,7 +2094,11 @@ impl Choices {
             1.0,
         );
         c.hit(x, y, w, h, Hit::ChoiceSearch);
-        let placeholder = tr!("Search fonts...", "フォントを検索...", "Поиск шрифтов...");
+        let placeholder = if self.item == Item::UiFont {
+            tr!("Search fonts...", "フォントを検索...", "Поиск шрифтов...")
+        } else {
+            tr!("Search skins...", "スキンを検索...", "Поиск скинов...")
+        };
         c.input(
             crate::text_input::Field::FontSearch,
             [x + 8.0, y + (h - size) / 2.0, w - 16.0, size + 2.0],
