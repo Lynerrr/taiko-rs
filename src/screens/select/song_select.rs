@@ -94,7 +94,7 @@ impl Screen for SongSelect {
                     state.scene = Lobby::scene();
                     return;
                 }
-                KeyCode::Tab | KeyCode::F1 => {
+                KeyCode::Tab => {
                     state.picking_lobby_map = false;
                     state.scene = Lobby::scene();
                     return;

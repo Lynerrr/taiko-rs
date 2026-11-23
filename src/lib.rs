@@ -7613,12 +7613,11 @@ impl State {
                 if !self.preview_on_top(vx, vy) {
                     // Something's drawn over the preview here: it takes the click below.
                 } else if self.preview.play_button_at(vx, vy) {
-                    if let Some(p) = self.scene.screen_mut::<Preview>() {
-                        let lobby = screens::screen::Screen::over_lobby(p);
-                        self.preview_button(lobby);
-                    } else if !self.picking_lobby_map {
-                        self.play_from_marker();
-                    }
+                    let lobby = self
+                        .scene
+                        .screen_as::<Preview>()
+                        .is_some_and(screens::screen::Screen::over_lobby);
+                    self.preview_button(lobby);
                     return;
                 } else if self.scene.is_select() && self.preview.box_at(vx, vy) {
                     self.open_preview();
