@@ -935,13 +935,17 @@ fn hit(time: f64, sound: u32, velocity: f64) -> Note {
 /// raw beat length and SV, floored at 1e-4 ms and 0.01x and never capped, because gimmick maps
 /// (barline notes, hidden notes) depend on going far past the limits gameplay timing is clamped
 /// to. A green line on a red line's ms wins over the red line's 1x reset. `raw` sorted by time.
+///
+/// Each point counts from its whole millisecond (the fraction dropped), as in stable, where
+/// object times are whole ms: a note on `41` under a red line on `41.1037` (a resnapped
+/// line) scrolls at that red line's speed, not the 10x the map starts with to time its spinners.
 fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
     let mut beat = raw
         .iter()
         .find(|p| p.uninherited && p.beat_length > 0.0)
         .map_or(500.0, |p| p.beat_length);
     let mut out = Vec::new();
-    for group in raw.chunk_by(|a, b| a.time == b.time) {
+    for group in raw.chunk_by(|a, b| a.time.floor() == b.time.floor()) {
         let mut sv = 1.0;
         for p in group {
             if p.uninherited && p.beat_length > 0.0 {
@@ -956,7 +960,7 @@ fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
             sv = -100.0 / p.beat_length;
         }
         out.push((
-            group[0].time,
+            group[0].time.floor(),
             sm * 100.0 * f64::max(sv, 0.01) / beat.max(1e-4),
         ));
     }
@@ -1348,6 +1352,25 @@ SliderTickRate:1
         // With the mods first: HR makes OD 5 into 7, which at DT plays like OD 10.22.
         let hr = crate::mods::Mods::parse("HR").od(5.0);
         assert!((od_at_rate(hr, 1.5) - 92.0 / 9.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_note_just_before_a_fractional_red_line_scrolls_at_its_speed() {
+        // Aliyah's Interlude - IT GIRL [I.T.G.I.R.L.] (4454501): 10x from 0 for the spinners'
+        // PreEmpt, the chart's red line resnapped to 41.1037 and its first note on 41. In stable
+        // the note scrolls at the red line's 1x, not 10x.
+        let map = parse(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,479.999999999999,7,1,0,75,1,8\n0,-10,7,1,0,75,0,0\n41.1037077104643,479.999999999999,4,1,0,75,1,0\n7721,-83.3333333333333,4,1,0,75,0,0\n\n[HitObjects]\n337,135,41,5,0,0:0:0:0:\n325,140,521,1,0,0:0:0:0:\n337,135,7720,1,0,0:0:0:0:\n337,135,7721,1,0,0:0:0:0:\n",
+        );
+        let v: Vec<f64> = map.notes.iter().map(|n| n.velocity).collect();
+        assert!((v[0] - v[1]).abs() < 1e-9, "{v:?}");
+        assert!((v[2] - v[1]).abs() < 1e-9, "{v:?}");
+        assert!((v[3] / v[1] - 1.2).abs() < 1e-9, "{v:?}");
+        // The map still starts at 10x, so its swells keep stable's short PreEmpt.
+        assert!((map.first_velocity / v[1] - 10.0).abs() < 1e-9);
+        // Only the scroll speed: the red line's barline and the beat stay where they were.
+        assert_eq!(map.barlines[0].time, 41.1037077104643);
+        assert_eq!(control_point_at(&map.control_points, 41.0).sv, 10.0);
     }
 
     #[test]

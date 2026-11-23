@@ -143,6 +143,13 @@ fn odd_charts() -> Vec<(&'static str, String)> {
                    256,192,2200,1,6,0:0:0:0:\n",
         ),
         (
+            "a note 0.1 ms before a resnapped red line, under a 10x start",
+            head(
+                1,
+                "0,-10,4,1,0,100,0,0\n41.1037077104643,500,4,1,0,100,1,0\n",
+            ) + "256,192,41,1,0,0:0:0:0:\n256,192,541,1,0,0:0:0:0:\n",
+        ),
+        (
             "garbage lines are skipped",
             head(1, "nonsense\n")
                 + "256,192,1000,1,0,0:0:0:0:\nnot,a,note\n256,192,x,1,0\n\

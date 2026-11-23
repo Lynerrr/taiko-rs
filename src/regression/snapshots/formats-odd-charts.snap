@@ -40,6 +40,15 @@ first velocity 0.3920 | 3 notes, 2 barlines, 3 control points, 0 fakes
   cp 1023.00 origin 23.00 beat 500.000 sv 10.0000 kiai true vol 1.00
   cp 2023.00 origin 23.00 beat 500.000 sv 0.1000 kiai false vol 1.00
 read_meta: a - t [v] mode 1 od 5 bg None
+== a note 0.1 ms before a resnapped red line, under a 10x start
+meta: a - t [v] by c | mode 1 od 5 hp 5 sm 1.4 tick 1 v14 | audio "" preview 0 lead-in 0 | bg None | set None id None | playable true
+first velocity 3.9200 | 2 notes, 2 barlines, 2 control points, 0 fakes
+  64.00 Don v 0.3920
+  564.00 Don v 0.3920
+  barlines: 23.0 64.1
+  cp 23.00 origin 23.00 beat 500.000 sv 10.0000 kiai false vol 1.00
+  cp 64.10 origin 64.10 beat 500.000 sv 1.0000 kiai false vol 1.00
+read_meta: a - t [v] mode 1 od 5 bg None
 == garbage lines are skipped
 meta: a - t [v] by c | mode 1 od 5 hp 5 sm 1.4 tick 1 v14 | audio "" preview 0 lead-in 0 | bg None | set None id None | playable true
 first velocity 0.3920 | 2 notes, 1 barlines, 1 control points, 0 fakes
