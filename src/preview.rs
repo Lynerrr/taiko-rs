@@ -2692,10 +2692,10 @@ const STAT_GAP: f32 = 10.0;
 /// Split (song select's sections), how much of its box's height the lane's band takes at most,
 /// in the middle of it: room above and under the big notes and the drum, and for the hint under
 /// them.
-const SPLIT_LANE_FILL: f32 = 0.8;
+const SPLIT_LANE_FILL: f32 = 0.62;
 /// Split, the density graph under the lane: its share of the section's room, between the bare
 /// timeline's height and this much (tall enough to read its dense runs and peaks at a glance).
-const SPLIT_GRAPH_SHARE: f32 = 0.26;
+const SPLIT_GRAPH_SHARE: f32 = 0.28;
 const SPLIT_GRAPH_MAX: f32 = 84.0;
 /// Split, a .tko map whose playfield reaches past the lane: it is fitted whole into the box, its
 /// notes never drawn smaller than this share of a plain map's (what's still out of reach then is
@@ -2870,8 +2870,8 @@ const BANNER_WHOLE: f32 = 0.45;
 /// stays whole; the plate at its left and its right) and the room under its text. Tall enough
 /// for the picture to show on 720, the text down at its foot over the picture fading out into
 /// the panel, a plate at the left only: its top and right open.
-const SPLIT_BANNER_H: f32 = 172.0;
-const SPLIT_BANNER: (f32, (f32, f32)) = (0.5, (0.55, 0.0));
+const SPLIT_BANNER_H: f32 = 240.0;
+const SPLIT_BANNER: (f32, (f32, f32)) = (0.58, (0.55, 0.0));
 const SPLIT_BANNER_FOOT: f32 = 8.0;
 /// How bright the banner's picture is drawn: near its own, the plate under the text does the rest.
 const BANNER_BRIGHT: f32 = 0.85;
@@ -3725,12 +3725,13 @@ mod beat_tests {
         assert!(tko.k >= plain.k * SPLIT_REACH_MIN - 1e-6, "{tko:?}");
         assert!(tko.k > 0.5 * plain.k, "not tiny: {tko:?} vs {plain:?}");
         let short = SplitLane::new([0.0, 200.0], band, 480.0, k_max);
+        let short_plain = (short.lane[1] * SPLIT_LANE_FILL / band).min(k_max);
         assert!(
             tko.k > short.k,
             "bigger in a taller section: {tko:?} {short:?}"
         );
         assert!(
-            (short.k - plain.k * SPLIT_REACH_MIN).abs() < 1e-4 && short.fit < 1.0,
+            (short.k - short_plain * SPLIT_REACH_MIN).abs() < 1e-4 && short.fit < 1.0,
             "at least half a plain map's, the rest cut: {short:?}"
         );
     }

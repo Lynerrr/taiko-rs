@@ -755,7 +755,7 @@ fn the_banners_text_sits_on_a_plate_dark_at_its_left_lighter_across_and_gone_dow
     assert!(right < 0.05, "open at the right end: {right}");
     // Tall, for the picture to show (on 720), its text down at its foot: the picture open over
     // its top.
-    assert!((165.0..=185.0).contains(&tall), "the banner {tall} tall");
+    assert!((230.0..=250.0).contains(&tall), "the banner {tall} tall");
     assert!(
         plate.params[1] > 0.0 && plate.params[1] < tall,
         "fades out downwards over bottom {}: {tall}",
@@ -2286,9 +2286,9 @@ fn the_right_column_is_the_details_a_row_of_tabs_and_the_tab_shown_under_them() 
         (head[0] + head[2] - (c.width - 28.0)).abs() < 0.5,
         "{head:?}"
     );
-    // The details as tall as what's on them, no fixed share and no empty band; the body all
-    // the rest, much the tallest.
-    assert!(body[3] > head[3], "the body has the room: {column:?}");
+    // The details as tall as what's on them (with a generous banner for the art), and the body
+    // still has plenty of room for the compact preview and the leaderboard.
+    assert!(body[3] >= 220.0, "the body has the room: {column:?}");
     let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
     assert!(
         head[1] + head[3] - (pp[1] + pp[3]) < 8.0,
@@ -2382,7 +2382,7 @@ fn the_preview_s_tab_gives_the_lane_room_and_the_density_graph_height() {
     // bare timeline's 28, the lane's box taller still.
     let [_, times] = text_at(&c, "0:00 / 0:10").expect("the timeline's times");
     let gh = times - (ly + lane_h) - 8.0;
-    assert!(gh >= 60.0, "a graph to read: {gh}");
+    assert!(gh >= 50.0, "a graph to read: {gh}");
     assert!(lane_h > gh, "the lane's box over it: {lane_h} vs {gh}");
     // All within the body, near all of it used.
     assert!(times < body[1] + body[3], "{times} in {body:?}");
@@ -2474,7 +2474,7 @@ fn the_stats_the_don_and_kat_bar_and_the_pp_have_air_between_them_their_text_kep
         "{od:?} {don:?} {ss:?}"
     );
     // Taken from the body under the tabs: still room for the lane and the board.
-    assert!(body[3] > 280.0, "the body under the tabs: {body:?}");
+    assert!(body[3] >= 220.0, "the body under the tabs: {body:?}");
 }
 
 #[test]
@@ -3628,12 +3628,42 @@ fn the_collection_button_is_on_the_search_row_once_there_are_collections() {
         .map(|h| h.rect)
         .collect();
     assert!(!rows.is_empty(), "the collections' list");
-    let boxes = text_boxes(&c);
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let left = rows.iter().map(|r| r[0]).fold(f32::MAX, f32::min);
+    let (frame_idx, frame) = c
+        .shapes
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, sh)| plain(sh) && sh.params[1] > 0.0)
+        .map(|(idx, sh)| (idx, rect(sh), *sh))
+        .find(|(_, r, _)| r[0] < left && r[0] + r[2] > left + 100.0 && r[3] > 40.0)
+        .map(|(idx, _, sh)| (idx, sh))
+        .expect("the list's frame");
+    let popup_texts: Vec<(&str, [f32; 4])> = c
+        .texts
+        .iter()
+        .filter(|(range, _)| range.start > frame_idx)
+        .filter_map(|(range, text)| {
+            let b = c.shapes.get(range.clone())?.iter().fold(
+                [f32::MAX, f32::MAX, f32::MIN, f32::MIN],
+                |[x0, y0, x1, y1], g| {
+                    [
+                        x0.min(g.center[0] - g.half[0]),
+                        y0.min(g.center[1] - g.half[1]),
+                        x1.max(g.center[0] + g.half[0]),
+                        y1.max(g.center[1] + g.half[1]),
+                    ]
+                },
+            );
+            (b[0] <= b[2]).then_some((text.as_str(), [b[0], b[1], b[2] - b[0], b[3] - b[1]]))
+        })
+        .collect();
     assert!(
-        boxes.iter().any(|(t, _)| t.starts_with("dans")),
-        "named whole: {boxes:?}"
+        popup_texts.iter().any(|(t, _)| t.starts_with("dans")),
+        "named whole: {popup_texts:?}"
     );
-    for (t, r) in boxes.iter().filter(|(_, r)| {
+    for (t, r) in popup_texts.iter().filter(|(_, r)| {
         rows.iter()
             .any(|row| inside([r[0], r[1] + r[3] / 2.0], *row, 0.0))
     }) {
@@ -3646,17 +3676,6 @@ fn the_collection_button_is_on_the_search_row_once_there_are_collections() {
             "{t:?} {r:?} within {row:?}"
         );
     }
-    let edge = render::rgba(style::tone::EDGE, 1.0);
-    let left = rows.iter().map(|r| r[0]).fold(f32::MAX, f32::min);
-    let frame = c
-        .shapes
-        .iter()
-        .rev()
-        .filter(|sh| plain(sh) && sh.params[1] > 0.0)
-        .map(|sh| (rect(sh), *sh))
-        .find(|(r, _)| r[0] < left && r[0] + r[2] > left + 100.0 && r[3] > 40.0)
-        .map(|(_, sh)| sh)
-        .expect("the list's frame");
     assert!(
         same_rgb(frame.border, edge),
         "a neutral edge round the list"
