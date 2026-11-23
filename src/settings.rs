@@ -1975,6 +1975,7 @@ impl Edit {
 
 /// Inserts `typed` (control characters dropped) at char index `caret`, up to `max` characters.
 pub fn caret_insert(text: &mut String, caret: &mut usize, typed: &str, max: usize) {
+    *caret = (*caret).min(text.chars().count());
     for ch in typed.chars().filter(|ch| !ch.is_control()) {
         if text.chars().count() < max {
             text.insert(byte_at(text, *caret), ch);
@@ -1984,6 +1985,7 @@ pub fn caret_insert(text: &mut String, caret: &mut usize, typed: &str, max: usiz
 }
 
 pub fn caret_backspace(text: &mut String, caret: &mut usize) {
+    *caret = (*caret).min(text.chars().count());
     if *caret > 0 {
         *caret -= 1;
         text.remove(byte_at(text, *caret));

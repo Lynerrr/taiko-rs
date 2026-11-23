@@ -349,7 +349,7 @@ impl Editor {
             n += 1;
             name = tr!("Layout {n}", "レイアウト {n}", "Раскладка {n}"; [] [n]);
         }
-        let caret = name.len();
+        let caret = name.chars().count();
         self.naming = Some((name, caret));
     }
 
@@ -1282,6 +1282,20 @@ mod tests {
             ed.key(KeyCode::Escape, None, (false, false), &mut cfg),
             Outcome::Close
         );
+    }
+
+    #[test]
+    fn naming_a_preset_in_russian_or_japanese_can_backspace_the_default_name() {
+        crate::lang::with(crate::lang::Lang::Ru, || {
+            let (mut ed, mut cfg, ..) = setup();
+            ed.press_button(Button::NewPreset, &mut cfg);
+            assert!(ed.naming());
+            ed.key(KeyCode::Backspace, None, (false, false), &mut cfg);
+            ed.key(KeyCode::Digit2, Some("2"), (false, false), &mut cfg);
+            ed.key(KeyCode::Enter, None, (false, false), &mut cfg);
+            assert_eq!(cfg.hud_presets.len(), 1);
+            assert_eq!(cfg.hud_presets[0].0, "Раскладка 2");
+        });
     }
 
     #[test]
