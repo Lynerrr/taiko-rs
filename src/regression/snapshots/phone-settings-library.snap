@@ -9,17 +9,19 @@ text  700,80   none found, Tap to pick
 text   14,133  GAMEPLAY
 text  964,139  <
 text 1023,139  >
-text  236,142  TJA charts folder
-text  896,145  none
+text  236,142  Journey save folder
+text  782,142  taiko.rs folder
 text   14,189  VIEW
-text  236,204  Show osu!standard converts
+text  236,204  Save Journey map on like
 text   16,245  INPUT
-text  236,266  Song list headings
+text  964,263  <
+text 1023,263  >
+text  236,266  TJA charts folder
+text  896,269  none
 text   14,301  OFFSET
-text  236,328  Library info
+text  236,328  Show osu!standard converts
 text   14,357  AUDIO
-text  236,390  Song select layout
-text  981,390  default
+text  236,390  Song list headings
 text   14,413  VIDEO
 text  236,436  The folder your maps are in. Tap: browse, type a path, or go back to finding
 text  236,455  osu!'s.
@@ -42,5 +44,7 @@ hit   947,126    50x44   SettingStep(1, -1)
 hit  1003,126    50x44   SettingStep(1, 1)
 hit   222,182   845x56   SettingRow(2)
 hit   222,244   845x56   SettingRow(3)
+hit   947,250    50x44   SettingStep(3, -1)
+hit  1003,250    50x44   SettingStep(3, 1)
 hit   222,306   845x56   SettingRow(4)
 hit   222,368   845x54   SettingRow(5)

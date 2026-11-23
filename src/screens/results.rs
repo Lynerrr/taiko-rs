@@ -134,7 +134,17 @@ impl Screen for ResultsScreen {
                 };
                 if let Some((map, vote)) = results.toggle_vote(vote) {
                     state.send_vote(map, vote);
+                    if vote == Some(online::MapVote::Like)
+                        && state.journey.active
+                        && state.cfg.journey_save_on_like
+                        && state.journey.playing_cached.is_some()
+                    {
+                        state.journey_save_current();
+                    }
                 }
+            }
+            KeyCode::KeyS if state.journey.active => {
+                state.journey_save_current();
             }
             KeyCode::KeyV if results.replay.is_some() => {
                 if let Some(file) = results.replay.clone() {
@@ -157,11 +167,22 @@ impl Screen for ResultsScreen {
                     state.scene = SongSelect::scene();
                 }
             }
-            KeyCode::Enter | KeyCode::NumpadEnter => state.retry_from(self.entry, self.from),
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                if state.journey.active {
+                    state.journey_next_from_results(results.failed);
+                } else {
+                    state.retry_from(self.entry, self.from);
+                }
+            }
             KeyCode::Escape => {
-                let path = state.library[self.entry].path.clone();
-                state.show_select();
-                state.select.select_path(&state.library, &path);
+                if state.journey.active {
+                    state.journey.in_play = false;
+                    state.scene = super::journey::JourneyScreen::scene();
+                } else {
+                    let path = state.library[self.entry].path.clone();
+                    state.show_select();
+                    state.select.select_path(&state.library, &path);
+                }
             }
             _ => {}
         }
@@ -179,6 +200,42 @@ impl Screen for ResultsScreen {
             }
         }
         results.draw(canvas);
+        if state.journey.active {
+            let pw = 172.0;
+            let x = (canvas.width - 16.0 - pw).max(16.0);
+            let has_cached = state.journey.playing_cached.is_some();
+            let ph = if has_cached { 86.0 } else { 52.0 };
+            let y = 368.0;
+            style::panel(canvas, x, y, pw, ph);
+            let next_label = tr!("Next map (Enter)", "次の譜面 (Enter)", "Дальше (Enter)");
+            canvas.button(
+                x + 10.0,
+                y + 12.0,
+                pw - 20.0,
+                28.0,
+                next_label,
+                8.0,
+                hit::Hit::JourneyNext,
+                true,
+            );
+            if has_cached {
+                let save_label = tr!(
+                    "Save to library (S)",
+                    "ライブラリに保存 (S)",
+                    "Сохранить (S)"
+                );
+                canvas.button(
+                    x + 10.0,
+                    y + 46.0,
+                    pw - 20.0,
+                    26.0,
+                    save_label,
+                    8.0,
+                    hit::Hit::JourneySave,
+                    false,
+                );
+            }
+        }
         None
     }
 }

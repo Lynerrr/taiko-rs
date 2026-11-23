@@ -218,6 +218,29 @@ pub enum Request {
     /// The game crashed last time: its report, sent on the next start (`Reply::Counted`),
     /// unless the player turned that off (Settings > Online > Send crash reports).
     CrashReport(Box<CrashReport>),
+    /// Requests the next 1..=3 maps in a Journey v1 session (`Reply::Journey`).
+    JourneyNext {
+        token: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_stars: Option<f64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        exclude_md5s: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        exclude_sets: Vec<String>,
+        #[serde(default)]
+        step: u32,
+        #[serde(default)]
+        count: u8,
+    },
+    /// Records that the player skipped a map in the Journey feed (`Reply::Counted`).
+    JourneySkip {
+        token: String,
+        md5: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        map_hash: Option<u64>,
+        #[serde(default)]
+        preview_secs: f64,
+    },
 }
 
 /// A crash, as the game sends it in: the build and system, and the report (the panic or the
@@ -329,6 +352,38 @@ pub enum MapVote {
     Dislike,
 }
 
+/// One recommended map returned by `Request::JourneyNext`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct JourneyItem {
+    pub md5: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_hash: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_id: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_id: Option<u32>,
+    pub title: String,
+    pub artist: String,
+    pub creator: String,
+    pub version: String,
+    pub stars: f64,
+    pub bpm: f64,
+    pub length_ms: u64,
+    pub role: String,
+    pub reason: String,
+}
+
+/// Batch of upcoming maps for a Journey v1 session (`Reply::Journey`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct JourneyBatch {
+    #[serde(default)]
+    pub needs_level: bool,
+    #[serde(default)]
+    pub comfort_stars: f64,
+    #[serde(default)]
+    pub items: Vec<JourneyItem>,
+}
+
 /// The map of a play off the leaderboards: nobody may have sent a score on it yet, so its name
 /// comes along.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -359,6 +414,8 @@ pub struct PlayedAttempt {
     pub mods: Vec<String>,
     pub rate: f64,
     pub scroll_speed: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_journey: bool,
 }
 
 /// What ended a play off the leaderboards.
@@ -1260,6 +1317,9 @@ pub const SUBMIT_KEY_FEATURE: &str = "submit-key/1";
 /// stay on this computer with a server that doesn't.
 pub const TJA_BOARDS_FEATURE: &str = "tja-boards/1";
 
+/// Listed in `Reply::Account::features` when the server serves Journey v1 playlists.
+pub const JOURNEY_FEATURE: &str = "journey/1";
+
 /// What a server lists in `Reply::Account::features` when lobby hosts may send a local TJA
 /// chart, with the music and pictures it names, to the players of their room (the room relays
 /// `MapFile` parts as for map sets). A host on a server that doesn't list it sends none: it's
@@ -1384,6 +1444,8 @@ pub enum Reply {
     SetVerdicts(Vec<SetVerdict>),
     /// A `Played` play was counted.
     Counted,
+    /// Recommended next maps for a Journey v1 session.
+    Journey(JourneyBatch),
     LoggedOut,
     Rooms(Vec<RoomInfo>),
     /// In the room: from here on this connection speaks the room protocol. Send Hello with

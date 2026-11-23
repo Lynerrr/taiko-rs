@@ -20,37 +20,36 @@ text   73,83   Songs folder, song li...
 text  235,90   Songs folder
 text  592,90   <  none found, Enter to pick  >
 text   73,109  GAMEPLAY
-text  235,120  TJA charts folder
-text  777,122  none
+text  235,120  Journey save folder
+text  702,120  taiko.rs folder
 text   73,123  speed, rate, interface
 text   73,149  VIEW
-text  235,150  Show osu!standard converts
+text  235,150  Save Journey map on like
 text   73,163  playfield, background
-text  235,180  Song list headings
+text  235,180  TJA charts folder
+text  777,182  none
 text   74,189  INPUT
 text   73,203  drum keys, hotkeys, t...
-text  235,210  Library info
+text  235,210  Show osu!standard converts
 text   73,229  OFFSET
-text  235,240  Song select layout
-text  757,240  default
+text  235,240  Song list headings
 text   73,243  audio offset, calibra...
 text   73,269  AUDIO
-text  235,270  Card colour fade
-text  784,270  Off
+text  235,270  Library info
 text   73,283  volume, latency
-text  235,300  Game data folder
-text  695,300  the usual places
+text  235,300  Song select layout
+text  757,300  default
 text   73,309  VIDEO
 text   73,323  frame pacing, display
-text  235,330  taiko.rs maps folder
-text  716,330  Enter to open
+text  235,330  Card colour fade
+text  784,330  Off
 text   73,349  SKIN
-text  235,360  Move taiko.rs maps out of osu!
-text  716,360  Enter to move
+text  235,360  Game data folder
+text  695,360  the usual places
 text   73,363  notes, hit flash, colour
 text   73,389  ONLINE
-text  235,390  Move them back to osu!
-text  716,390  Enter to move
+text  235,390  taiko.rs maps folder
+text  716,390  Enter to open
 text  233,396  The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.
 text   73,403  chat, notifications,...
 text   73,429  SYSTEM

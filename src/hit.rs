@@ -108,6 +108,10 @@ pub enum Hit {
     /// The mod select's "+ Save": keeps the mods on now (and the speed) as a preset.
     ModPresetSave,
     ModsButton,
+    JourneyButton,
+    JourneyLevel(usize),
+    JourneyNext,
+    JourneySave,
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
     SettingStep(usize, i32),

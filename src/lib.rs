@@ -52,6 +52,7 @@ mod hit;
 mod hud;
 mod hud_edit;
 mod idle;
+pub mod journey;
 mod keys;
 mod layout;
 #[cfg(test)]
@@ -444,6 +445,7 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
+    pub(crate) journey: journey::Journey,
     /// The camera on its way between the main menu and song select.
     menu_shift: Option<menu_shift::Shift>,
     /// Song select's routes behind it: where they drift to (carried on from the menu's, and back
@@ -543,6 +545,7 @@ struct State {
     /// The server lists `online::TJA_BOARDS_FEATURE`: TJA plays go to its leaderboards, and
     /// song select shows them.
     tja_boards: bool,
+    journey_supported: bool,
     /// The server lists `online::TJA_LOBBY_FILES_FEATURE`: as a lobby host we send our TJA
     /// charts to the players without them.
     pub(crate) tja_lobby_files: bool,
@@ -2550,7 +2553,7 @@ impl State {
     fn menu_hit(&mut self) {
         let Some(m) = &mut self.main_menu else { return };
         let sound = match m.hit() {
-            menu::Item::Play | menu::Item::Editor => audio::Sfx::BigDon,
+            menu::Item::Play | menu::Item::Journey | menu::Item::Editor => audio::Sfx::BigDon,
             _ => audio::Sfx::Don,
         };
         self.sfx(sound);
@@ -2587,6 +2590,7 @@ impl State {
         }
         match item {
             menu::Item::Play => self.leave_menu_for_songs(shifts),
+            menu::Item::Journey => self.open_journey(),
             menu::Item::Multiplayer => self.open_multiplayer(),
             menu::Item::Download => self.open_download(),
             menu::Item::Medals => self.open_medals(self.mp_menu.account.clone()),
@@ -3160,6 +3164,8 @@ impl State {
             Item::NotifyMentions => on(c.notify_mentions),
             Item::NotifyRequests => on(c.notify_requests),
             Item::ShowConverts => on(self.select.show_converts),
+            Item::JourneySaveTo => self.cfg.journey_save_to.name().into(),
+            Item::JourneySaveOnLike => on(self.cfg.journey_save_on_like),
             Item::SongHeadings => on(self.select.headings),
             Item::SongsFolder
                 if self.folder_pick.is_busy() && self.folder_pick_for == Item::SongsFolder =>
@@ -3555,6 +3561,12 @@ impl State {
                 self.cfg.show_converts = self.select.show_converts;
                 self.cfg.save();
                 return;
+            }
+            Item::JourneySaveTo => {
+                self.cfg.journey_save_to = self.cfg.journey_save_to.step(dir);
+            }
+            Item::JourneySaveOnLike => {
+                self.cfg.journey_save_on_like = !self.cfg.journey_save_on_like;
             }
             Item::SongHeadings => {
                 self.select
@@ -8773,6 +8785,7 @@ impl State {
                 mods: g.mods().list(),
                 rate: g.rate(),
                 scroll_speed: g.scroll_speed(),
+                from_journey: self.journey.in_play,
             },
             failed: false,
             failed_early: false,
@@ -9097,6 +9110,8 @@ impl State {
                             self.select.admin = admin;
                             self.epic_asked = false;
                             self.mapping_sessions = taiko_proto::mapping::supported(&features);
+                            self.journey_supported =
+                                features.iter().any(|f| f == online::JOURNEY_FEATURE);
                             self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name)
                                 || self.cfg.online_token != token;
@@ -11631,6 +11646,7 @@ impl State {
                     // Plays it never answered go again now (`resend_unsent`).
                     self.submit_keys = features.iter().any(|f| f == online::SUBMIT_KEY_FEATURE);
                     self.tja_boards = features.iter().any(|f| f == online::TJA_BOARDS_FEATURE);
+                    self.journey_supported = features.iter().any(|f| f == online::JOURNEY_FEATURE);
                     self.tja_lobby_files = features
                         .iter()
                         .any(|f| f == online::TJA_LOBBY_FILES_FEATURE);
@@ -15699,6 +15715,10 @@ impl State {
             }
             Hit::ToMenu => self.key_inner(KeyCode::Escape, false, None, Instant::now(), window),
             Hit::ModsButton => self.open_mod_select(),
+            Hit::JourneyButton => self.open_journey(),
+            Hit::JourneyLevel(i) => self.journey_pick_level(i),
+            Hit::JourneySave => self.journey_save_current(),
+            Hit::JourneyNext => self.journey_next_from_results(false),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
                 self.toggle_mod(mods::ALL[i]);

@@ -1182,13 +1182,16 @@ fn draw_songs(
             let play_x = right - ACTIONS_INSET - (w * PLAY_SHARE).clamp(120.0, 200.0);
             let mods_word = tr!("Mods", "Mod", "Моды");
             let random = tr!("Random", "ランダム", "Случайная");
+            let journey_word = tr!("Journey", "ジャーニー", "Путь");
             // A block button's rect starts 6 left of where it's put.
             let gx = panel_x + ACTIONS_INSET + 6.0;
-            // Mods and Random side by side at the left, always whole (their words never go):
+            // Mods, Random and Journey side by side at the left:
             // Play gives way for them on a narrow column, down to its least.
             let pair_w = style::icon_button_width(mods_word, None, 8.0)
                 + ACTIONS_GAP
-                + style::icon_button_width(random, None, 8.0);
+                + style::icon_button_width(random, None, 8.0)
+                + ACTIONS_GAP
+                + style::icon_button_width(journey_word, None, 8.0);
             let play_x = play_x
                 .max(gx - 6.0 + pair_w + ACTIONS_GAP)
                 .min(right - ACTIONS_INSET - PLAY_MIN_W);
@@ -1215,9 +1218,21 @@ fn draw_songs(
                 hit::Hit::Key(KeyCode::F2),
                 inner_h,
             );
+            let jx = rx + random_w + ACTIONS_GAP;
+            let journey_w = style::block_button(
+                canvas,
+                [jx + 6.0, mid],
+                menu::Item::Journey.icon_art(),
+                journey_word,
+                None,
+                8.0,
+                state.journey.active,
+                hit::Hit::JourneyButton,
+                inner_h,
+            );
             // The mods that are on, each in its mod select column's colour, as a group in the
-            // room between Random and Play (a click on them opens the mod select too).
-            let from = rx + random_w + MOD_GROUP_GAP;
+            // room between Journey and Play (a click on them opens the mod select too).
+            let from = jx + journey_w + MOD_GROUP_GAP;
             let room = play_x - MOD_GROUP_GAP - from;
             // After them the speed, with - and + beside it ([ and ]), when no mod sets it and
             // every mod's badge still shows: the mods come first.

@@ -1,5 +1,5 @@
 screen player: Select, 18 areas
-Key(Escape) @47,34 -> Select +"." +"1 maps in your library" +"DOWNLOAD" +"EDITOR" +"EXIT" +"MEDALS" +14 more -"+ on a song adds it" -"0:00" -"1 songs" -"1.00x [ ]" -"< menu" -"All songs" -7 more
+Key(Escape) @47,34 -> Select +"." +"1 maps in your library" +"DOWNLOAD" +"EDITOR" +"EXIT" +"JOURNEY" +15 more -"+ on a song adds it" -"0:00" -"1 songs" -"1.00x [ ]" -"< menu" -"All songs" -7 more
 PlayerFolders @157,34 -> Select +"0" +"1" +"All songs" +"Favourites" +"No genre" -"1 songs" -"Regression - basics" -"search (Ctrl+F)"
 PlayerSearch @115,61 -> Select -"search (Ctrl+F)"
 PlayerRow(0) @97,86 -> Select +"+"
@@ -12,7 +12,7 @@ Music(Toggle) @424,419 -> Select
 Music(Next) @470,419 -> Select
 Music(Repeat) @516,419 -> Select +"1"
 Music(Favourite) @562,419 -> Select
-Music(PlayMap) @312,449 -> Select +"+" +"-" +"0:00 / 0:10" +"0:09" +"1.00x" +"200" +36 more -"+ on a song adds it" -"0:00" -"1 songs" -"1.00x [ ]" -"< menu" -"All songs" -8 more
+Music(PlayMap) @312,449 -> Select +"+" +"-" +"0:00 / 0:10" +"0:09" +"1.00x" +"200" +37 more -"+ on a song adds it" -"0:00" -"1 songs" -"1.00x [ ]" -"< menu" -"All songs" -8 more
 PlayerDaycore @366,449 -> Select +"0.75x [ ]" -"1.00x [ ]"
 PlayerRate @414,449 -> Select
 PlayerKeepPitch @494,449 -> Select

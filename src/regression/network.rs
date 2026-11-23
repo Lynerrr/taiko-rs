@@ -377,6 +377,7 @@ fn requests() -> Vec<Request> {
                 mods: vec!["HR".into()],
                 rate: 1.5,
                 scroll_speed: 1.2,
+                from_journey: false,
             }),
         },
         Request::MapVote {
