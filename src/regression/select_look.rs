@@ -1193,13 +1193,13 @@ fn drag_then_wheel(
     mut each: impl FnMut(&State, &Canvas, &str),
 ) {
     for k in 1..=frames {
-        s.select.drag_to(-by * k as f32 / frames as f32);
         *now += Duration::from_millis(16);
+        s.select.drag_to(-by * k as f32 / frames as f32, *now);
         frame(s, *now);
         let c = frame(s, *now);
         each(s, &c, "dragging");
     }
-    s.select.drag_end(&s.library);
+    s.select.drag_end(&s.library, *now);
     for _ in 0..frames {
         s.wheel(-1);
         *now += Duration::from_millis(16);
@@ -1312,7 +1312,12 @@ fn dragging_or_wheeling_the_list_reads_the_cards_ahead_of_it() {
             .iter()
             .filter(|&&r| r < top && wanted(r).is_some_and(|w| !w.2))
             .count();
-        let below = rows.iter().filter(|&&r| r > bottom).count();
+        // The sets below the screen still to be drawn: a card cut by the list's bottom edge is
+        // drawn already, so it's neither ahead nor missing.
+        let below = rows
+            .iter()
+            .filter(|&&r| r > bottom && !wanted(r).is_some_and(|w| w.2))
+            .count();
         assert!(
             ahead >= shown.len().min(below),
             "{how}: at least a screen read ahead ({ahead} of {below})"
@@ -1322,6 +1327,28 @@ fn dragging_or_wheeling_the_list_reads_the_cards_ahead_of_it() {
             "{how}: more ahead than behind ({ahead}, {behind})"
         );
     });
+}
+
+#[test]
+fn a_thrown_list_is_timed_by_the_frames_not_the_wall_clock() {
+    let (mut s, _songs, mut now) = many_sets("select-look-throw-clock");
+    settled(&mut s, &mut now);
+    for k in 1..=6 {
+        now += Duration::from_millis(16);
+        s.select.drag_to(-40.0 * k as f32, now);
+        frame(&mut s, now);
+    }
+    let held = s.select.list_scroll();
+    // A slow machine: the wall clock runs on past the last frame before the button comes up.
+    // Let go in the same frame as the last move, the list is still thrown.
+    std::thread::sleep(Duration::from_millis(80));
+    s.select.drag_end(&s.library, now);
+    for _ in 0..30 {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    let gone = s.select.list_scroll();
+    assert!(gone > held + 100.0, "thrown on from {held}: {gone}");
 }
 
 #[test]
@@ -1497,12 +1524,12 @@ fn cards_lie_on_one_wave_about_the_views_middle_however_the_list_is_scrolled() {
     }
     let c = settled(&mut s, &mut now);
     check(&c, &s, "wheeled");
-    s.select.drag_to(-90.0);
     now += Duration::from_millis(16);
+    s.select.drag_to(-90.0, now);
     frame(&mut s, now);
     let c = frame(&mut s, now);
     check(&c, &s, "dragged");
-    s.select.drag_end(&s.library);
+    s.select.drag_end(&s.library, now);
     // Farther from the selection's target, fainter.
     let c = songs_on(&mut s, &mut now, 1);
     let t = target(&c, &s);

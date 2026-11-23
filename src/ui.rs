@@ -2054,8 +2054,9 @@ impl Select {
     }
 
     /// Left-button drag: the list follows the pointer, `dy` (virtual units) from where it was
-    /// pressed. The selection stays put until it's let go.
-    pub fn drag_to(&mut self, dy: f32) {
+    /// pressed, at `now` (the throw's speed is measured on these times). The selection stays put
+    /// until it's let go.
+    pub fn drag_to(&mut self, dy: f32, now: std::time::Instant) {
         let a = &self.anim;
         let d = self.drag.get_or_insert_with(|| ListDrag {
             scroll: a.scroll,
@@ -2063,7 +2064,6 @@ impl Select {
             samples: Default::default(),
         });
         d.now = d.scroll - dy;
-        let now = std::time::Instant::now();
         d.samples.push_back((now, d.now));
         while d
             .samples
@@ -2080,8 +2080,9 @@ impl Select {
     }
 
     /// Lets go of the list: it carries on at the speed it was thrown and stays there. What's
-    /// selected doesn't change: a song is picked by clicking it.
-    pub fn drag_end(&mut self, library: &[Entry]) {
+    /// selected doesn't change: a song is picked by clicking it. `now` is on the clock the drag's
+    /// times (`drag_to`) were taken on.
+    pub fn drag_end(&mut self, library: &[Entry], now: std::time::Instant) {
         let Some(d) = self.drag.take() else { return };
         let velocity = match (d.samples.front(), d.samples.back()) {
             (Some(&(t0, s0)), Some(&(t1, s1))) if t1 > t0 => {
@@ -2093,7 +2094,7 @@ impl Select {
         let still = d
             .samples
             .back()
-            .is_none_or(|(t, _)| t.elapsed().as_millis() > 60);
+            .is_none_or(|(t, _)| now.saturating_duration_since(*t).as_millis() > 60);
         let throw = if still {
             0.0
         } else {
