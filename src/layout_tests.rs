@@ -2055,10 +2055,10 @@ fn letting_go_of_the_list_leaves_it_there_and_selects_nothing() {
     s.scene = SongSelect::scene();
     draw_select(&mut s);
     let at = s.select.cursor();
-    s.select.drag_to(-120.0);
+    s.select.drag_to(-120.0, Instant::now());
     draw_select(&mut s);
     let held = s.select.list_scroll();
-    s.select.drag_end(&s.library);
+    s.select.drag_end(&s.library, Instant::now());
     draw_select(&mut s);
     assert_eq!(s.select.cursor(), at);
     assert_eq!(s.select.list_scroll(), held, "stayed where it was let go");

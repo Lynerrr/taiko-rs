@@ -7181,7 +7181,7 @@ impl State {
             let dy = drag_y - d.from_y;
             d.moved |= dy.abs() > DRAG_START;
             if d.moved && self.scene.is_select() {
-                self.select.drag_to(dy);
+                self.select.drag_to(dy, Instant::now());
                 return CursorIcon::NsResize;
             }
         }
@@ -7703,7 +7703,7 @@ impl State {
             }
             if let Some(d) = self.list_drag.take() {
                 if d.moved {
-                    self.select.drag_end(&self.library);
+                    self.select.drag_end(&self.library, Instant::now());
                 } else {
                     self.click(d.hit, window);
                 }
