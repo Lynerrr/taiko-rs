@@ -364,6 +364,26 @@ impl Query {
         self.conds.iter().any(|c| matches!(c, Cond::Epic { .. }))
     }
 
+    /// Whether the query filters on maps' ranked statuses (`status=`): what osu!.db or the
+    /// mirrors say of them changes what it lists.
+    pub fn asks_status(&self) -> bool {
+        self.conds.iter().any(|c| matches!(c, Cond::Status { .. }))
+    }
+
+    /// Whether the query filters on when maps were last played (`played`, `unplayed`).
+    pub fn asks_played(&self) -> bool {
+        self.conds.iter().any(|c| {
+            matches!(
+                c,
+                Cond::Unplayed
+                    | Cond::Num {
+                        key: Num::Played,
+                        ..
+                    }
+            )
+        })
+    }
+
     pub fn parse(s: &str) -> Query {
         let mut q = Query::default();
         for t in tokens(s) {
@@ -768,6 +788,23 @@ mod tests {
         };
         assert!(Query::parse("unplayed").matches(&meta(), "", &never));
         assert!(!Query::parse("played>7").matches(&meta(), "", &never));
+    }
+
+    #[test]
+    fn status_and_played_filters_are_told_apart_in_any_case() {
+        for q in ["status=ranked", "STATUS=Loved", "ar status!=graveyard"] {
+            assert!(Query::parse(q).asks_status(), "{q}");
+            assert!(!Query::parse(q).asks_played(), "{q}");
+        }
+        for q in ["unplayed", "UNPLAYED", "Unplayed", "played<7", "PLAYED>30"] {
+            assert!(Query::parse(q).asks_played(), "{q}");
+            assert!(!Query::parse(q).asks_status(), "{q}");
+        }
+        // Words that only contain the keys, and the EPIC mark, ask neither.
+        for q in ["statusquo", "replayed", "status=epic", "sr>5"] {
+            let p = Query::parse(q);
+            assert!(!p.asks_status() && !p.asks_played(), "{q}");
+        }
     }
 
     #[test]

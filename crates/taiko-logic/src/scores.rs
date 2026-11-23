@@ -12,10 +12,11 @@ use crate::mods::{HalfRule, Mods};
 use crate::pp;
 use crate::sim::{Game, Mash, Scoring, Settings, Song, Stats, WindowRule, Windows};
 
-/// 6: scored with `Scoring::Lazer` (osu!lazer's taiko scoring and HP rules). 5: judged with osu!'s hit windows, whole ms less a half (below: the OD's exact widths, see
+/// 7: `Scoring::Lazer` with a miss adding nothing to the combo part (an OK half of a GREAT).
+/// 6: scored with `Scoring::LazerV6` (osu!lazer's taiko scoring and HP rules). 5: judged with osu!'s hit windows, whole ms less a half (below: the OD's exact widths, see
 /// `WindowRule`). 4: Half by `HalfRule::OnTheBeat`. 3: scored with `Scoring::Standard` (below:
 /// `Classic`). 2: judged with `Mash::Nearest` (1: with the `anti_mash` setting).
-const REPLAY_VERSION: u32 = 6;
+const REPLAY_VERSION: u32 = 7;
 
 /// A recorded play: the map time each drum key was judged at, plus what the judging depended
 /// on. Playing the inputs back through the same map reproduces the play exactly.
@@ -217,8 +218,10 @@ impl Replay {
 
     /// How its score was worked out.
     pub fn scoring(&self) -> Scoring {
-        if self.version >= 6 {
+        if self.version >= 7 {
             Scoring::Lazer
+        } else if self.version == 6 {
+            Scoring::LazerV6
         } else if self.version >= 3 {
             Scoring::Standard
         } else {

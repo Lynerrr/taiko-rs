@@ -53,6 +53,9 @@ text  726,444  Play
 text   31,445  Menu
 text  431,445  Mods
 text  479,445  Random
+text  542,445  1.00x
+text  578,446  +
+text  528,448  -
 hit    16,437    43x23   ToMenu
 hit   324,28     74x16   SortList
 hit    16,28    304x16   TextField
@@ -75,6 +78,8 @@ hit   524,211    47x12   BoardTab(true)
 hit   779,211    47x12   BoardWebsite
 hit   416,437    43x23   ModsButton
 hit   463,437    55x23   Key(F2)
+hit   525,442    12x13   Key(BracketLeft)
+hit   575,442    12x13   Key(BracketRight)
 hit   696,437   133x23   Key(Enter)
 hit   404,231     5x32   SplitList
 hit   771,2      74x14   Changelog

@@ -94,7 +94,7 @@ impl Screen for SongSelect {
                     state.scene = Lobby::scene();
                     return;
                 }
-                KeyCode::Tab | KeyCode::F1 => {
+                KeyCode::Tab => {
                     state.picking_lobby_map = false;
                     state.scene = Lobby::scene();
                     return;
@@ -189,20 +189,7 @@ impl Screen for SongSelect {
                 state.preview.seek_by(step, state.audio.as_ref());
             }
             () if matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) => {
-                let step = if code == KeyCode::BracketRight {
-                    0.05
-                } else {
-                    -0.05
-                } * if state.modifiers_shift { 5.0 } else { 1.0 };
-                state.cfg.rate = (((state.cfg.rate + step) * 100.0).round() / 100.0)
-                    .clamp(RATE_RANGE.0, RATE_RANGE.1);
-                state.cfg.save();
-                let pitch = if state.cfg.rate_keep_pitch {
-                    "keeps pitch"
-                } else {
-                    "pitch shifts"
-                };
-                state.toast(format!("speed {:.2}x ({pitch})", state.cfg.rate));
+                state.step_rate(code == KeyCode::BracketRight);
             }
             () if state.library.is_empty()
                 && state.scan.is_none()
@@ -452,6 +439,19 @@ const ACTIONS_GAP: f32 = 6.0;
 /// The mods that are on as badges from `x` along `y` within `room` (the lane of actions), each
 /// in its mod select column's colour: at most `MOD_BADGES_SHOWN`, the rest (and any past the
 /// room) counted on a last `+N` chip. Hands back their width.
+/// How wide every mod's badge comes out side by side (`action_mod_badges` with room for all).
+fn all_badges_width(mods: mods::Mods) -> f32 {
+    let size = style::text::CAPTION;
+    let list: Vec<mods::Mod> = mods.iter().collect();
+    if list.len() > MOD_BADGES_SHOWN {
+        return f32::INFINITY;
+    }
+    list.iter()
+        .map(|m| Canvas::text_width(size, m.acronym()) + 10.0)
+        .sum::<f32>()
+        + list.len().saturating_sub(1) as f32 * MOD_BADGE_GAP
+}
+
 fn action_mod_badges(c: &mut Canvas, x: f32, y: f32, mods: mods::Mods, room: f32) -> f32 {
     let colour = |m: mods::Mod| {
         mods::GROUPS
@@ -1219,6 +1219,20 @@ fn draw_songs(
             // room between Random and Play (a click on them opens the mod select too).
             let from = rx + random_w + MOD_GROUP_GAP;
             let room = play_x - MOD_GROUP_GAP - from;
+            // After them the speed, with - and + beside it ([ and ]), when no mod sets it and
+            // every mod's badge still shows: the mods come first.
+            let badges_w = if state.cfg.mods.is_empty() {
+                -MOD_GROUP_GAP
+            } else {
+                all_badges_width(state.cfg.mods)
+            };
+            if state.cfg.mods.rate_override().is_none()
+                && badges_w + MOD_GROUP_GAP + rate_stepper_width(8.0) <= room
+            {
+                let h = inner_h.min(20.0);
+                let at = from + badges_w + MOD_GROUP_GAP;
+                rate_stepper(canvas, at, mid - h / 2.0, h, state.cfg.rate, 8.0);
+            }
             if !state.cfg.mods.is_empty() && room >= MOD_BADGES_MIN {
                 let top = mid - MOD_BADGE_H / 2.0;
                 let bw = action_mod_badges(canvas, from, top, state.cfg.mods, room);
@@ -1541,6 +1555,68 @@ fn draw_shift(
     if let (Some(item), Some(from), Some((to, size))) = (in_air, from, state.play_icon_at) {
         let to = [to[0] + (1.0 - ph.cam) * w, to[1]];
         menu_shift::draw_flight(canvas, item, from, (to, size), flight);
+    }
+}
+
+/// How wide `rate_stepper` comes out at text `size`.
+pub(crate) fn rate_stepper_width(size: f32) -> f32 {
+    2.0 * (size + 10.0) + Canvas::text_width(size, "0.00x") + 12.0
+}
+
+/// The speed a play goes at, `rate`, between a - and a + button that step it as [ and ] do
+/// (Shift: five steps). Returns its width.
+pub(crate) fn rate_stepper(c: &mut Canvas, x: f32, y: f32, h: f32, rate: f64, size: f32) -> f32 {
+    let bw = size + 10.0;
+    let w = rate_stepper_width(size);
+    c.button(
+        x,
+        y,
+        bw,
+        h,
+        "-",
+        size,
+        hit::Hit::Key(KeyCode::BracketLeft),
+        false,
+    );
+    let colour = if (rate - 1.0).abs() > 1e-6 {
+        0xffffff
+    } else {
+        0xc8c8d8
+    };
+    c.text_centered(
+        x + w / 2.0,
+        Canvas::text_y_mid(y + h / 2.0, size),
+        size,
+        rgba(colour, 1.0),
+        &format!("{rate:.2}x"),
+    );
+    c.button(
+        x + w - bw,
+        y,
+        bw,
+        h,
+        "+",
+        size,
+        hit::Hit::Key(KeyCode::BracketRight),
+        false,
+    );
+    w
+}
+
+impl State {
+    /// One step of the speed up or down (Shift: five), as [ and ] and the speed's - and +
+    /// buttons do, kept in the config and told in a toast.
+    pub(crate) fn step_rate(&mut self, up: bool) {
+        let step = if up { 0.05 } else { -0.05 } * if self.modifiers_shift { 5.0 } else { 1.0 };
+        self.cfg.rate =
+            (((self.cfg.rate + step) * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
+        self.cfg.save();
+        let pitch = if self.cfg.rate_keep_pitch {
+            "keeps pitch"
+        } else {
+            "pitch shifts"
+        };
+        self.toast(format!("speed {:.2}x ({pitch})", self.cfg.rate));
     }
 }
 

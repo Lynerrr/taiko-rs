@@ -197,6 +197,9 @@ impl Pictures {
                 lower_priority();
                 // The copies made as JPEGs (`THUMB_VERSION` 1) are no longer read.
                 for old in std::fs::read_dir(&thumbs).into_iter().flatten().flatten() {
+                    if !wait_turn(&stop, &paused) {
+                        return;
+                    }
                     if old.path().extension().is_some_and(|e| e == "jpg") {
                         let _ = std::fs::remove_file(old.path());
                     }
@@ -265,9 +268,8 @@ impl Pictures {
             // The covers and the pictures read by path don't come from the folder: they stay.
             let cover = |n: &String| external(n);
             self.dir = dir.map(Path::to_path_buf);
-            let mut slots = (*self.slots).clone();
+            let slots = Arc::make_mut(&mut self.slots);
             slots.retain(|n, _| cover(n));
-            self.slots = Arc::new(slots);
             for h in &mut self.held {
                 if h.as_ref().is_some_and(|n| !cover(n)) {
                     *h = None;
@@ -426,14 +428,13 @@ impl Pictures {
             // Every slot is drawn now: it waits for one to be let go.
             return;
         };
-        let mut slots = (*self.slots).clone();
+        let slots = Arc::make_mut(&mut self.slots);
         if let Some(old) = self.held[slot].take() {
             slots.remove(&old);
             self.playing.remove(&old);
         }
         slots.insert(name.clone(), (slot as u32, image.aspect));
         self.held[slot] = Some(name.clone());
-        self.slots = Arc::new(slots);
         self.uploads.retain(|(s, _)| *s != slot as u32);
         self.uploads.push((slot as u32, image.cell(0)));
         if image.frames.len() > 1 {

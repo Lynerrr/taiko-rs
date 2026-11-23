@@ -843,7 +843,8 @@ fn convert(map: &mut Beatmap, mut body: Body) {
     }
 
     let end = notes.last().map(|n| n.end_time).unwrap_or(0.0);
-    map.barlines = build_barlines(&body.timing, end, &velocity_at);
+    let from = notes.first().map_or(0.0, |n| n.time).min(0.0);
+    map.barlines = build_barlines(&body.timing, from, end, &velocity_at);
     map.notes = notes;
     // A .tko map's fake notes, at the speed real ones at their time would have.
     map.fakes = map
@@ -935,13 +936,17 @@ fn hit(time: f64, sound: u32, velocity: f64) -> Note {
 /// raw beat length and SV, floored at 1e-4 ms and 0.01x and never capped, because gimmick maps
 /// (barline notes, hidden notes) depend on going far past the limits gameplay timing is clamped
 /// to. A green line on a red line's ms wins over the red line's 1x reset. `raw` sorted by time.
+///
+/// Each point counts from its whole millisecond (the fraction dropped), as in stable, where
+/// object times are whole ms: a note on `41` under a red line on `41.1037` (a resnapped
+/// line) scrolls at that red line's speed, not the 10x the map starts with to time its spinners.
 fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
     let mut beat = raw
         .iter()
         .find(|p| p.uninherited && p.beat_length > 0.0)
         .map_or(500.0, |p| p.beat_length);
     let mut out = Vec::new();
-    for group in raw.chunk_by(|a, b| a.time == b.time) {
+    for group in raw.chunk_by(|a, b| a.time.floor() == b.time.floor()) {
         let mut sv = 1.0;
         for p in group {
             if p.uninherited && p.beat_length > 0.0 {
@@ -956,7 +961,7 @@ fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
             sv = -100.0 / p.beat_length;
         }
         out.push((
-            group[0].time,
+            group[0].time.floor(),
             sm * 100.0 * f64::max(sv, 0.01) / beat.max(1e-4),
         ));
     }
@@ -969,8 +974,13 @@ fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
 /// One barline at every red line (unless it omits its first) and every measure after it, up to
 /// the next red line. A section whose measure is under a millisecond (a gimmick line) gives only
 /// its first: the rest would scroll by too fast to see.
+///
+/// None before `from`, the first note or 0, whichever is earlier (lazer's `BarLineGenerator`):
+/// a map that starts its red line seconds before the song, at a fast SV that times its spinners'
+/// PreEmpt, would otherwise send its first bars flying in before the song, where osu! has none.
 fn build_barlines(
     raw: &[RawTimingPoint],
+    from: f64,
     end: f64,
     velocity_at: &dyn Fn(f64) -> f64,
 ) -> Vec<Barline> {
@@ -989,7 +999,7 @@ fn build_barlines(
             if t >= until {
                 break;
             }
-            if !(first && p.effects & 8 != 0) {
+            if !(first && p.effects & 8 != 0) && t >= from {
                 out.push(Barline {
                     time: t,
                     velocity: velocity_at(t),
@@ -1348,6 +1358,43 @@ SliderTickRate:1
         // With the mods first: HR makes OD 5 into 7, which at DT plays like OD 10.22.
         let hr = crate::mods::Mods::parse("HR").od(5.0);
         assert!((od_at_rate(hr, 1.5) - 92.0 / 9.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_note_just_before_a_fractional_red_line_scrolls_at_its_speed() {
+        // Aliyah's Interlude - IT GIRL [I.T.G.I.R.L.] (4454501): 10x from 0 for the spinners'
+        // PreEmpt, the chart's red line resnapped to 41.1037 and its first note on 41. In stable
+        // the note scrolls at the red line's 1x, not 10x.
+        let map = parse(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,479.999999999999,7,1,0,75,1,8\n0,-10,7,1,0,75,0,0\n41.1037077104643,479.999999999999,4,1,0,75,1,0\n7721,-83.3333333333333,4,1,0,75,0,0\n\n[HitObjects]\n337,135,41,5,0,0:0:0:0:\n325,140,521,1,0,0:0:0:0:\n337,135,7720,1,0,0:0:0:0:\n337,135,7721,1,0,0:0:0:0:\n",
+        );
+        let v: Vec<f64> = map.notes.iter().map(|n| n.velocity).collect();
+        assert!((v[0] - v[1]).abs() < 1e-9, "{v:?}");
+        assert!((v[2] - v[1]).abs() < 1e-9, "{v:?}");
+        assert!((v[3] / v[1] - 1.2).abs() < 1e-9, "{v:?}");
+        // The map still starts at 10x, so its swells keep stable's short PreEmpt.
+        assert!((map.first_velocity / v[1] - 10.0).abs() < 1e-9);
+        // Only the scroll speed: the red line's barline and the beat stay where they were.
+        assert_eq!(map.barlines[0].time, 41.1037077104643);
+        assert_eq!(control_point_at(&map.control_points, 41.0).sv, 10.0);
+    }
+
+    #[test]
+    fn no_barlines_before_the_song_or_the_first_note() {
+        // Dynamite (Camellia's MACHO TNT REMIX) [kaBOOM] (5423149): the red line 1.7 s before the
+        // song at 3x, its first bar omitted. Its next bar, at -631, flew in at 3x before the
+        // song; osu! starts the bars at 0.
+        let map = parse(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n-1712,270.27027027027,4,1,0,100,1,8\n-1712,-33.3333333333333,4,1,0,100,0,8\n179,-133.333333333333,4,1,0,100,0,8\n855,-82.08048,4,1,0,100,0,8\n\n[HitObjects]\n256,192,855,5,8,1:0:0:0:\n256,192,5000,1,0,0:0:0:0:\n",
+        );
+        let bars: Vec<f64> = map.barlines.iter().map(|b| b.time.round()).collect();
+        assert_eq!(bars[..2], [450.0, 1531.0], "{bars:?}");
+        // A chart whose first note is before 0 keeps its bars from that note on.
+        let early = parse(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[TimingPoints]\n-3000,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,-1000,1,0,0:0:0:0:\n256,192,1000,1,0,0:0:0:0:\n",
+        );
+        let bars: Vec<f64> = early.barlines.iter().map(|b| b.time).collect();
+        assert_eq!(bars[..2], [-1000.0, 1000.0], "{bars:?}");
     }
 
     #[test]

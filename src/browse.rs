@@ -124,6 +124,11 @@ pub struct Browse {
     /// The osu! sets with a map marked EPIC on the taiko.rs server, and the custom sets marked.
     epic_sets: HashSet<u32>,
     epic_custom: HashSet<u32>,
+    /// Leave out the sets already installed (`Config::download_hide_installed`).
+    pub hide_installed: bool,
+    /// The results looked at for that so far, by (set id, custom): a set downloaded after it
+    /// was listed stays in the list until the next search.
+    checked: HashSet<(u32, bool)>,
 }
 
 impl Default for Browse {
@@ -165,6 +170,8 @@ impl Default for Browse {
             loved_count: None,
             epic_sets: HashSet::new(),
             epic_custom: HashSet::new(),
+            hide_installed: false,
+            checked: HashSet::new(),
         }
     }
 }
@@ -370,6 +377,7 @@ impl Browse {
     /// Drops the results of another list, so they don't stand in for this one while it loads
     /// (or if it fails).
     fn forget_results(&mut self) {
+        self.checked.clear();
         self.results.clear();
         self.cursor = 0;
         (self.page, self.more) = (0, false);
@@ -401,6 +409,40 @@ impl Browse {
     }
 
     /// Flips the order's direction.
+    /// Shows or leaves out the sets already installed; shown again, they come back with a new
+    /// search.
+    pub fn set_hide_installed(&mut self, hide: bool) {
+        if hide == self.hide_installed {
+            return;
+        }
+        self.hide_installed = hide;
+        self.checked.clear();
+        if !hide {
+            self.search_now();
+        }
+    }
+
+    /// Takes the installed sets out of the results when they're to be left out. Each result is
+    /// looked at once, so one downloaded from the list stays there.
+    pub fn drop_installed(&mut self, installed: &dyn Fn(&SetInfo) -> bool) {
+        if !self.hide_installed {
+            return;
+        }
+        let mut i = 0;
+        while i < self.results.len() {
+            let set = &self.results[i];
+            if !self.checked.insert((set.id, set.custom.is_some())) || !installed(set) {
+                i += 1;
+                continue;
+            }
+            self.results.remove(i);
+            if self.cursor > i {
+                self.cursor -= 1;
+            }
+        }
+        self.cursor = self.cursor.min(self.results.len().saturating_sub(1));
+    }
+
     pub fn flip_sort(&mut self) {
         self.desc = !self.desc;
         self.search_now();
@@ -579,6 +621,7 @@ impl Browse {
                         } else {
                             String::new()
                         };
+                        self.checked.clear();
                         if growing {
                             self.replace_keeping_selection(sets);
                         } else {
@@ -850,6 +893,43 @@ impl Browse {
             );
             c.hit(dx, fy, dw, 20.0, Hit::DlSortDir);
             right_of_filters = dx + dw;
+        }
+        // Whether the sets already installed are listed.
+        {
+            let label = "hide installed";
+            let (hx, hw) = (
+                right_of_filters + 6.0,
+                Canvas::text_width(7.5, label) + 26.0,
+            );
+            if hx + hw < x0 + col {
+                let hover = c.hovered(hx, fy, hw, 20.0);
+                let on = self.hide_installed;
+                c.round_rect(
+                    [hx, fy],
+                    [hw, 20.0],
+                    5.0,
+                    rgba(if hover { 0x34344a } else { 0x23232f }, 0.95),
+                    rgba(if on { accent() } else { 0x3a3a4e }, 1.0),
+                    1.0,
+                );
+                c.round_rect(
+                    [hx + 6.0, fy + 6.0],
+                    [8.0, 8.0],
+                    2.0,
+                    rgba(accent(), if on { 1.0 } else { 0.0 }),
+                    rgba(if on { accent() } else { 0x8a8aa0 }, 1.0),
+                    1.0,
+                );
+                c.text(
+                    hx + 19.0,
+                    fy + 6.5,
+                    7.5,
+                    rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0),
+                    label,
+                );
+                c.hit(hx, fy, hw, 20.0, Hit::DlHideInstalled);
+                right_of_filters = hx + hw;
+            }
         }
         if !self.results.is_empty() {
             let n = self.results.len();

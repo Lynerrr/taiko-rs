@@ -405,11 +405,46 @@ pub fn preset_area(w: u32, h: u32, screen_w: f32, screen_h: f32) -> Area {
     .clamped()
 }
 
+/// How `begin` prepares the backdrop behind the playfield area and around it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AreaBackdrop {
+    /// A background shows behind the playfield (`bg_brightness > 0`); dim outside a framed area,
+    /// leave the area itself open.
+    SeeThrough,
+    /// The render pass already cleared the whole target to the inside colour (`dims_background`
+    /// with `bg_brightness == 0`); skip the inside rect and any outside bars that match it.
+    Cleared,
+    /// Cover whatever is drawn behind (editors over the menu background). The dim spans the
+    /// whole screen under the inside rect: bars meeting it edge to edge would leave a seam of
+    /// anti-aliasing the menu shows through. Off the hot path, so the overdraw doesn't matter.
+    CoverBg,
+}
+
+fn draw_outside_bars(c: &mut Canvas, area: Area, full: f32, colour: [f32; 4]) {
+    let ax = area.x * full;
+    let ay = area.y * VIRTUAL_HEIGHT;
+    let aw = area.w * full;
+    let ah = area.h * VIRTUAL_HEIGHT;
+    let ax1 = ax + aw;
+    let ay1 = ay + ah;
+    if ay > 0.0 {
+        c.rect(0.0, 0.0, full, ay, colour);
+    }
+    if ay1 < VIRTUAL_HEIGHT {
+        c.rect(0.0, ay1, full, VIRTUAL_HEIGHT - ay1, colour);
+    }
+    if ah > 0.0 && ax > 0.0 {
+        c.rect(0.0, ay, ax, ah, colour);
+    }
+    if ah > 0.0 && ax1 < full {
+        c.rect(ax1, ay, full - ax1, ah, colour);
+    }
+}
+
 /// Starts drawing into `area`: darkens the rest of the screen and switches the canvas to the
 /// area's own coordinate space (480 units tall, width from its aspect). Returns the first shape
 /// index and the full-screen width for `end`.
-/// With `see_through`, the area lets the map background show behind the lane.
-pub fn begin(c: &mut Canvas, area: Area, see_through: bool, black: bool) -> (usize, f32) {
+pub fn begin(c: &mut Canvas, area: Area, backdrop: AreaBackdrop, black: bool) -> (usize, f32) {
     let full = c.width;
     // `black`: the dim and the area behind the playfield are black, not the interface's greys.
     let (outside, inside) = if black {
@@ -417,25 +452,33 @@ pub fn begin(c: &mut Canvas, area: Area, see_through: bool, black: bool) -> (usi
     } else {
         (0x08080b, 0x121219)
     };
-    if !area.is_full() {
-        c.rect(
-            0.0,
-            0.0,
-            full,
-            VIRTUAL_HEIGHT,
-            rgba(outside, if see_through { 0.85 } else { 1.0 }),
-        );
+    match backdrop {
+        AreaBackdrop::SeeThrough => {
+            if !area.is_full() {
+                c.rect(0.0, 0.0, full, VIRTUAL_HEIGHT, rgba(outside, 0.85));
+            }
+            let start = c.shapes.len();
+            c.width = full * area.w / area.h;
+            (start, full)
+        }
+        AreaBackdrop::Cleared => {
+            if !area.is_full() && !black {
+                draw_outside_bars(c, area, full, rgba(outside, 1.0));
+            }
+            let start = c.shapes.len();
+            c.width = full * area.w / area.h;
+            (start, full)
+        }
+        AreaBackdrop::CoverBg => {
+            if !area.is_full() {
+                c.rect(0.0, 0.0, full, VIRTUAL_HEIGHT, rgba(outside, 1.0));
+            }
+            let start = c.shapes.len();
+            c.width = full * area.w / area.h;
+            c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(inside, 1.0));
+            (start, full)
+        }
     }
-    let start = c.shapes.len();
-    c.width = full * area.w / area.h;
-    c.rect(
-        0.0,
-        0.0,
-        c.width,
-        VIRTUAL_HEIGHT,
-        rgba(inside, if see_through { 0.0 } else { 1.0 }),
-    );
-    (start, full)
 }
 
 /// Maps everything drawn since `begin` into the area and restores full-screen drawing. Returns
@@ -478,11 +521,11 @@ pub(crate) fn draw_game_area(
     clip: &mut Option<(std::ops::Range<usize>, Area)>,
     grip: &Option<(Grip, (f64, f64), Area)>,
     hover: &Option<Grip>,
-    see_through: bool,
+    backdrop: AreaBackdrop,
     f: impl FnOnce(&mut Canvas),
 ) {
     let area = cfg.playfield_area;
-    let (start, full) = begin(canvas, area, see_through, cfg.bg_dim_black);
+    let (start, full) = begin(canvas, area, backdrop, cfg.bg_dim_black);
     f(canvas);
     let range = end(canvas, area, start, full);
     *clip = Some((range, area));
@@ -707,5 +750,76 @@ mod tests {
         assert!((b.w - 0.25).abs() < 1e-6 && (b.x - 0.375).abs() < 1e-6);
         assert_eq!(Area::FULL.scaled(1.5), Area::FULL);
         assert_eq!(Area::parse(&a.to_config()), Some(a));
+    }
+
+    #[test]
+    fn begin_skips_redundant_rects_when_target_is_cleared_or_see_through() {
+        let mut c = Canvas::default();
+        let framed = Area {
+            x: 0.25,
+            y: 0.25,
+            w: 0.5,
+            h: 0.5,
+        };
+        for black in [false, true] {
+            c.clear(853.3);
+            begin(&mut c, Area::FULL, AreaBackdrop::Cleared, black);
+            assert!(
+                c.shapes.is_empty(),
+                "full cleared emits no rect (black={black})"
+            );
+
+            c.clear(853.3);
+            begin(&mut c, Area::FULL, AreaBackdrop::SeeThrough, black);
+            assert!(
+                c.shapes.is_empty(),
+                "full see-through emits no invisible inside rect"
+            );
+        }
+
+        c.clear(853.3);
+        begin(&mut c, framed, AreaBackdrop::Cleared, true);
+        assert!(
+            c.shapes.is_empty(),
+            "framed cleared with black matches clear colour"
+        );
+
+        c.clear(853.3);
+        begin(&mut c, framed, AreaBackdrop::Cleared, false);
+        assert_eq!(
+            c.shapes.len(),
+            4,
+            "four non-overlapping outer strips when outside grey != clear"
+        );
+        for sh in &c.shapes {
+            let x0 = sh.center[0] - sh.half[0];
+            let x1 = sh.center[0] + sh.half[0];
+            let y0 = sh.center[1] - sh.half[1];
+            let y1 = sh.center[1] + sh.half[1];
+            let ix0 = framed.x * 853.3;
+            let ix1 = ix0 + framed.w * 853.3;
+            let iy0 = framed.y * VIRTUAL_HEIGHT;
+            let iy1 = iy0 + framed.h * VIRTUAL_HEIGHT;
+            let overlaps = x1 > ix0 + 1e-3 && x0 < ix1 - 1e-3 && y1 > iy0 + 1e-3 && y0 < iy1 - 1e-3;
+            assert!(!overlaps, "outer bar must not overlap framed area");
+        }
+
+        c.clear(853.3);
+        let (start, _) = begin(&mut c, framed, AreaBackdrop::CoverBg, true);
+        assert_eq!(start, 1, "one full-screen dim before the area's shapes");
+        assert_eq!(
+            c.shapes.len(),
+            2,
+            "plus one inside rect when covering the menu background"
+        );
+        let dim = &c.shapes[0];
+        assert_eq!(
+            (dim.center, dim.half),
+            (
+                [853.3 / 2.0, VIRTUAL_HEIGHT / 2.0],
+                [853.3 / 2.0, VIRTUAL_HEIGHT / 2.0]
+            ),
+            "the dim runs under the area: no seam where bars would meet the inside rect"
+        );
     }
 }

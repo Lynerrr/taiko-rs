@@ -72,6 +72,9 @@ pub(crate) fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
 
 /// Sleeps until `deadline` with sub-100µs precision: coarse sleep, then spin the last stretch.
 pub(super) fn sleep_until(deadline: Instant) {
+    // std's sleep already waits on a high-resolution timer on Windows 10+, and the 1 ms timer
+    // period (`TimerPeriod`) tightens it on older systems: a longer spin would only burn CPU,
+    // which an APU takes from its GPU.
     const SPIN: Duration = Duration::from_micros(500);
     loop {
         let now = Instant::now();
@@ -83,6 +86,39 @@ pub(super) fn sleep_until(deadline: Instant) {
             std::thread::sleep(left - SPIN);
         } else {
             std::hint::spin_loop();
+        }
+    }
+}
+
+#[cfg(windows)]
+struct TimerPeriod(Option<u32>);
+
+#[cfg(windows)]
+impl TimerPeriod {
+    fn ms(period: u32) -> Self {
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn timeBeginPeriod(period: u32) -> u32;
+        }
+        // SAFETY: `timeBeginPeriod` requests timer resolution `period` ms for this process and is
+        // paired with `timeEndPeriod` in `Drop` when it returns 0 (`TIMERR_NOERROR`).
+        let ok = unsafe { timeBeginPeriod(period) == 0 };
+        Self(ok.then_some(period))
+    }
+}
+
+#[cfg(windows)]
+impl Drop for TimerPeriod {
+    fn drop(&mut self) {
+        if let Some(period) = self.0 {
+            #[link(name = "winmm")]
+            unsafe extern "system" {
+                fn timeEndPeriod(period: u32) -> u32;
+            }
+            // SAFETY: paired with the matching successful `timeBeginPeriod(period)` in `Self::ms`.
+            unsafe {
+                timeEndPeriod(period);
+            }
         }
     }
 }
@@ -126,6 +162,8 @@ pub(super) fn render_loop(
     mut renderer: Renderer,
     proxy: EventLoopProxy<UserEvent>,
 ) {
+    #[cfg(windows)]
+    let _timer_period = TimerPeriod::ms(1);
     let mut canvas = Canvas::default();
     let mut export_canvas = Canvas::default();
     let mut blend = video::Blend::default();
@@ -451,7 +489,7 @@ pub(super) fn render_loop(
                     ],
                 )
             }))
-            .map(to_fraction);
+            .and_then(|r| canvas.opaque.map(|i| (i, to_fraction(r))));
         let mut clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clip
             .into_iter()
             .map(|(range, a)| (range, [a.x, a.y, a.w, a.h]))
@@ -508,11 +546,20 @@ pub(super) fn render_loop(
                     // also lists the biggest).
                     let ppu = renderer.size().1 as f32 / render::VIRTUAL_HEIGHT;
                     let area = |sh: &render::Shape| {
-                        let pad = 1.5 + sh.params[2].max(0.0) * ppu;
+                        if sh.fill[3] <= 0.0 && sh.border[3] <= 0.0 {
+                            return 0.0;
+                        }
+                        let glow = if (-0.5..=9.5).contains(&sh.params[3]) {
+                            sh.params[2].max(0.0) * ppu
+                        } else {
+                            0.0
+                        };
+                        let pad = 1.5 + glow;
                         (sh.half[0] * ppu + pad) * 2.0 * (sh.half[1] * ppu + pad) * 2.0
                     };
                     let screen = (renderer.size().0 * renderer.size().1).max(1) as f32;
-                    let cover: f32 = canvas.shapes.iter().map(area).sum::<f32>() / screen;
+                    let drawn = renderer.as_drawn(&canvas.shapes);
+                    let cover: f32 = drawn.iter().map(area).sum::<f32>() / screen;
                     eprintln!(
                         "profile: {:.0} fps  acquire {:.2} ms (max {:.2})  build {:.2} ms  submit {:.2} ms  shapes {}{gpu}  cover {cover:.2}",
                         n / prof_start.elapsed().as_secs_f64(),
@@ -523,7 +570,7 @@ pub(super) fn render_loop(
                         prof_shapes
                     );
                     if std::env::var("TAIKO_PROFILE").is_ok_and(|v| v == "shapes") {
-                        let mut big: Vec<&render::Shape> = canvas.shapes.iter().collect();
+                        let mut big: Vec<&render::Shape> = drawn.iter().collect();
                         big.sort_by(|a, b| area(b).total_cmp(&area(a)));
                         for sh in big.iter().take(12) {
                             eprintln!(
@@ -579,13 +626,11 @@ pub(super) fn render_loop(
         }
 
         if present != PresentChoice::Fifo && cap > 0 {
-            // Fixed grid so frames are evenly spaced; resync if we fell behind.
+            // Fixed grid so frames are evenly spaced; resync to now if we fell behind (not
+            // `late + period`, which slept an entire extra frame after a slight overrun).
             let period = Duration::from_secs_f64(1.0 / cap as f64);
-            next_frame += period;
             let late = Instant::now();
-            if next_frame < late {
-                next_frame = late + period;
-            }
+            next_frame = clock::next_frame_deadline(next_frame, late, period);
             sleep_until(next_frame);
         }
     }
@@ -1235,6 +1280,12 @@ impl State {
             crash_sent,
             cfg,
             library,
+            library_by_set: std::collections::HashMap::new(),
+            library_by_folder: std::collections::HashMap::new(),
+            library_folders: Arc::default(),
+            library_own_folders: Arc::default(),
+            library_indexed_len: 0,
+            library_indexed_ptr: 0,
             select,
             scene: SongSelect::scene(),
             play: None,
@@ -1344,6 +1395,7 @@ impl State {
             me_for: String::new(),
             me_fetch: Job::idle(),
             me_due: None,
+            total_follow: None,
             board_online: false,
             column_preview: true,
             profile: None,

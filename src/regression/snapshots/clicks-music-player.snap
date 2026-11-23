@@ -12,7 +12,7 @@ Music(Toggle) @424,419 -> Select
 Music(Next) @470,419 -> Select
 Music(Repeat) @516,419 -> Select +"1"
 Music(Favourite) @562,419 -> Select
-Music(PlayMap) @312,449 -> Select +"0:00 / 0:10" +"0:09" +"200" +"3.08" +"32 DON" +"32 KAT" +33 more -"+ on a song adds it" -"0:00" -"1 songs" -"1.00x [ ]" -"< menu" -"All songs" -8 more
+Music(PlayMap) @312,449 -> Select +"+" +"-" +"0:00 / 0:10" +"0:09" +"1.00x" +"200" +36 more -"+ on a song adds it" -"0:00" -"1 songs" -"1.00x [ ]" -"< menu" -"All songs" -8 more
 PlayerDaycore @366,449 -> Select +"0.75x [ ]" -"1.00x [ ]"
 PlayerRate @414,449 -> Select
 PlayerKeepPitch @494,449 -> Select

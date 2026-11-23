@@ -73,6 +73,8 @@ resume_delay_ms = 1000
 sort = artist
 # the collection song select shows (own:name or osu:name; empty: all songs)
 collection =
+# the download tab leaves out the maps already installed
+download_hide_installed = false
 kiai_effects = true
 # song select's preview shows the drum at the start of its lane
 preview_drum = true

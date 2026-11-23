@@ -170,6 +170,10 @@ impl Screen for Preview {
         }
         match code {
             KeyCode::Space => state.toggle_preview_held(),
+            // The speed, as in song select: the preview plays at it.
+            KeyCode::BracketLeft | KeyCode::BracketRight => {
+                state.step_rate(code == KeyCode::BracketRight);
+            }
             KeyCode::Escape | KeyCode::Backspace => self.close(state),
             KeyCode::Enter | KeyCode::NumpadEnter if state.modifiers_ctrl => self.close(state),
             KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -192,7 +196,7 @@ impl Screen for Preview {
         match frame.preview_target {
             Some(i) => {
                 let scroll = state.cfg.scroll_speed;
-                let see_through = state.bg_brightness > 0.0;
+                let area_backdrop = state.area_backdrop(state.bg_brightness > 0.0);
                 let kiai = state.cfg.kiai_effects;
                 if let Some(game) = state.preview.game_for(&state.library, i) {
                     game.view.kiai_effects = kiai;
@@ -202,7 +206,7 @@ impl Screen for Preview {
                         &mut state.frame_clip,
                         &state.grip,
                         &state.hover,
-                        see_through,
+                        area_backdrop,
                         |c| game.draw_playfield(c, scroll),
                     );
                 }
@@ -245,6 +249,17 @@ impl Screen for Preview {
                     hit::Hit::Key(KeyCode::Space),
                     false,
                 );
+                // The speed beside it, when no mod sets it.
+                if !mobile::active() && state.cfg.mods.rate_override().is_none() {
+                    crate::screens::select::song_select::rate_stepper(
+                        canvas,
+                        bx + bw + 8.0,
+                        by,
+                        bh,
+                        state.cfg.rate,
+                        7.0,
+                    );
+                }
             }
             None => {
                 return Some(*std::mem::replace(

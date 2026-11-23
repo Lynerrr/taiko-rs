@@ -1975,6 +1975,7 @@ impl Edit {
 
 /// Inserts `typed` (control characters dropped) at char index `caret`, up to `max` characters.
 pub fn caret_insert(text: &mut String, caret: &mut usize, typed: &str, max: usize) {
+    *caret = (*caret).min(text.chars().count());
     for ch in typed.chars().filter(|ch| !ch.is_control()) {
         if text.chars().count() < max {
             text.insert(byte_at(text, *caret), ch);
@@ -1984,6 +1985,7 @@ pub fn caret_insert(text: &mut String, caret: &mut usize, typed: &str, max: usiz
 }
 
 pub fn caret_backspace(text: &mut String, caret: &mut usize) {
+    *caret = (*caret).min(text.chars().count());
     if *caret > 0 {
         *caret -= 1;
         text.remove(byte_at(text, *caret));
@@ -2047,8 +2049,9 @@ impl Choices {
         }
     }
 
+    /// The lists long enough to search: fonts, and skins (for the whole skin or one part).
     pub fn searchable(&self) -> bool {
-        self.item == Item::UiFont
+        matches!(self.item, Item::UiFont | Item::Skin | Item::SkinPart(_))
     }
 
     /// Indices stay in the original list, so selecting a filtered row picks the right family.
@@ -2093,7 +2096,11 @@ impl Choices {
             1.0,
         );
         c.hit(x, y, w, h, Hit::ChoiceSearch);
-        let placeholder = tr!("Search fonts...", "フォントを検索...", "Поиск шрифтов...");
+        let placeholder = if self.item == Item::UiFont {
+            tr!("Search fonts...", "フォントを検索...", "Поиск шрифтов...")
+        } else {
+            tr!("Search skins...", "スキンを検索...", "Поиск скинов...")
+        };
         c.input(
             crate::text_input::Field::FontSearch,
             [x + 8.0, y + (h - size) / 2.0, w - 16.0, size + 2.0],

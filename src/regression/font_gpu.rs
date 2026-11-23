@@ -467,3 +467,258 @@ fn card_pictures_gpu_come_in_across_out_of_nothing_with_no_edge() {
         assert!(pair[1] - pair[0] <= 4, "no edge: {along:?}");
     }
 }
+
+#[test]
+fn song_selects_ground_in_one_shape_looks_as_the_shapes_it_replaced_did() {
+    let mut gpu = Gpu::new();
+    // 250 x 100 units at 1 px each: the bands are 2 px tall, the side shades 50 px wide.
+    let (w, h) = (250.0, 100.0);
+    let under = |c: &mut Canvas<()>| c.rect(0.0, 0.0, 256.0, 128.0, rgba(0xd0a040, 1.0));
+    let (ground, dim, edge) = (0x0a0c14, 0.72, 0.6);
+    // As `style::ground` drew it: a tint, a shade in from each side, eight bands top and bottom.
+    let mut old = Canvas::<()>::default();
+    under(&mut old);
+    old.rect(0.0, 0.0, w, h, rgba(ground, dim));
+    let side = w * 0.2;
+    let (strong, clear) = (rgba(ground, edge), rgba(ground, 0.0));
+    old.shade_eased([0.0, 0.0], [side, h], 0.0, strong, clear);
+    old.shade_eased([w - side, 0.0], [side, h], 0.0, clear, strong);
+    let band = h * 0.16 / 8.0;
+    for k in 0..8 {
+        let f = 1.0 - (k as f32 + 0.5) / 8.0;
+        let col = rgba(ground, edge * f * f * (3.0 - 2.0 * f) / 2.0);
+        old.rect(0.0, k as f32 * band, w, band, col);
+        old.rect(0.0, h - (k + 1) as f32 * band, w, band, col);
+    }
+    let mut new = Canvas::<()>::default();
+    under(&mut new);
+    new.ground_shade([0.0, 0.0], [w, h], rgba(ground, dim), edge);
+    assert_eq!(new.shapes.len(), 2, "one shape for the ground");
+    let (_, _, a) = gpu.draw(&old.shapes, 1.0);
+    let (_, _, b) = gpu.draw(&new.shapes, 1.0);
+    // Laid over one another in 8 bits each time, the old shapes round a little differently.
+    let worst = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| x.abs_diff(*y))
+        .max()
+        .unwrap_or(0);
+    assert!(worst <= 3, "at most rounding apart: {worst}");
+    // And it is the ground: darker at the sides and the top than in the middle.
+    let px = |x: usize, y: usize| b[(y * 256 + x) * 4] as i32;
+    assert!(px(2, 50) < px(125, 50) && px(125, 1) < px(125, 50));
+}
+
+/// The background's shader alone over a 256 x 128 target, one flat colour (`y`, `cb`, `cr`) at
+/// `brightness`, with the uniform's ground part `ground` (`BG_UNIFORM_FLOATS` - 8 floats).
+fn draw_background(
+    gpu: &Gpu,
+    (y, cb, cr): (u8, u8, u8),
+    brightness: f32,
+    ground: [f32; 12],
+) -> Vec<u8> {
+    use wgpu::util::DeviceExt;
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("production background"),
+        source: wgpu::ShaderSource::Wgsl(bg_shader().into()),
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: None,
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    let plane = |format, data: &[u8]| {
+        device
+            .create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: None,
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                data,
+            )
+            .create_view(&Default::default())
+    };
+    let (luma, chroma) = (
+        plane(wgpu::TextureFormat::R8Unorm, &[y]),
+        plane(wgpu::TextureFormat::Rg8Unorm, &[cb, cr]),
+    );
+    let mut uniform = [0.0f32; BG_UNIFORM_FLOATS];
+    uniform[..8].copy_from_slice(&[0.0, 0.0, 1.0, 1.0, brightness, 1.0, 0.0, 0.0]);
+    uniform[8..].copy_from_slice(&ground);
+    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: None,
+        contents: bytemuck::cast_slice(&uniform),
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let sampler = device.create_sampler(&Default::default());
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&luma),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&chroma),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(&luma),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(&chroma),
+            },
+        ],
+    });
+    let size = wgpu::Extent3d {
+        width: 256,
+        height: 128,
+        depth_or_array_layers: 1,
+    };
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 256 * 4 * 128,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let view = target.create_view(&Default::default());
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.draw(0..4, 0..1);
+    }
+    encoder.copy_texture_to_buffer(
+        target.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4),
+                rows_per_image: None,
+            },
+        },
+        size,
+    );
+    queue.submit([encoder.finish()]);
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |result| result.unwrap());
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .unwrap();
+    buffer.slice(..).get_mapped_range().unwrap().to_vec()
+}
+
+#[test]
+fn song_selects_ground_drawn_by_the_background_looks_as_its_shape_over_it_did() {
+    let gpu = Gpu::new();
+    let (y, cb, cr, brightness) = (180u8, 110u8, 150u8, 0.8f32);
+    // The background's colour as its shader works it out (JPEG's YCbCr back to RGB).
+    let [yf, cbf, crf] = [y, cb, cr].map(|v| v as f32 / 255.0 - 0.5);
+    let yf = yf + 0.5;
+    let rgb = [
+        yf + 1.402 * crf,
+        yf - 0.344136 * cbf - 0.714136 * crf,
+        yf + 1.772 * cbf,
+    ]
+    .map(|v| v.clamp(0.0, 1.0) * brightness);
+    let (fill, edge) = ([0.039, 0.047, 0.078, 0.72], 0.6);
+    // Its shape over a rect of that colour, as the shapes draw it...
+    let mut c = Canvas::<()>::default();
+    c.rect(0.0, 0.0, 256.0, 128.0, [rgb[0], rgb[1], rgb[2], 1.0]);
+    c.ground_shade([3.0, 2.0], [250.0, 100.0], fill, edge);
+    let mut gpu_shapes = Gpu::new();
+    let (_, _, shapes) = gpu_shapes.draw(&c.shapes, 1.0);
+    // ...and the background drawing it itself (its rect in pixels at 1 px a unit).
+    let ground = [
+        fill[0], fill[1], fill[2], fill[3], edge, 0.0, 0.0, 0.0, 3.0, 2.0, 253.0, 102.0,
+    ];
+    let folded = draw_background(&gpu, (y, cb, cr), brightness, ground);
+    let worst = shapes
+        .iter()
+        .zip(&folded)
+        .enumerate()
+        .filter(|(i, _)| i % 4 != 3)
+        .map(|(_, (a, b))| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert!(worst <= 2, "at most rounding apart: {worst}");
+    // Without a ground the background is its plain colour.
+    let plain = draw_background(&gpu, (y, cb, cr), brightness, [0.0; 12]);
+    let want = (rgb[0] * 255.0).round() as i32;
+    assert!((plain[(64 * 256 + 128) * 4] as i32 - want).abs() <= 1);
+    assert!(folded[(64 * 256 + 128) * 4] < plain[(64 * 256 + 128) * 4]);
+}

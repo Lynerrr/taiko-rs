@@ -1,140 +1,140 @@
 == HD+HR (label HRHD, x1.1236, rate 1.000)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 1123600 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 615098 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -5.48 ur 303.95 | hp 0.8468 | failed false
-basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 479078 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
+basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 551631 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -5.48 ur 303.95 | hp 0.8468 | failed false
+basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 467729 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 1129892 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 371807 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.93 ur 275.49 | hp 0.5706 | failed false
-high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 490735 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
+high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 315188 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.93 ur 275.49 | hp 0.5706 | failed false
+high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 478339 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 1125982 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 413843 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 2.31 ur 275.82 | hp 0.7185 | failed false
-sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 484999 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
+sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 356245 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 2.31 ur 275.82 | hp 0.7185 | failed false
+sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 471849 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
 == HD+DT (label DTHD, x1.1872, rate 1.500)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 1187200 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 41 ok 23 miss 0 | combo 64 max 64 | score 733227 | rolls 0 swells 0 strong 0 | acc 82.0312 | err -3.65 ur 202.63 | hp 1.0000 | failed false
-basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 506196 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.9933 | failed false
+basics         jitter +-55ms    great 41 ok 23 miss 0 | combo 64 max 64 | score 679157 | rolls 0 swells 0 strong 0 | acc 82.0312 | err -3.65 ur 202.63 | hp 1.0000 | failed false
+basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 494204 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.9933 | failed false
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 1193848 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 392853 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.28 ur 183.66 | hp 0.5706 | failed false
-high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 518512 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
+high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 333029 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.28 ur 183.66 | hp 0.5706 | failed false
+high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 505415 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 1189717 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 25 ok 17 miss 0 | combo 42 max 42 | score 693819 | rolls 2 swells 0 strong 6 | acc 79.7619 | err -0.20 ur 195.49 | hp 0.9915 | failed false
-sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 512451 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+sv-and-kiai    jitter +-55ms    great 25 ok 17 miss 0 | combo 42 max 42 | score 636997 | rolls 2 swells 0 strong 6 | acc 79.7619 | err -0.20 ur 195.49 | hp 0.9915 | failed false
+sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 498558 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 == HR+DT (label HRDT, x1.1872, rate 1.500)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 1187200 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 649915 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -3.65 ur 202.63 | hp 0.8468 | failed false
-basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 506196 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
+basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 582856 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -3.65 ur 202.63 | hp 0.8468 | failed false
+basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 494204 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 1193848 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 392853 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.28 ur 183.66 | hp 0.5706 | failed false
-high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 518512 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
+high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 333029 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.28 ur 183.66 | hp 0.5706 | failed false
+high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 505415 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 1189717 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 437268 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 1.54 ur 183.88 | hp 0.7185 | failed false
-sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 512451 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
+sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 376410 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 1.54 ur 183.88 | hp 0.7185 | failed false
+sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 498558 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
 == EZ+HT (label EZHT, x0.1500, rate 0.750)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 150000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 50 ok 14 miss 0 | combo 64 max 64 | score 111640 | rolls 0 swells 0 strong 0 | acc 89.0625 | err -7.30 ur 405.27 | hp 1.0000 | failed false
-basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 63957 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+basics         jitter +-55ms    great 50 ok 14 miss 0 | combo 64 max 64 | score 107644 | rolls 0 swells 0 strong 0 | acc 89.0625 | err -7.30 ur 405.27 | hp 1.0000 | failed false
+basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 62442 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 150840 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 34 ok 14 miss 0 | combo 48 max 48 | score 102123 | rolls 0 swells 0 strong 16 | acc 85.4167 | err -3.92 ur 393.97 | hp 1.0000 | failed false
-high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 65513 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+high-od        jitter +-55ms    great 34 ok 14 miss 0 | combo 48 max 48 | score 96971 | rolls 0 swells 0 strong 16 | acc 85.4167 | err -3.92 ur 393.97 | hp 1.0000 | failed false
+high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 63858 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 150318 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 34 ok 8 miss 0 | combo 42 max 42 | score 116283 | rolls 2 swells 0 strong 6 | acc 90.4762 | err -0.39 ur 390.98 | hp 1.0000 | failed false
-sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 64747 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+sv-and-kiai    jitter +-55ms    great 34 ok 8 miss 0 | combo 42 max 42 | score 113094 | rolls 2 swells 0 strong 6 | acc 90.4762 | err -0.39 ur 390.98 | hp 1.0000 | failed false
+sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 62992 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 == EZ+NF (label EZNF, x0.2500, rate 1.000)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 250000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 50 ok 14 miss 0 | combo 64 max 64 | score 186067 | rolls 0 swells 0 strong 0 | acc 89.0625 | err -5.48 ur 303.95 | hp 1.0000 | failed false
-basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 106595 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+basics         jitter +-55ms    great 50 ok 14 miss 0 | combo 64 max 64 | score 179407 | rolls 0 swells 0 strong 0 | acc 89.0625 | err -5.48 ur 303.95 | hp 1.0000 | failed false
+basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 104069 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 251400 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 34 ok 14 miss 0 | combo 48 max 48 | score 170205 | rolls 0 swells 0 strong 16 | acc 85.4167 | err -2.94 ur 295.48 | hp 1.0000 | failed false
-high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 109188 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+high-od        jitter +-55ms    great 34 ok 14 miss 0 | combo 48 max 48 | score 161618 | rolls 0 swells 0 strong 16 | acc 85.4167 | err -2.94 ur 295.48 | hp 1.0000 | failed false
+high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 106430 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 250530 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 34 ok 8 miss 0 | combo 42 max 42 | score 193805 | rolls 2 swells 0 strong 6 | acc 90.4762 | err -0.29 ur 293.24 | hp 1.0000 | failed false
-sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 107912 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+sv-and-kiai    jitter +-55ms    great 34 ok 8 miss 0 | combo 42 max 42 | score 188490 | rolls 2 swells 0 strong 6 | acc 90.4762 | err -0.29 ur 293.24 | hp 1.0000 | failed false
+sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 104986 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 == HD+HR+DT+FL (label HRDTHDFL, x1.4094, rate 1.500)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 1409444 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 771579 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -3.65 ur 202.63 | hp 0.8468 | failed false
-basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 600956 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
+basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 691966 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -3.65 ur 202.63 | hp 0.8468 | failed false
+basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 586719 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 1417337 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 466395 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.28 ur 183.66 | hp 0.5706 | failed false
-high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 615577 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
+high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 395372 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.28 ur 183.66 | hp 0.5706 | failed false
+high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 600028 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 1412432 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 519125 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 1.54 ur 183.88 | hp 0.7185 | failed false
-sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 608382 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
+sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 446874 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 1.54 ur 183.88 | hp 0.7185 | failed false
+sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 591887 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
 == NC+HR (label HRNC, x1.1872, rate 1.500)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 1187200 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 649915 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -3.65 ur 202.63 | hp 0.8468 | failed false
-basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 506196 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
+basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 582856 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -3.65 ur 202.63 | hp 0.8468 | failed false
+basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 494204 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 1193848 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 392853 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.28 ur 183.66 | hp 0.5706 | failed false
-high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 518512 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
+high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 333029 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.28 ur 183.66 | hp 0.5706 | failed false
+high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 505415 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 1189717 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 437268 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 1.54 ur 183.88 | hp 0.7185 | failed false
-sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 512451 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
+sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 376410 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 1.54 ur 183.88 | hp 0.7185 | failed false
+sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 498558 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
 == SD+HR (label HRSD, x1.0600, rate 1.000)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 1060000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 580281 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -5.48 ur 303.95 | hp 0.8468 | failed false
-basics         skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 33691 | rolls 0 swells 0 strong 0 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.0649 | failed true
+basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 520407 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -5.48 ur 303.95 | hp 0.8468 | failed false
+basics         skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 32799 | rolls 0 swells 0 strong 0 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.0649 | failed true
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 2 ok 3 miss 1 | combo 0 max 5 | score 26219 | rolls 0 swells 0 strong 1 | acc 58.3333 | err 3.73 ur 345.40 | hp 0.0539 | failed true
-high-od        skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 46014 | rolls 0 swells 0 strong 1 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.0730 | failed true
+high-od        jitter +-55ms    great 2 ok 3 miss 1 | combo 0 max 5 | score 22112 | rolls 0 swells 0 strong 1 | acc 58.3333 | err 3.73 ur 345.40 | hp 0.0539 | failed true
+high-od        skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 44715 | rolls 0 swells 0 strong 1 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.0730 | failed true
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 1062247 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 2 ok 3 miss 1 | combo 0 max 5 | score 30125 | rolls 0 swells 0 strong 0 | acc 58.3333 | err 3.73 ur 345.40 | hp 0.0784 | failed true
-sv-and-kiai    skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 52595 | rolls 0 swells 0 strong 0 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.1038 | failed true
+sv-and-kiai    jitter +-55ms    great 2 ok 3 miss 1 | combo 0 max 5 | score 25224 | rolls 0 swells 0 strong 0 | acc 58.3333 | err 3.73 ur 345.40 | hp 0.0784 | failed true
+sv-and-kiai    skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 51044 | rolls 0 swells 0 strong 0 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.1038 | failed true
 == PF+DT (label PFDT, x1.1200, rate 1.500)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 1120000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 0 ok 1 miss 0 | combo 1 max 1 | score 2025 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 31.95 ur 0.00 | hp 0.0076 | failed true
-basics         skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 35598 | rolls 0 swells 0 strong 0 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.0758 | failed true
+basics         jitter +-55ms    great 0 ok 1 miss 0 | combo 1 max 1 | score 1553 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 31.95 ur 0.00 | hp 0.0076 | failed true
+basics         skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 34655 | rolls 0 swells 0 strong 0 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.0758 | failed true
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 1126272 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 0 ok 1 miss 0 | combo 1 max 1 | score 2816 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 31.95 ur 0.00 | hp 0.0078 | failed true
-high-od        skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 48618 | rolls 0 swells 0 strong 1 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.0730 | failed true
+high-od        jitter +-55ms    great 0 ok 1 miss 0 | combo 1 max 1 | score 2129 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 31.95 ur 0.00 | hp 0.0078 | failed true
+high-od        skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 47246 | rolls 0 swells 0 strong 1 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.0730 | failed true
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 1122374 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 0 ok 1 miss 0 | combo 1 max 1 | score 3287 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 31.95 ur 0.00 | hp 0.0116 | failed true
-sv-and-kiai    skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 55572 | rolls 0 swells 0 strong 0 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.1195 | failed true
+sv-and-kiai    jitter +-55ms    great 0 ok 1 miss 0 | combo 1 max 1 | score 2468 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 31.95 ur 0.00 | hp 0.0116 | failed true
+sv-and-kiai    skips every 5    great 4 ok 0 miss 1 | combo 0 max 4 | score 53934 | rolls 0 swells 0 strong 0 | acc 80.0000 | err 0.00 ur 0.00 | hp 0.1195 | failed true
 == NF+HR (label NFHR, x0.5300, rate 1.000)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 530000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 290141 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -5.48 ur 303.95 | hp 0.8468 | failed false
-basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 225980 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
+basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 260204 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -5.48 ur 303.95 | hp 0.8468 | failed false
+basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 220627 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 532968 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 175381 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.93 ur 275.49 | hp 0.5706 | failed false
-high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 231479 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
+high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 148673 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.93 ur 275.49 | hp 0.5706 | failed false
+high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 225632 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 531124 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 195209 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 2.31 ur 275.82 | hp 0.7185 | failed false
-sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 228773 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
+sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 168040 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 2.31 ur 275.82 | hp 0.7185 | failed false
+sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 222570 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
 == RD+HR (label HRRD, x1.1024, rate 1.000)
-basics         perfect          great 27 ok 0 miss 37 | combo 0 max 3 | score 96921 | rolls 0 swells 0 strong 0 | acc 42.1875 | err 0.00 ur 0.00 | hp 0.1569 | failed true
-basics         jitter +-55ms    great 12 ok 15 miss 37 | combo 0 max 3 | score 71395 | rolls 0 swells 0 strong 0 | acc 30.4688 | err 0.12 ur 343.80 | hp 0.0330 | failed true
-basics         skips every 5    great 23 ok 0 miss 41 | combo 0 max 3 | score 80699 | rolls 0 swells 0 strong 0 | acc 35.9375 | err 0.00 ur 0.00 | hp 0.0923 | failed true
-high-od        perfect          great 25 ok 0 miss 23 | combo 0 max 6 | score 156318 | rolls 0 swells 0 strong 9 | acc 52.0833 | err 0.00 ur 0.00 | hp 0.2555 | failed true
-high-od        jitter +-55ms    great 10 ok 13 miss 25 | combo 0 max 6 | score 93471 | rolls 0 swells 0 strong 7 | acc 34.3750 | err -0.01 ur 267.43 | hp 0.0503 | failed true
-high-od        skips every 5    great 20 ok 0 miss 28 | combo 0 max 4 | score 106832 | rolls 0 swells 0 strong 6 | acc 41.6667 | err 0.00 ur 0.00 | hp 0.0892 | failed true
-sv-and-kiai    perfect          great 18 ok 0 miss 24 | combo 0 max 3 | score 109939 | rolls 2 swells 0 strong 3 | acc 42.8571 | err 0.00 ur 0.00 | hp 0.3033 | failed true
-sv-and-kiai    jitter +-55ms    great 9 ok 7 miss 26 | combo 0 max 3 | score 81327 | rolls 2 swells 0 strong 3 | acc 29.7619 | err 4.97 ur 257.78 | hp 0.1582 | failed true
-sv-and-kiai    skips every 5    great 14 ok 0 miss 28 | combo 0 max 2 | score 84747 | rolls 2 swells 0 strong 3 | acc 33.3333 | err 0.00 ur 0.00 | hp 0.1623 | failed true
+basics         perfect          great 27 ok 0 miss 37 | combo 0 max 3 | score 62585 | rolls 0 swells 0 strong 0 | acc 42.1875 | err 0.00 ur 0.00 | hp 0.1569 | failed true
+basics         jitter +-55ms    great 12 ok 15 miss 37 | combo 0 max 3 | score 30101 | rolls 0 swells 0 strong 0 | acc 30.4688 | err 0.12 ur 343.80 | hp 0.0330 | failed true
+basics         skips every 5    great 23 ok 0 miss 41 | combo 0 max 3 | score 42653 | rolls 0 swells 0 strong 0 | acc 35.9375 | err 0.00 ur 0.00 | hp 0.0923 | failed true
+high-od        perfect          great 25 ok 0 miss 23 | combo 0 max 6 | score 125237 | rolls 0 swells 0 strong 9 | acc 52.0833 | err 0.00 ur 0.00 | hp 0.2555 | failed true
+high-od        jitter +-55ms    great 10 ok 13 miss 25 | combo 0 max 6 | score 48088 | rolls 0 swells 0 strong 7 | acc 34.3750 | err -0.01 ur 267.43 | hp 0.0503 | failed true
+high-od        skips every 5    great 20 ok 0 miss 28 | combo 0 max 4 | score 68995 | rolls 0 swells 0 strong 6 | acc 41.6667 | err 0.00 ur 0.00 | hp 0.0892 | failed true
+sv-and-kiai    perfect          great 18 ok 0 miss 24 | combo 0 max 3 | score 71238 | rolls 2 swells 0 strong 3 | acc 42.8571 | err 0.00 ur 0.00 | hp 0.3033 | failed true
+sv-and-kiai    jitter +-55ms    great 9 ok 7 miss 26 | combo 0 max 3 | score 32813 | rolls 2 swells 0 strong 3 | acc 29.7619 | err 4.97 ur 257.78 | hp 0.1582 | failed true
+sv-and-kiai    skips every 5    great 14 ok 0 miss 28 | combo 0 max 2 | score 39596 | rolls 2 swells 0 strong 3 | acc 33.3333 | err 0.00 ur 0.00 | hp 0.1623 | failed true
 == SW+HD (label HDSW, x1.0600, rate 1.000)
-basics         perfect          great 0 ok 0 miss 64 | combo 0 max 0 | score 57105 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-basics         jitter +-55ms    great 0 ok 0 miss 64 | combo 0 max 0 | score 57105 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-basics         skips every 5    great 0 ok 0 miss 64 | combo 0 max 0 | score 57105 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-high-od        perfect          great 0 ok 0 miss 48 | combo 0 max 0 | score 62368 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-high-od        jitter +-55ms    great 0 ok 0 miss 48 | combo 0 max 0 | score 62368 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-high-od        skips every 5    great 0 ok 0 miss 48 | combo 0 max 0 | score 62368 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-sv-and-kiai    perfect          great 0 ok 0 miss 42 | combo 0 max 0 | score 65143 | rolls 2 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-sv-and-kiai    jitter +-55ms    great 0 ok 0 miss 42 | combo 0 max 0 | score 65143 | rolls 2 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
-sv-and-kiai    skips every 5    great 0 ok 0 miss 42 | combo 0 max 0 | score 65143 | rolls 2 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+basics         perfect          great 0 ok 0 miss 64 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+basics         jitter +-55ms    great 0 ok 0 miss 64 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+basics         skips every 5    great 0 ok 0 miss 64 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+high-od        perfect          great 0 ok 0 miss 48 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+high-od        jitter +-55ms    great 0 ok 0 miss 48 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+high-od        skips every 5    great 0 ok 0 miss 48 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+sv-and-kiai    perfect          great 0 ok 0 miss 42 | combo 0 max 0 | score 21 | rolls 2 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+sv-and-kiai    jitter +-55ms    great 0 ok 0 miss 42 | combo 0 max 0 | score 21 | rolls 2 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+sv-and-kiai    skips every 5    great 0 ok 0 miss 42 | combo 0 max 0 | score 21 | rolls 2 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
 == HA+DT (label HADT, x0.5600, rate 1.500)
 basics         perfect          great 32 ok 0 miss 0 | combo 32 max 32 | score 560000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 22 ok 10 miss 0 | combo 32 max 32 | score 367834 | rolls 0 swells 0 strong 0 | acc 84.3750 | err -4.32 ur 192.25 | hp 1.0000 | failed false
-basics         skips every 5    great 26 ok 0 miss 6 | combo 4 max 4 | score 247864 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+basics         jitter +-55ms    great 22 ok 10 miss 0 | combo 32 max 32 | score 345435 | rolls 0 swells 0 strong 0 | acc 84.3750 | err -4.32 ur 192.25 | hp 1.0000 | failed false
+basics         skips every 5    great 26 ok 0 miss 6 | combo 4 max 4 | score 240785 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 high-od        perfect          great 24 ok 0 miss 0 | combo 24 max 24 | score 561568 | rolls 0 swells 0 strong 8 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 10 ok 13 miss 1 | combo 5 max 18 | score 219743 | rolls 0 swells 0 strong 8 | acc 68.7500 | err -2.25 ur 183.23 | hp 0.6158 | failed false
-high-od        skips every 5    great 19 ok 0 miss 5 | combo 1 max 4 | score 235380 | rolls 0 swells 0 strong 6 | acc 79.1667 | err 0.00 ur 0.00 | hp 0.7478 | failed false
+high-od        jitter +-55ms    great 10 ok 13 miss 1 | combo 5 max 18 | score 186012 | rolls 0 swells 0 strong 8 | acc 68.7500 | err -2.25 ur 183.23 | hp 0.6158 | failed false
+high-od        skips every 5    great 19 ok 0 miss 5 | combo 1 max 4 | score 226635 | rolls 0 swells 0 strong 6 | acc 79.1667 | err 0.00 ur 0.00 | hp 0.7478 | failed false
 sv-and-kiai    perfect          great 30 ok 0 miss 0 | combo 30 max 30 | score 561187 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 18 ok 11 miss 1 | combo 13 max 16 | score 278107 | rolls 2 swells 0 strong 5 | acc 78.3333 | err -1.64 ur 182.36 | hp 0.9718 | failed false
-sv-and-kiai    skips every 5    great 24 ok 0 miss 6 | combo 3 max 4 | score 237391 | rolls 2 swells 0 strong 5 | acc 80.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+sv-and-kiai    jitter +-55ms    great 18 ok 11 miss 1 | combo 13 max 16 | score 262377 | rolls 2 swells 0 strong 5 | acc 78.3333 | err -1.64 ur 182.36 | hp 0.9718 | failed false
+sv-and-kiai    skips every 5    great 24 ok 0 miss 6 | combo 3 max 4 | score 229664 | rolls 2 swells 0 strong 5 | acc 80.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
 == RX+HR (label HRRX, x1.0600, rate 1.000)
 basics         perfect          great 64 ok 0 miss 0 | combo 64 max 64 | score 1060000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 580281 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -5.48 ur 303.95 | hp 0.8468 | failed false
-basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 451961 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
+basics         jitter +-55ms    great 35 ok 29 miss 0 | combo 64 max 64 | score 520407 | rolls 0 swells 0 strong 0 | acc 77.3438 | err -5.48 ur 303.95 | hp 0.8468 | failed false
+basics         skips every 5    great 52 ok 0 miss 12 | combo 4 max 4 | score 441254 | rolls 0 swells 0 strong 0 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.8534 | failed false
 high-od        perfect          great 48 ok 0 miss 0 | combo 48 max 48 | score 1065936 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 350761 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.93 ur 275.49 | hp 0.5706 | failed false
-high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 462957 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
+high-od        jitter +-55ms    great 19 ok 26 miss 3 | combo 12 max 23 | score 297347 | rolls 0 swells 0 strong 13 | acc 66.6667 | err -1.93 ur 275.49 | hp 0.5706 | failed false
+high-od        skips every 5    great 39 ok 0 miss 9 | combo 3 max 4 | score 451263 | rolls 0 swells 0 strong 13 | acc 81.2500 | err 0.00 ur 0.00 | hp 0.7211 | failed false
 sv-and-kiai    perfect          great 42 ok 0 miss 0 | combo 42 max 42 | score 1062247 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
-sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 390418 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 2.31 ur 275.82 | hp 0.7185 | failed false
-sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 457546 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false
+sv-and-kiai    jitter +-55ms    great 18 ok 22 miss 2 | combo 12 max 23 | score 336080 | rolls 2 swells 0 strong 6 | acc 69.0476 | err 2.31 ur 275.82 | hp 0.7185 | failed false
+sv-and-kiai    skips every 5    great 34 ok 0 miss 8 | combo 3 max 4 | score 445141 | rolls 2 swells 0 strong 5 | acc 80.9524 | err 0.00 ur 0.00 | hp 0.8870 | failed false

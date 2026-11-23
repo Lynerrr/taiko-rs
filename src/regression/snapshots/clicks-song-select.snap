@@ -2,14 +2,14 @@ screen song-select: Select, 16 areas
 Tab(0) @217,31 -> Select
 Tab(1) @295,31 -> Settings +"<  none found, Enter to pick  >" +"AUDIO" +"Card colour fade" +"Enter to move" +"Enter to open" +"GAMEPLAY" +35 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more
 Tab(2) @396,31 -> MpMenu +"127.0.0.1:9   no connection" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +"Name or email" +4 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more
-Tab(3) @498,31 -> Download +"Has leaderboard" +"Relevance" +"SORT" +"STATUS" +"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" +"maps from catboy.best / osu.direct" +5 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more
+Tab(3) @498,31 -> Download +"Has leaderboard" +"Relevance" +"SORT" +"STATUS" +"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" +"hide installed" +6 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more
 ModsButton @446,66 -> Select +"* FAVOURITES" +"+ Save" +"AC" +"AL" +"AS" +"AT" +162 more
 SortList @372,66 -> Select +"0" +"1" +"1 song in all sources" +"1.5-3" +"10+" +"2" +37 more
 TextField @172,66 -> Select +"type to search..." -"click to search (ctrl+f)..."
 SongHeader(0) @246,103 -> Play +"00000000" +"0pp" +"100.00%" +"1920x1080 (full screen)" -"." -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -44 more
 SongRow(0) @256,131 -> Play +"00000000" +"0pp" +"100.00%" +"1920x1080 (full screen)" -"." -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -44 more
 SelectLike @709,108 -> Select
-Preview @655,213 -> Preview +"AUTOPLAY PREVIEW" +"Back  (Esc)" +"PREVIEW" +"Pause" +"Playfield 1920x1080 (full screen)  (F5/F6)" +"Regression - basics [ba..." -"." -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -41 more
+Preview @655,213 -> Preview +"+" +"-" +"1.00x" +"AUTOPLAY PREVIEW" +"Back  (Esc)" +"PREVIEW" +3 more -"." -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -41 more
 BoardPage @760,74 -> Select +"< Preview" +"Local" +"No plays yet: finish one to set a score." +"Online" +"Website" -"0:00 / 0:10" -"0:09" -"200" -"3.08" -"32" -"5.0" -21 more
 Key(Enter) @655,425 -> Play +"00000000" +"0pp" +"100.00%" +"1920x1080 (full screen)" -"." -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -44 more
 SplitList @476,245 -> Select

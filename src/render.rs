@@ -259,6 +259,10 @@ pub const SHADE_ACROSS: f32 = 3.0;
 /// A plain shape's kind for `Canvas::shade_eased`: as `SHADE_ACROSS`, eased in and out (no edge
 /// shows where it starts or ends against something of its colour).
 pub const SHADE_EASED: f32 = 4.0;
+/// A plain shape's kind for `Canvas::ground_shade`: `fill` over it all, darker towards its
+/// edges up to `border`'s alpha.
+/// (Not 5: #643's frosted routes had that, and a test keeps it unused.)
+pub const GROUND_SHADE: f32 = 7.0;
 
 fn flip_x(sh: &mut Shape) {
     let sprite = |s: Sprite| SPRITE_BASE + s as usize as f32;
@@ -286,6 +290,97 @@ fn flip_x(sh: &mut Shape) {
             sprite(a)
         };
     }
+}
+
+/// `shapes` with each skin image's quad cut down to the part of its image the atlas kept
+/// (`Atlas::trims`), into `out`: the clear margins round it, which every pixel of went through
+/// the shader for nothing, are no longer drawn (a skin's `scorebar-bg` is often a whole screen of
+/// clear with the bar in a corner). What's drawn is the same, pixel for pixel. False (and `out`
+/// untouched) when the skin's images have no margins to cut.
+/// `shapes` as the GPU gets them, into `out`: skin images cut down (`trim_sprites`), and
+/// `hide` (a ground the background draws itself, `foldable_ground`) left out. False (and `out`
+/// meaningless) when they go as they are.
+fn drawn_shapes(
+    shapes: &[Shape],
+    trims: &PerSprite<[f32; 4]>,
+    hide: Option<usize>,
+    out: &mut Vec<Shape>,
+) -> bool {
+    let mut changed = trim_sprites(shapes, trims, out);
+    if let Some(i) = hide.filter(|&i| i < shapes.len()) {
+        if !changed {
+            out.clear();
+            out.extend_from_slice(shapes);
+            changed = true;
+        }
+        // Clear both ways: the vertex shader draws no pixels for it.
+        out[i].fill[3] = 0.0;
+        out[i].border[3] = 0.0;
+    }
+    changed
+}
+
+/// The frame's ground (`Canvas::ground_shade`, song select's) for the background to draw itself
+/// in the same pass, sparing a screen of pixels: its index in `shapes`. Only where that looks
+/// the same as its shape laid over the background: the bottom background layer (`bottom`: its
+/// opacity this frame, None without one) is opaque, so darkening each layer is darkening what
+/// they make together; the ground is the first thing seen over them and drawn plainly, not in a
+/// `cut` range (scissored or blurred), not the opaque rect; and nothing comes `between` (the
+/// music player's disc, a glitch).
+pub(crate) fn foldable_ground(
+    shapes: &[Shape],
+    bottom: Option<f32>,
+    cut: &[std::ops::Range<usize>],
+    opaque: Option<usize>,
+    between: bool,
+) -> Option<usize> {
+    if between || bottom.is_none_or(|a| a < 1.0) {
+        return None;
+    }
+    let i = shapes
+        .iter()
+        .position(|sh| sh.fill[3] > 0.0 || sh.border[3] > 0.0)?;
+    let sh = &shapes[i];
+    (sh.params[3] == GROUND_SHADE
+        && sh.angle == 0.0
+        && opaque != Some(i)
+        && !cut.iter().any(|r| r.contains(&i)))
+    .then_some(i)
+}
+
+pub(crate) fn trim_sprites(
+    shapes: &[Shape],
+    trims: &PerSprite<[f32; 4]>,
+    out: &mut Vec<Shape>,
+) -> bool {
+    if trims.iter().all(|t| *t == [0.0; 4]) {
+        return false;
+    }
+    out.clear();
+    out.extend(shapes.iter().map(|&sh| trim_sprite(sh, trims)));
+    true
+}
+
+fn trim_sprite(mut sh: Shape, trims: &PerSprite<[f32; 4]>) -> Shape {
+    // The shader's sprites: `SPRITE_BASE` + index, read as the nearest whole index.
+    let k = sh.params[3] - SPRITE_BASE;
+    if !(-0.5..SPRITES as f32 - 0.5).contains(&k) {
+        return sh;
+    }
+    let [l, t, r, b] = trims[k.round() as usize];
+    if [l, t, r, b] == [0.0; 4] {
+        return sh;
+    }
+    // In the shape's own frame (turned by its angle, mirrored by a negative half), the part
+    // kept sits `l` of the width in from the left and `t` of the height down from the top.
+    let (dx, dy) = ((l - r) * sh.half[0], (t - b) * sh.half[1]);
+    let (sin, cos) = sh.angle.sin_cos();
+    sh.center = [
+        sh.center[0] + dx * cos - dy * sin,
+        sh.center[1] + dx * sin + dy * cos,
+    ];
+    sh.half = [sh.half[0] * (1.0 - l - r), sh.half[1] * (1.0 - t - b)];
+    sh
 }
 
 /// What a skin says about laying its images out, besides their sizes.
@@ -345,6 +440,10 @@ pub struct Atlas {
     pub height: u32,
     pub rgba: Vec<u8>,
     pub sprites: PerSprite<Option<([f32; 4], [f32; 2])>>,
+    /// What each image lost to the clear margins cut off round it ([left, top, right, bottom],
+    /// as fractions of its width and height): its UV rect is the part kept, its size still the
+    /// whole image's. The renderer cuts its quads down to match (`trim_sprites`).
+    pub trims: PerSprite<[f32; 4]>,
     pub layout: SkinLayout,
 }
 
@@ -448,11 +547,17 @@ pub struct Renderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
+    opaque_pipeline: wgpu::RenderPipeline,
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     /// The shapes' bind group: globals, then the skin atlas (its UV rects, texture and sampler).
     shape_layout: wgpu::BindGroupLayout,
     sprite_rects: wgpu::Buffer,
+    /// The skin's `Atlas::trims`, and the frame's shapes cut down to them on their way up.
+    sprite_trims: PerSprite<[f32; 4]>,
+    trimmed: Vec<Shape>,
+    /// The ground shape the background drew itself last frame (`foldable_ground`).
+    folded_ground: Option<usize>,
     sampler: wgpu::Sampler,
     /// The font's glyphs (`font::atlas`), for text quads.
     font_view: wgpu::TextureView,
@@ -468,6 +573,7 @@ pub struct Renderer {
     capacity: usize,
     supported_modes: Vec<wgpu::PresentMode>,
     capture_pipeline: wgpu::RenderPipeline,
+    capture_opaque_pipeline: wgpu::RenderPipeline,
     /// Map background: drawn as a full-screen "cover" image under the shapes.
     /// Indexed [capture][opaque]: an opaque layer is drawn without blending, so the GPU doesn't
     /// read back the pixels under it.
@@ -805,6 +911,7 @@ struct Target<'a> {
     size: (u32, u32),
     clips: &'a [(std::ops::Range<usize>, [u32; 4])],
     hole: Option<[u32; 4]>,
+    opaque_shape: Option<u32>,
     /// Shapes drawn through the blur (`Canvas::blur_since`, already in `BlurFx`): the blurred
     /// image goes in their place among the others.
     blur: Option<std::ops::Range<u32>>,
@@ -981,8 +1088,17 @@ fn shrink_blur(src: &[u8], w: u32, h: u32, comps: usize, sw: u32, sh: u32) -> Ve
         .collect()
 }
 
+/// The background's shader, with `Canvas::ground_shade`'s alpha in it.
+fn bg_shader() -> String {
+    BG_SHADER.replace("GROUND_ALPHA_FN", GROUND_ALPHA_WGSL)
+}
+
+/// Floats in a background layer's uniform: its window and look, then the ground it draws itself
+/// (`foldable_ground`): colour and tint, the vignette's strength, its rect in pixels.
+const BG_UNIFORM_FLOATS: usize = 20;
+
 const BG_SHADER: &str = r#"
-struct Bg { uv: vec4<f32>, params: vec4<f32> };
+struct Bg { uv: vec4<f32>, params: vec4<f32>, ground: vec4<f32>, ground_edge: vec4<f32>, ground_rect: vec4<f32> };
 @group(0) @binding(0) var<uniform> bg: Bg;
 @group(0) @binding(1) var luma: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
@@ -1011,20 +1127,44 @@ fn to_rgb(y: f32, cbcr: vec2<f32>) -> vec3<f32> {
 @fragment
 fn fs(i: V) -> @location(0) vec4<f32> {
     // params: brightness, opacity (for cross-fading into a new background), how far into its
-    // blurred copy (the idle screen).
-    // Most of the time (a song, song select) nothing is blurred: the blurred copy's two reads are
-    // skipped then, and the picture (the whole screen, every frame) costs about half as much.
+    // blurred copy (song select's main look and the idle screen).
+    // In a song (z == 0) only the sharp planes are read; in song select and idle (z >= 1) only
+    // the small blurred planes are read; only while fading between them are both read.
     // The image has no mipmaps, so level 0 is what `textureSample` read too.
-    var rgb = to_rgb(textureSampleLevel(luma, samp, i.uv, 0.0).r, textureSampleLevel(chroma, samp, i.uv, 0.0).rg);
-    if bg.params.z > 0.0 {
-        let soft = to_rgb(
+    var rgb: vec3<f32>;
+    if bg.params.z >= 1.0 {
+        rgb = to_rgb(
             textureSampleLevel(luma_blur, samp, i.uv, 0.0).r,
             textureSampleLevel(chroma_blur, samp, i.uv, 0.0).rg,
         );
-        rgb = mix(rgb, soft, bg.params.z);
+    } else {
+        rgb = to_rgb(
+            textureSampleLevel(luma, samp, i.uv, 0.0).r,
+            textureSampleLevel(chroma, samp, i.uv, 0.0).rg,
+        );
+        if bg.params.z > 0.0 {
+            let soft = to_rgb(
+                textureSampleLevel(luma_blur, samp, i.uv, 0.0).r,
+                textureSampleLevel(chroma_blur, samp, i.uv, 0.0).rg,
+            );
+            rgb = mix(rgb, soft, bg.params.z);
+        }
     }
-    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * bg.params.x, bg.params.y);
+    var out = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * bg.params.x;
+    // Song select's ground over it, as its shape would have laid it over (`foldable_ground`).
+    if (bg.ground.a > 0.0 || bg.ground_edge.x > 0.0) {
+        let r = bg.ground_rect;
+        let half = (r.zw - r.xy) * 0.5;
+        let local = i.pos.xy - (r.xy + half);
+        let q = abs(local) - half;
+        let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0);
+        let a = ground_alpha(local, half, bg.ground.a, bg.ground_edge.x) * clamp(0.5 - d, 0.0, 1.0);
+        out = mix(out, bg.ground.rgb, a);
+    }
+    return vec4<f32>(out, bg.params.y);
 }
+
+GROUND_ALPHA_FN
 "#;
 
 /// The background once more, as the music player's turning disc: a circle of it, cut square from
@@ -1140,6 +1280,7 @@ fn shape_binding_stages(binding: u32) -> wgpu::ShaderStages {
 
 fn shape_shader() -> String {
     SHADER
+        .replace("GROUND_ALPHA_FN", GROUND_ALPHA_WGSL)
         .replace("SPRITE_COUNT", &SPRITES.to_string())
         .replace("SPRITE_LAST", &(SPRITES - 1).to_string())
         .replace("CUSTOM_BASE", &format!("{:.1}", crate::system_font::BASE))
@@ -1201,6 +1342,36 @@ pub const CARD_ASPECT: f32 = CARD_CELL[0] as f32 / CARD_CELL[1] as f32;
 const CARD_BASE: f32 = 100_000.0;
 const _: () = assert!(CARD_BASE > PICTURE_BASE + PICTURE_SLOTS as f32);
 
+/// `Canvas::ground_shade`'s alpha, shared by the shapes' shader and the background's (which draws
+/// it itself when it can, `foldable_ground`).
+const GROUND_ALPHA_WGSL: &str = r#"
+// `Canvas::ground_shade`'s alpha at `local` (from the middle of a rect `half` in size): `dim`
+// over it all and, up to `edge`, eased in from each side over a fifth of its width and in eight
+// steps from the top and the bottom over 16% of its height, half as strong; all of them laid
+// over one another as separate shapes of one colour would be.
+fn ground_alpha(local: vec2<f32>, half: vec2<f32>, dim: f32, edge: f32) -> f32 {
+    let size = 2.0 * half;
+    let p = local + half;
+    let side = max(size.x * 0.2, 1e-4);
+    let left = edge * (1.0 - smoothstep(0.0, 1.0, clamp(p.x / side, 0.0, 1.0)));
+    let right = edge * (1.0 - smoothstep(0.0, 1.0, clamp((size.x - p.x) / side, 0.0, 1.0)));
+    let band = max(size.y * 0.02, 1e-4);
+    var top = 0.0;
+    var bottom = 0.0;
+    let kt = floor(p.y / band);
+    if (kt >= 0.0 && kt < 8.0) {
+        let f = 1.0 - (kt + 0.5) / 8.0;
+        top = edge * f * f * (3.0 - 2.0 * f) / 2.0;
+    }
+    let kb = floor((size.y - p.y) / band);
+    if (kb >= 0.0 && kb < 8.0) {
+        let f = 1.0 - (kb + 0.5) / 8.0;
+        bottom = edge * f * f * (3.0 - 2.0 * f) / 2.0;
+    }
+    return 1.0 - (1.0 - dim) * (1.0 - left) * (1.0 - right) * (1.0 - top) * (1.0 - bottom);
+}
+"#;
+
 const SHADER: &str = r#"
 struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32, origin: vec2<f32>, _pad2: vec2<f32> };
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -1234,7 +1405,8 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     let corner = vec2<f32>(f32(vi & 1u), f32((vi >> 1u) & 1u)) * 2.0 - 1.0;
     // Everything below is in physical pixels so anti-aliasing is exactly one pixel wide.
     let half_px = inst.half * g.px_per_unit;
-    let pad = 1.5 + max(inst.params.z, 0.0) * g.px_per_unit;
+    let has_glow = inst.params.w >= -0.5 && inst.params.w <= 9.5;
+    let pad = 1.5 + select(0.0, max(inst.params.z, 0.0) * g.px_per_unit, has_glow);
     let local = corner * (half_px + vec2<f32>(pad));
     let center_px = inst.center * g.px_per_unit + g.origin;
     // Rotated shapes turn their quad; the fragment works in the shape's own (unrotated) frame.
@@ -1258,6 +1430,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     return out;
 }
 
+GROUND_ALPHA_FN
 fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
     let q = abs(p) - b + vec2<f32>(r);
     return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
@@ -1277,6 +1450,16 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 fn shade(in: VOut) -> vec4<f32> {
     if (in.params.w < -99999.5) {
         // A card's picture (premultiplied): its strip stretched over the quad, tinted by fill.
+        // Skip sampling the large card atlas across the faded-out left portion.
+        let across = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
+        var come = 1.0;
+        if (in.border.w > 0.0) {
+            if (across <= in.border.z) {
+                return vec4<f32>(0.0);
+            }
+            let f = clamp((across - in.border.z) / max(in.border.w - in.border.z, 1e-4), 0.0, 1.0);
+            come = f * f * (3.0 - 2.0 * f);
+        }
         let slot = u32(-in.params.w - 99999.5);
         let per = CARD_SIDE_Xu / CARD_CELL_Xu;
         let cell = vec2<f32>(f32(slot % per), f32(slot / per));
@@ -1290,17 +1473,9 @@ fn shade(in: VOut) -> vec4<f32> {
         let side = vec2<f32>(f32(CARD_SIDE_X), f32(CARD_SIDE_Y));
         var t = textureSampleLevel(cards, samp, (cell + uv) * size / side, 0.0);
         // Its colour going to grey across it (`border`: how grey at the left and right edges).
-        let across = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
         let grey = mix(in.border.x, in.border.y, across);
         let luma = dot(t.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
         t = vec4<f32>(mix(t.rgb, vec3<f32>(luma), grey), t.a);
-        // Its alpha coming in across it, eased (`border.zw`: from where to where of its width;
-        // all of it shown when the second is 0): no edge where it starts.
-        var come = 1.0;
-        if (in.border.w > 0.0) {
-            let f = clamp((across - in.border.z) / max(in.border.w - in.border.z, 1e-4), 0.0, 1.0);
-            come = f * f * (3.0 - 2.0 * f);
-        }
         let r = min(in.params.x, min(in.half.x, in.half.y));
         let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
         return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover * come;
@@ -1316,10 +1491,16 @@ fn shade(in: VOut) -> vec4<f32> {
         var cover = 1.0;
         if (in.params.y > 0.0) {
             // `Canvas::picture_cover_round_top`: the rect it covers is .yz half, its top
-            // corners .x round.
+            // corners .x round; when `border.y > 0`, fades out downwards from `border.x` to
+            // `border.y` of its height (eased).
             let b = vec2<f32>(in.params.y, in.params.z);
             let r = select(0.0, min(in.params.x, min(b.x, b.y)), in.local.y < 0.0);
             cover = clamp(0.5 - sd_round_box(in.local, b, r), 0.0, 1.0);
+            if (in.border.y > 0.0) {
+                let down = clamp(in.local.y / (2.0 * b.y) + 0.5, 0.0, 1.0);
+                let t = clamp((down - in.border.x) / max(in.border.y - in.border.x, 1e-4), 0.0, 1.0);
+                cover *= 1.0 - t * t * (3.0 - 2.0 * t);
+            }
         }
         return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a * cover;
     }
@@ -1400,10 +1581,21 @@ fn shade(in: VOut) -> vec4<f32> {
             let c = mix(in.fill, in.border, u);
             color = vec4<f32>(c.rgb, c.a * coverage);
         } else if (in.params.w > 3.5 && in.params.w < 4.5) {
-            // `Canvas::shade_eased`: as across, eased in and out.
+            // `Canvas::shade_eased`: as across, eased in and out; with `params.y > 0`
+            // (`shade_eased_fade_down`), also fades out downwards over its bottom `params.y`
+            // pixels.
             let u = clamp(in.local.x / (2.0 * in.half.x) + 0.5, 0.0, 1.0);
             let c = mix(in.fill, in.border, smoothstep(0.0, 1.0, u));
-            color = vec4<f32>(c.rgb, c.a * coverage);
+            var vfade = 1.0;
+            if (in.params.y > 0.0) {
+                let whole = 1.0 - in.params.y / max(2.0 * in.half.y, 1e-4);
+                let down = clamp(in.local.y / (2.0 * in.half.y) + 0.5, 0.0, 1.0);
+                let t = clamp((down - whole) / max(1.0 - whole, 1e-4), 0.0, 1.0);
+                vfade = 1.0 - t * t * (3.0 - 2.0 * t);
+            }
+            color = vec4<f32>(c.rgb, c.a * coverage * vfade);
+        } else if (in.params.w > 6.5 && in.params.w < 7.5) {
+            color = vec4<f32>(in.fill.rgb, ground_alpha(in.local, in.half, in.fill.a, in.border.a) * coverage);
         } else {
             let bw = in.params.y;
             let inner = clamp(0.5 - (d + bw), 0.0, 1.0);
@@ -1669,7 +1861,7 @@ impl Renderer {
             immediate_size: 0,
         });
         let attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32];
-        let make_pipeline = |format: wgpu::TextureFormat| {
+        let make_pipeline = |format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("shapes"),
                 layout: Some(&layout),
@@ -1695,7 +1887,7 @@ impl Renderer {
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        blend,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
@@ -1703,9 +1895,14 @@ impl Renderer {
                 cache: None,
             })
         };
-        let pipeline = make_pipeline(format);
+        let pipeline = make_pipeline(format, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING));
+        let opaque_pipeline = make_pipeline(format, None);
         // Screenshots render into an offscreen target, independent of what the compositor allows.
-        let capture_pipeline = make_pipeline(wgpu::TextureFormat::Rgba8Unorm);
+        let capture_pipeline = make_pipeline(
+            wgpu::TextureFormat::Rgba8Unorm,
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+        );
+        let capture_opaque_pipeline = make_pipeline(wgpu::TextureFormat::Rgba8Unorm, None);
         // Background pipelines (one per target format, like the shape pipelines).
         let bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("background"),
@@ -1771,7 +1968,7 @@ impl Renderer {
         });
         let bg_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("background"),
-            source: wgpu::ShaderSource::Wgsl(BG_SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(bg_shader().into()),
         });
         let bg_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
@@ -2007,10 +2204,14 @@ impl Renderer {
             queue,
             config,
             pipeline,
+            opaque_pipeline,
             globals,
             bind_group,
             shape_layout: bgl,
             sprite_rects,
+            sprite_trims: PerSprite::default(),
+            trimmed: Vec::new(),
+            folded_ground: None,
             sampler,
             font_view,
             font_texture,
@@ -2023,6 +2224,7 @@ impl Renderer {
             capacity,
             supported_modes: caps.present_modes,
             capture_pipeline,
+            capture_opaque_pipeline,
             bg_pipelines,
             disc_pipelines,
             disc: None,
@@ -2068,6 +2270,33 @@ impl Renderer {
         avg
     }
 
+    /// `shapes` into the instance buffer as `drawn_shapes` makes them.
+    fn upload_shapes(&mut self, shapes: &[Shape], hide: Option<usize>) {
+        let mut out = std::mem::take(&mut self.trimmed);
+        let drawn = if drawn_shapes(shapes, &self.sprite_trims, hide, &mut out) {
+            &out[..]
+        } else {
+            shapes
+        };
+        self.queue
+            .write_buffer(&self.instances, 0, bytemuck::cast_slice(drawn));
+        self.trimmed = out;
+    }
+
+    /// `shapes` as the GPU got them last frame (`drawn_shapes`): what `TAIKO_PROFILE` measures
+    /// the frame's overdraw by.
+    pub fn as_drawn<'a>(&self, shapes: &'a [Shape]) -> std::borrow::Cow<'a, [Shape]> {
+        let hide = self
+            .folded_ground
+            .filter(|&i| shapes.get(i).is_some_and(|sh| sh.params[3] == GROUND_SHADE));
+        let mut out = Vec::new();
+        if drawn_shapes(shapes, &self.sprite_trims, hide, &mut out) {
+            std::borrow::Cow::Owned(out)
+        } else {
+            std::borrow::Cow::Borrowed(shapes)
+        }
+    }
+
     /// The most shapes a frame can have: what the graphics card takes in one buffer. A frame with
     /// more loses the rest for that frame, rather than the game crashing on it.
     fn shape_limit(&self) -> usize {
@@ -2085,6 +2314,7 @@ impl Renderer {
 
     /// Uploads a skin's images; an empty atlas removes them.
     pub fn set_sprites(&mut self, atlas: &Atlas) {
+        self.sprite_trims = atlas.trims;
         self.bind_group = Self::shape_bind_group(
             &self.device,
             &self.queue,
@@ -2366,7 +2596,7 @@ impl Renderer {
         // Each layer has its own uniform: its crop depends on its own aspect.
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("background"),
-            size: 32,
+            size: (BG_UNIFORM_FLOATS * 4) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -2633,7 +2863,7 @@ impl Renderer {
         clear: [f64; 3],
         capture: bool,
         clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
-        opaque: Option<[f32; 4]>,
+        opaque: Option<(usize, [f32; 4])>,
     ) -> Option<(u32, u32, Vec<u8>)> {
         // What the shapes are drawn at: the game's size, or half of it to be scaled up after. Either
         // goes through an image of its own to get to its place on a black screen.
@@ -2679,16 +2909,56 @@ impl Renderer {
         let globals = Globals::new([w as f32, h as f32], ah / VIRTUAL_HEIGHT, [ax, ay]);
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
-        if !shapes.is_empty() {
-            self.queue
-                .write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
-        }
         if self.bg_mix >= 1.0 {
             self.bg_prev = None;
         }
         // The old background stays opaque under the new one (or fades out if there's none).
         let mix = self.bg_mix.clamp(0.0, 1.0);
         let prev_alpha = if self.bg.is_some() { 1.0 } else { 1.0 - mix };
+        // Song select's ground drawn by the background itself where that looks the same: one
+        // screen of pixels less.
+        let bottom = match (&self.bg_prev, &self.bg) {
+            _ if self.bg_brightness <= 0.0 => None,
+            (Some(_), _) => Some(prev_alpha),
+            (None, Some(_)) => Some(mix),
+            (None, None) => None,
+        };
+        let cut: Vec<std::ops::Range<usize>> = clip
+            .iter()
+            .map(|(r, _)| r.clone())
+            .chain(self.blur.as_ref().map(|(r, _)| r.clone()))
+            .collect();
+        let fold = foldable_ground(
+            shapes,
+            bottom,
+            &cut,
+            opaque.map(|(i, _)| i),
+            self.disc.is_some() || glitch.is_some(),
+        );
+        self.folded_ground = fold;
+        let ground = fold.map_or([0.0; 12], |i| {
+            let sh = &shapes[i];
+            let ppu = ah / VIRTUAL_HEIGHT;
+            let [x, y] = [ax + sh.center[0] * ppu, ay + sh.center[1] * ppu];
+            let [hw, hh] = [sh.half[0] * ppu, sh.half[1] * ppu];
+            [
+                sh.fill[0],
+                sh.fill[1],
+                sh.fill[2],
+                sh.fill[3],
+                sh.border[3],
+                0.0,
+                0.0,
+                0.0,
+                x - hw,
+                y - hh,
+                x + hw,
+                y + hh,
+            ]
+        });
+        if !shapes.is_empty() {
+            self.upload_shapes(shapes, fold);
+        }
         let screen = w as f32 / h.max(1) as f32;
         // Leaning with the pointer: drawn as much closer as it can lean, moved by the lean.
         let [px, py, room] = self.bg_pan;
@@ -2708,7 +2978,8 @@ impl Renderer {
                     (1.0, l.aspect / screen)
                 };
                 let [u0, v0, u1, v1] = bg_window(u, v, zoom, pan);
-                let uniform = [
+                let mut uniform = [0.0f32; BG_UNIFORM_FLOATS];
+                uniform[..8].copy_from_slice(&[
                     u0,
                     v0,
                     u1,
@@ -2717,7 +2988,8 @@ impl Renderer {
                     alpha,
                     self.bg_blur.clamp(0.0, 1.0),
                     0.0,
-                ];
+                ]);
+                uniform[8..].copy_from_slice(&ground);
                 self.queue
                     .write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
                 l.alpha = alpha;
@@ -2735,7 +3007,7 @@ impl Renderer {
         }
         // The pixels wholly inside the opaque rect (its anti-aliased edge still shows what is
         // under it).
-        let hole = opaque.and_then(|[x, y, rw, rh]| {
+        let hole = opaque.and_then(|(_, [x, y, rw, rh])| {
             let (sw, sh) = (w as f32, h as f32);
             let (x0, y0) = ((ax + x * aw).ceil() + 1.0, (ay + y * ah).ceil() + 1.0);
             let (x1, y1) = (
@@ -2745,6 +3017,10 @@ impl Renderer {
             let (x0, y0, x1, y1) = (x0.max(0.0), y0.max(0.0), x1.min(sw), y1.min(sh));
             (x1 > x0 && y1 > y0).then_some([x0 as u32, y0 as u32, x1 as u32, y1 as u32])
         });
+        let opaque_shape = hole
+            .and(opaque)
+            .and_then(|(i, _)| u32::try_from(i).ok())
+            .filter(|&i| (i as usize) < shapes.len());
         if let Some(t) = &mut self.gpu_timer {
             t.begin(&self.device);
         }
@@ -2762,6 +3038,7 @@ impl Renderer {
             size: (w, h),
             clips: &clip,
             hole,
+            opaque_shape,
             blur: blur.map(|(r, _)| r),
         };
         match self.low.as_ref().filter(|_| through_image) {
@@ -2938,8 +3215,7 @@ impl Renderer {
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
         if !shapes.is_empty() {
-            self.queue
-                .write_buffer(&self.instances, 0, bytemuck::cast_slice(shapes));
+            self.upload_shapes(shapes, None);
         }
         let screen = w as f32 / h.max(1) as f32;
         if let Some(l) = &mut self.bg {
@@ -2948,7 +3224,9 @@ impl Renderer {
             } else {
                 (1.0, l.aspect / screen)
             };
-            let uniform = [
+            // No ground of its own: here its shape draws it (`upload_shapes` with nothing hidden).
+            let mut uniform = [0.0f32; BG_UNIFORM_FLOATS];
+            uniform[..8].copy_from_slice(&[
                 (1.0 - u) / 2.0,
                 (1.0 - v) / 2.0,
                 (1.0 + u) / 2.0,
@@ -2957,7 +3235,7 @@ impl Renderer {
                 1.0,
                 0.0,
                 0.0,
-            ];
+            ]);
             self.queue
                 .write_buffer(&l.uniform, 0, bytemuck::cast_slice(&uniform));
             l.alpha = 1.0;
@@ -2993,6 +3271,7 @@ impl Renderer {
                 size: (w, h),
                 clips: &clip,
                 hole: None,
+                opaque_shape: None,
                 blur: None,
             },
             None,
@@ -3381,7 +3660,7 @@ impl Renderer {
         if (count as u32) > at {
             runs.push((at..count as u32, None));
         }
-        let draw =
+        let draw_plain =
             |pass: &mut wgpu::RenderPass<'_>, span: std::ops::Range<u32>, cut: Option<[u32; 4]>| {
                 if span.start >= span.end {
                     return;
@@ -3394,6 +3673,48 @@ impl Renderer {
                     pass.set_scissor_rect(0, 0, size.0, size.1);
                 }
             };
+        let draw = |pass: &mut wgpu::RenderPass<'_>,
+                    span: std::ops::Range<u32>,
+                    cut: Option<[u32; 4]>| {
+            if span.start >= span.end {
+                return;
+            }
+            if let (Some(oi), Some([hx0, hy0, hx1, hy1])) = (target.opaque_shape, target.hole)
+                && span.contains(&oi)
+            {
+                let [ox, oy, ow, oh] = cut.unwrap_or([0, 0, size.0, size.1]);
+                let (ox1, oy1) = (ox + ow, oy + oh);
+                let (ix0, iy0, ix1, iy1) = (hx0.max(ox), hy0.max(oy), hx1.min(ox1), hy1.min(oy1));
+                if ix1 > ix0 && iy1 > iy0 {
+                    draw_plain(pass, span.start..oi, cut);
+                    // Keep blending on the 1px anti-aliased edge bands around `hole`.
+                    for [bx, by, bw, bh] in [
+                        [ox, oy, ow, iy0 - oy],
+                        [ox, iy1, ow, oy1 - iy1],
+                        [ox, iy0, ix0 - ox, iy1 - iy0],
+                        [ix1, iy0, ox1 - ix1, iy1 - iy0],
+                    ] {
+                        if bw > 0 && bh > 0 {
+                            pass.set_scissor_rect(bx, by, bw, bh);
+                            pass.draw(0..4, oi..oi + 1);
+                        }
+                    }
+                    // Draw the opaque interior without framebuffer read-modify-write blending.
+                    pass.set_pipeline(if capture {
+                        &self.capture_opaque_pipeline
+                    } else {
+                        &self.opaque_pipeline
+                    });
+                    pass.set_scissor_rect(ix0, iy0, ix1 - ix0, iy1 - iy0);
+                    pass.draw(0..4, oi..oi + 1);
+                    shapes(pass);
+                    pass.set_scissor_rect(0, 0, size.0, size.1);
+                    draw_plain(pass, oi + 1..span.end, cut);
+                    return;
+                }
+            }
+            draw_plain(pass, span, cut);
+        };
         // The blurred shapes aren't drawn themselves: their blurred image goes where they start.
         let blur = target.blur.clone().zip(self.blur_fx.as_ref());
         let (from, to) = blur
@@ -4643,7 +4964,8 @@ impl<H> Canvas<H> {
     }
 
     /// `picture_cover_clipped` with the top corners of `rect` `radius` round (a banner at the
-    /// top of a rounded panel); its bottom is wherever `clip` cuts it.
+    /// top of a rounded panel); its bottom is wherever `clip` cuts it. When `fade_from` is
+    /// `Some(from)`, fades out downwards (eased) from `from` to the bottom of `rect`.
     pub fn picture_cover_round_top(
         &mut self,
         path: &std::path::Path,
@@ -4651,6 +4973,7 @@ impl<H> Canvas<H> {
         clip: [f32; 4],
         tint: [f32; 4],
         radius: f32,
+        fade_from: Option<f32>,
     ) -> bool {
         let start = self.shapes.len();
         let drawn = self.picture_cover_clipped(path, rect, clip, tint);
@@ -4658,6 +4981,9 @@ impl<H> Canvas<H> {
             sh.params[0] = radius;
             sh.params[1] = rect[2] / 2.0;
             sh.params[2] = rect[3] / 2.0;
+            if let Some(from) = fade_from {
+                sh.border = [from.clamp(0.0, 1.0), 1.0, 0.0, 0.0];
+            }
         }
         drawn
     }
@@ -4763,6 +5089,45 @@ impl<H> Canvas<H> {
             fill: left,
             border: right,
             params: [radius, 0.0, 0.0, SHADE_EASED],
+            angle: 0.0,
+        });
+    }
+
+    /// `fill` over `[x, y]`, `[w, h]`, darker towards its edges up to `edge`'s alpha (of
+    /// `fill`'s colour): eased in from each side over a fifth of its width, and in eight steps
+    /// from the top and the bottom over 16% of its height, half as strong (`style::ground`). One
+    /// shape draws each pixel once where a tint and shades and bands over it drew it some three
+    /// times, which on a slow graphics chip was a good part of song select's frame.
+    pub fn ground_shade(&mut self, [x, y]: [f32; 2], [w, h]: [f32; 2], fill: [f32; 4], edge: f32) {
+        let mut border = fill;
+        border[3] = edge;
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [w / 2.0, h / 2.0],
+            fill,
+            border,
+            params: [0.0, 0.0, 0.0, GROUND_SHADE],
+            angle: 0.0,
+        });
+    }
+
+    /// As `shade_eased`, also fading out downwards (eased) from `whole` (0 to 1 of `h`) to the
+    /// bottom edge, in one shape.
+    pub fn shade_eased_fade_down(
+        &mut self,
+        [x, y]: [f32; 2],
+        [w, h]: [f32; 2],
+        radius: f32,
+        left: [f32; 4],
+        right: [f32; 4],
+        whole: f32,
+    ) {
+        self.shapes.push(Shape {
+            center: [x + w / 2.0, y + h / 2.0],
+            half: [w / 2.0, h / 2.0],
+            fill: left,
+            border: right,
+            params: [radius, (1.0 - whole).clamp(0.0, 1.0) * h, 0.0, SHADE_EASED],
             angle: 0.0,
         });
     }
@@ -5086,9 +5451,10 @@ impl<H> Canvas<H> {
     pub fn fade_between(&mut self, start: usize, end: usize, alpha: f32, dim: f32) {
         let end = end.min(self.shapes.len());
         for sh in &mut self.shapes[start.min(end)..end] {
-            // A card's picture's `border` isn't a colour (how grey it goes, where it comes in).
-            let card = sh.params[3] < -CARD_BASE + 0.5;
-            let cols: &mut [&mut [f32; 4]] = if card {
+            // Map and card pictures store shader parameters in `border` (vertical fade range,
+            // greyness/arrival sweep) rather than a colour.
+            let data_border = sh.params[3] < -PICTURE_BASE + 0.5;
+            let cols: &mut [&mut [f32; 4]] = if data_border {
                 &mut [&mut sh.fill]
             } else {
                 &mut [&mut sh.fill, &mut sh.border]
@@ -5823,37 +6189,43 @@ mod tests {
 
     #[test]
     fn a_sharp_background_never_reads_its_blurred_copy() {
-        // The background covers the screen every frame: reading the blurred copy too, at no blur
-        // (a song, song select), doubled what it cost a weak GPU.
-        let module = naga::front::wgsl::parse_str(super::BG_SHADER).unwrap();
-        let blurred: Vec<_> = module
-            .global_variables
-            .iter()
-            .filter(|(_, g)| matches!(g.name.as_deref(), Some("luma_blur" | "chroma_blur")))
-            .map(|(h, _)| h)
-            .collect();
-        assert_eq!(blurred.len(), 2);
+        // The background covers the screen every frame: reading all four planes unconditionally
+        // doubled what it cost a weak GPU. Sharp frames (a song) read only the sharp planes, and
+        // fully blurred frames (song select's main look, idle) read only the small blurred planes.
+        let module = naga::front::wgsl::parse_str(&super::bg_shader()).unwrap();
+        let find_globals = |names: &[&str]| -> Vec<_> {
+            module
+                .global_variables
+                .iter()
+                .filter(|(_, g)| g.name.as_deref().is_some_and(|n| names.contains(&n)))
+                .map(|(h, _)| h)
+                .collect()
+        };
+        let sharp = find_globals(&["luma", "chroma"]);
+        let blurred = find_globals(&["luma_blur", "chroma_blur"]);
+        assert_eq!((sharp.len(), blurred.len()), (2, 2));
         let fs = &module
             .entry_points
             .iter()
             .find(|e| e.name == "fs")
             .unwrap()
             .function;
-        // The expressions that read it, by index.
-        let reads: Vec<usize> = fs
-            .expressions
-            .iter()
-            .filter(|(_, e)| match e {
-                naga::Expression::ImageSample { image, .. } => matches!(
-                    fs.expressions[*image],
-                    naga::Expression::GlobalVariable(g) if blurred.contains(&g)
-                ),
-                _ => false,
-            })
-            .map(|(h, _)| h.index())
-            .collect();
-        // How many of them an `Emit` evaluates.
-        let evaluated = |s: &naga::Statement| match s {
+        let reads_in = |vars: &[_]| -> Vec<usize> {
+            fs.expressions
+                .iter()
+                .filter(|(_, e)| match e {
+                    naga::Expression::ImageSample { image, .. } => matches!(
+                        fs.expressions[*image],
+                        naga::Expression::GlobalVariable(g) if vars.contains(&g)
+                    ),
+                    _ => false,
+                })
+                .map(|(h, _)| h.index())
+                .collect()
+        };
+        let sharp_reads = reads_in(&sharp);
+        let blur_reads = reads_in(&blurred);
+        let evaluated = |reads: &[usize], s: &naga::Statement| match s {
             naga::Statement::Emit(range) => {
                 let r = range.index_range();
                 reads
@@ -5863,23 +6235,44 @@ mod tests {
             }
             _ => 0,
         };
-        let (mut always, mut sometimes) = (0, 0);
-        for statement in fs.body.iter() {
-            always += evaluated(statement);
-            if let naga::Statement::If { accept, .. } = statement {
-                sometimes += accept.iter().map(evaluated).sum::<usize>();
-            }
-        }
-        assert_eq!(always, 0, "the blurred copy is read only when blurring");
-        assert_eq!(sometimes, 2, "and then both its planes");
+        let shallow = |reads: &[usize], stmts: &[naga::Statement]| -> usize {
+            stmts.iter().map(|s| evaluated(reads, s)).sum()
+        };
+        // Nothing is read unconditionally at the function's top level.
+        assert_eq!(shallow(&sharp_reads, &fs.body), 0);
+        assert_eq!(shallow(&blur_reads, &fs.body), 0);
+        let (accept, reject) = fs
+            .body
+            .iter()
+            .find_map(|s| match s {
+                naga::Statement::If { accept, reject, .. } => Some((accept, reject)),
+                _ => None,
+            })
+            .expect("top-level blur check");
+        // Fully blurred (`z >= 1.0`): reads only the blurred copy, never the sharp one.
+        assert_eq!(shallow(&blur_reads, accept), 2);
+        assert_eq!(shallow(&sharp_reads, accept), 0);
+        // Sharp or blending (`else`): reads the sharp copy, and blurred only inside `z > 0.0`.
+        assert_eq!(shallow(&sharp_reads, reject), 2);
+        assert_eq!(shallow(&blur_reads, reject), 0);
+        let inner_accept = reject
+            .iter()
+            .find_map(|s| match s {
+                naga::Statement::If { accept, .. } => Some(accept),
+                _ => None,
+            })
+            .expect("inner partial-blur check");
+        assert_eq!(shallow(&blur_reads, inner_accept), 2);
+        assert_eq!(shallow(&sharp_reads, inner_accept), 0);
     }
 
     #[test]
     fn shaders_compile() {
         let shapes = super::shape_shader();
+        let background = super::bg_shader();
         for (name, src) in [
             ("shapes", shapes.as_str()),
-            ("background", super::BG_SHADER),
+            ("background", background.as_str()),
             ("disc", super::DISC_SHADER),
             ("upscale", super::UPSCALE_SHADER),
             ("blur", super::BLUR_SHADER),
@@ -5899,6 +6292,143 @@ mod tests {
 #[cfg(test)]
 mod shape_limit_tests {
     use super::*;
+
+    /// Where in its image (in the image's own pixels) the sprite shape `sh` drawn over the atlas
+    /// rect for `[x0, y0, w, h]` of it samples at screen point `p`, as the shader works it out;
+    /// None where it draws nothing.
+    fn sampled(sh: &Shape, part: [f32; 4], p: [f32; 2]) -> Option<[f32; 2]> {
+        let (sin, cos) = sh.angle.sin_cos();
+        let (dx, dy) = (p[0] - sh.center[0], p[1] - sh.center[1]);
+        let local = [dx * cos + dy * sin, -dx * sin + dy * cos];
+        let uv = [
+            local[0] / (2.0 * sh.half[0]) + 0.5,
+            local[1] / (2.0 * sh.half[1]) + 0.5,
+        ];
+        uv.iter()
+            .all(|u| (0.0..=1.0).contains(u))
+            .then(|| [part[0] + uv[0] * part[2], part[1] + uv[1] * part[3]])
+    }
+
+    #[test]
+    fn the_background_draws_the_ground_only_where_it_looks_the_same() {
+        let mut c = Canvas::<()>::default();
+        // Something clear first (a fade at rest), then the ground, then the rest.
+        c.rect(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 0.0]);
+        c.ground_shade([0.0, 0.0], [854.0, 480.0], [0.04, 0.05, 0.08, 0.72], 0.6);
+        c.rect(10.0, 10.0, 100.0, 100.0, [0.1, 0.1, 0.1, 0.94]);
+        let s = &c.shapes;
+        // Over an opaque background with nothing in the way: the ground is the background's.
+        assert_eq!(foldable_ground(s, Some(1.0), &[], None, false), Some(1));
+        // A background fading in over the clear colour, or none: its shape draws it.
+        assert_eq!(foldable_ground(s, Some(0.6), &[], None, false), None);
+        assert_eq!(foldable_ground(s, None, &[], None, false), None);
+        // Cut (scissored or blurred), the opaque rect, or something drawn between.
+        let cut = |r: std::ops::Range<usize>| [r];
+        assert_eq!(foldable_ground(s, Some(1.0), &cut(1..3), None, false), None);
+        assert_eq!(
+            foldable_ground(s, Some(1.0), &cut(2..3), None, false),
+            Some(1)
+        );
+        assert_eq!(foldable_ground(s, Some(1.0), &[], Some(1), false), None);
+        assert_eq!(foldable_ground(s, Some(1.0), &[], None, true), None);
+        // Anything seen before it: drawn as it was.
+        let mut under = Canvas::<()>::default();
+        under.rect(0.0, 0.0, 10.0, 10.0, [1.0, 1.0, 1.0, 0.5]);
+        under.ground_shade([0.0, 0.0], [854.0, 480.0], [0.04, 0.05, 0.08, 0.72], 0.6);
+        assert_eq!(
+            foldable_ground(&under.shapes, Some(1.0), &[], None, false),
+            None
+        );
+        // What the GPU gets: the folded ground drawn by nothing else, the rest as they were.
+        let mut out = Vec::new();
+        assert!(drawn_shapes(s, &PerSprite::default(), Some(1), &mut out));
+        assert!(out[1].fill[3] == 0.0 && out[1].border[3] == 0.0);
+        let bytes = bytemuck::bytes_of::<Shape>;
+        assert!(bytes(&out[0]) == bytes(&s[0]) && bytes(&out[2]) == bytes(&s[2]));
+        assert!(!drawn_shapes(s, &PerSprite::default(), None, &mut out));
+    }
+
+    #[test]
+    fn a_trimmed_sprite_samples_its_image_where_the_whole_one_did() {
+        // A 100x50 image of which [10, 5]..[70, 35] was kept, drawn turned and mirrored.
+        let (iw, ih) = (100.0, 50.0);
+        let kept = [10.0, 5.0, 60.0, 30.0];
+        let mut trims = PerSprite::<[f32; 4]>::default();
+        trims[Sprite::HealthBg as usize] = [
+            kept[0] / iw,
+            kept[1] / ih,
+            (iw - kept[0] - kept[2]) / iw,
+            (ih - kept[1] - kept[3]) / ih,
+        ];
+        let sprite = |half: [f32; 2], angle: f32| Shape {
+            center: [300.0, 200.0],
+            half,
+            fill: [1.0; 4],
+            border: [1.0; 4],
+            params: [
+                0.0,
+                0.0,
+                0.0,
+                SPRITE_BASE + Sprite::HealthBg as usize as f32,
+            ],
+            angle,
+        };
+        let plain = Shape {
+            params: [0.0, 0.0, 0.0, 0.0],
+            ..sprite([50.0, 25.0], 0.0)
+        };
+        let other = Shape {
+            params: [
+                0.0,
+                0.0,
+                0.0,
+                SPRITE_BASE + Sprite::HitCircle as usize as f32,
+            ],
+            ..sprite([50.0, 25.0], 0.0)
+        };
+        for whole in [
+            sprite([100.0, 40.0], 0.0),
+            sprite([100.0, 40.0], 0.7),
+            sprite([-100.0, 40.0], -2.1),
+        ] {
+            let mut out = Vec::new();
+            assert!(trim_sprites(&[plain, whole, other], &trims, &mut out));
+            // Only the trimmed image's shape changes.
+            let bytes = bytemuck::bytes_of::<Shape>;
+            assert!(bytes(&out[0]) == bytes(&plain) && bytes(&out[2]) == bytes(&other));
+            let cut = out[1];
+            assert!(
+                (cut.half[0] * cut.half[1]).abs() < 0.4 * (whole.half[0] * whole.half[1]).abs()
+            );
+            for i in 0..=200 {
+                for j in 0..=200 {
+                    let p = [180.0 + i as f32 * 1.2, 80.0 + j as f32 * 1.2];
+                    let a = sampled(&whole, [0.0, 0.0, iw, ih], p);
+                    let b = sampled(&cut, kept, p);
+                    match (a, b) {
+                        (Some(a), Some(b)) => assert!(
+                            (a[0] - b[0]).abs() < 1e-2 && (a[1] - b[1]).abs() < 1e-2,
+                            "{p:?}: {a:?} vs {b:?}"
+                        ),
+                        // What the cut shape leaves out is the clear outside the kept part.
+                        (Some(a), None) => assert!(
+                            a[0] <= kept[0] + 1e-2
+                                || a[1] <= kept[1] + 1e-2
+                                || a[0] >= kept[0] + kept[2] - 1e-2
+                                || a[1] >= kept[1] + kept[3] - 1e-2,
+                            "{p:?}: {a:?}"
+                        ),
+                        (None, Some(b)) => panic!("{p:?}: {b:?} drawn outside the image"),
+                        (None, None) => {}
+                    }
+                }
+            }
+        }
+        // A skin without margins anywhere sends the shapes up as they are.
+        let mut out = Vec::new();
+        assert!(!trim_sprites(&[plain], &PerSprite::default(), &mut out));
+        assert!(out.is_empty());
+    }
 
     #[test]
     fn a_background_comes_with_its_blurred_copies_made_where_it_was_read() {

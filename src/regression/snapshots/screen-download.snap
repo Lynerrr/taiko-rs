@@ -21,6 +21,7 @@ text   69,90   Has leaderboard
 text  230,90   Relevance
 text   32,91   STATUS
 text  204,91   SORT
+text  335,91   hide installed
 text  207,220  no results
 text   24,452  Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs
 text   24,466  saving to /nonexistent
@@ -33,5 +34,6 @@ hit   397,54     71x24   DlSource(1)
 hit    24,54    321x24   TextField
 hit    24,84    166x20   DlMenu(0)
 hit   196,84    114x20   DlMenu(1)
+hit   316,84    116x20   DlHideInstalled
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account
