@@ -481,6 +481,8 @@ pub struct ScoreSubmit {
     /// `map.hash` and plays the replay back on, then forgets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tja: Option<taiko_logic::tja::BoardChart>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_journey: bool,
 }
 
 /// 1: on the notes `NOTE_MODS` leave, not the whole map. 2: Half keeps to the beat. 3: what

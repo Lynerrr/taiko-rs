@@ -656,6 +656,7 @@ impl Screen for PlayScreen {
                         rolls: Some(game.stats().roll_ticks),
                         operation_key: None,
                         tja: None,
+                        from_journey: state.journey.in_play,
                         stars: None,
                         pp_version: online::PP_VERSION,
                         scroll_speed: Some(replay.scroll_speed),

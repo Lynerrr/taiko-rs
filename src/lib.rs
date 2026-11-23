@@ -2142,6 +2142,9 @@ impl State {
         if self.back_to_editor() {
             return;
         }
+        // Any return to Song Select (Pause -> Quit, load error, etc.) ends an active Journey
+        // session so normal plays never inherit from_journey or Journey results bindings.
+        self.journey.stop();
         self.stop_audio();
         self.report_smoothness();
         self.column_preview = true;

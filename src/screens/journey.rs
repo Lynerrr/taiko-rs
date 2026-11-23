@@ -204,7 +204,6 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
     let pw = w - 48.0;
     style::cold_panel(c, [x, y, pw, h]);
 
-    // Left: Exit Journey button
     let back = tr!("<- Exit", "<- 終了", "<- Выход");
     let bw = Canvas::text_width(8.0, back) + 22.0;
     c.button(
@@ -218,9 +217,9 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
         false,
     );
 
-    // Right: comfort level & mode badge
     let mode_tag = if state.journey.local_mode {
-        format!("~{:.1}*  LOCAL", state.journey.comfort_stars)
+        let local = tr!("LOCAL", "ローカル", "ЛОКАЛЬНО");
+        format!("~{:.1}*  {local}", state.journey.comfort_stars)
     } else {
         format!("~{:.1}*  JOURNEY", state.journey.comfort_stars)
     };
@@ -233,7 +232,6 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
         &mode_tag,
     );
 
-    // Center: mini taiko lane of past -> current -> upcoming maps
     let lane_left = x + 10.0 + bw + 18.0;
     let lane_right = x + pw - 24.0 - mw;
     if lane_right - lane_left < 120.0 {
@@ -249,7 +247,6 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
     );
 
     let center_x = (lane_left + lane_right) / 2.0;
-    // Past nodes to the left (most recent closest to center)
     for (k, past) in state.journey.history.iter().rev().take(5).enumerate() {
         let nx = center_x - 36.0 - k as f32 * 24.0;
         if nx < lane_left + 10.0 {
@@ -263,7 +260,6 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
         c.circle(nx, mid_y, 6.0, rgba(col, 0.85), rgba(0xffffff, 0.45), 1.0);
     }
 
-    // Current node in center with role label
     let (role_label, role_col) = state
         .journey
         .current()
@@ -283,7 +279,6 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
         [center_x - 13.0, mid_y - 13.0, 26.0, 26.0],
     );
 
-    // Next node(s) to the right
     for (k, next_q) in state.journey.queue.iter().skip(1).take(2).enumerate() {
         let nx = center_x + 36.0 + k as f32 * 28.0;
         if nx > lane_right - 14.0 {
@@ -297,7 +292,6 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
         c.circle(nx, mid_y, 6.5, rgba(col, 0.85), rgba(0xffffff, 0.35), 1.0);
     }
 
-    // Role tag next to the right of the upcoming dots
     let rx = center_x + 96.0;
     if rx + Canvas::text_width(7.0, role_label) < lane_right {
         c.text(rx, mid_y - 3.5, 7.0, rgba(role_col, 0.95), role_label);
@@ -342,7 +336,6 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
     let item = &cur.item;
     let (role_label, role_col) = role_badge(&item.role);
 
-    // Top row inside card: role + reason on left, source + star rating on right
     let pad = 20.0;
     let inner_w = cw - pad * 2.0;
     let mut ty = cy + 18.0;
@@ -365,13 +358,17 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
     );
 
     let source_text = if item.custom_id.is_some() {
-        "taiko.rs custom"
+        tr!("taiko.rs custom", "taiko.rsカスタム", "кастомка taiko.rs")
     } else if state.journey.local_mode {
-        "library"
+        tr!("library", "ライブラリ", "библиотека")
     } else {
         "osu!"
     };
-    let stars_text = format!("*{:.2}", item.stars);
+    let stars_text = if item.stars > 0.0 {
+        format!("*{:.2}", item.stars)
+    } else {
+        "*-".into()
+    };
     let sw = Canvas::text_width(9.0, &stars_text);
     c.text(
         cx + cw - pad - sw,
@@ -390,17 +387,14 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
     );
 
     ty += 24.0;
-    // Title
     let title = Canvas::fit(18.0, inner_w, &item.title);
     style::title(c, cx + pad, ty, 18.0, 0xffffff, &title);
     ty += 28.0;
 
-    // Artist
     let artist = Canvas::fit(11.0, inner_w, &item.artist);
     c.text(cx + pad, ty, 11.0, rgba(0xc0c0d4, 1.0), &artist);
     ty += 20.0;
 
-    // Difficulty & mapper
     let diff_line = format!("[{}]  by {}", item.version, item.creator);
     c.text(
         cx + pad,
@@ -414,9 +408,22 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
     style::rule(c, cx + pad, ty, inner_w);
     ty += 16.0;
 
-    // Stats strip: BPM | LENGTH | STARS | CACHE STATUS
-    let secs = item.length_ms / 1000;
-    let len_str = format!("{}:{:02}", secs / 60, secs % 60);
+    let bpm_str = if item.bpm > 0.0 {
+        format!("{:.0}", item.bpm)
+    } else {
+        "-".into()
+    };
+    let len_str = if item.length_ms > 0 {
+        let secs = item.length_ms / 1000;
+        format!("{}:{:02}", secs / 60, secs % 60)
+    } else {
+        "-".into()
+    };
+    let star_stat = if item.stars > 0.0 {
+        format!("{:.2}", item.stars)
+    } else {
+        "-".into()
+    };
     let status_str = match &cur.source {
         MapSource::Local(_) => tr!("In library", "ライブラリ済み", "В библиотеке").to_string(),
         MapSource::Saved(_) => tr!("Saved to library", "保存済み", "Сохранено").to_string(),
@@ -426,17 +433,25 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
             "Готово (кэш)"
         )
         .to_string(),
+        MapSource::Pending => tr!("Queued", "待機中", "В очереди").to_string(),
         MapSource::Downloading(job) => {
             let pct = (job.fraction().unwrap_or(0.0) * 100.0).round() as u32;
-            format!("Downloading {pct}%...")
+            tr!(
+                "Downloading {pct}%...",
+                "ダウンロード中 {pct}%...",
+                "Загрузка {pct}%...";
+                [] [pct]
+            )
         }
-        MapSource::Failed(e) => format!("Error: {e}"),
+        MapSource::Failed(e) => {
+            tr!("Error: {e}", "エラー: {e}", "Ошибка: {e}"; [] [e])
+        }
     };
     let stats = [
-        ("BPM", format!("{:.0}", item.bpm)),
-        ("LENGTH", len_str),
-        ("STARS", format!("{:.2}", item.stars)),
-        ("STATUS", status_str),
+        ("BPM", bpm_str),
+        (tr!("LENGTH", "長さ", "ДЛИНА"), len_str),
+        (tr!("STARS", "星", "ЗВЁЗДЫ"), star_stat),
+        (tr!("STATUS", "状態", "СТАТУС"), status_str),
     ];
     let col_w = inner_w / 4.0;
     for (i, (k, v)) in stats.iter().enumerate() {
@@ -452,7 +467,6 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
     }
     ty += 42.0;
 
-    // Download progress bar when fetching into temp cache
     if let Some(p) = cur.source.download_progress() {
         c.round_rect(
             [cx + pad, ty],
@@ -464,16 +478,14 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
         );
         c.round_rect(
             [cx + pad, ty],
-            [(inner_w * p.clamp(0.03, 1.0)), 6.0],
+            [inner_w * p.clamp(0.03, 1.0), 6.0],
             3.0,
             rgba(0x22c8b8, 1.0),
             rgba(0, 0.0),
             0.0,
         );
-        ty += 18.0;
     }
 
-    // Save destination info + keyboard hints at foot of card
     let save_dest = state.cfg.journey_save_to.name();
     let save_info = tr!(
         "Save moves cached maps to: {save_dest} (Settings > Library)",
@@ -501,7 +513,6 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
         &Canvas::fit(7.0, inner_w, hints),
     );
 
-    // Bottom action bar (aligned with card, Song Select style)
     let ay = cy + ch + 10.0;
     let mid = ay + actions_h / 2.0;
     let mods_word = tr!("Mods", "Mod", "Моды");
@@ -517,7 +528,6 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
         actions_h - 4.0,
     );
 
-    // Save button (when map is in temp cache) or "In library" badge
     let save_x = cx + mods_w + 10.0;
     let save_label = if cur.source.is_in_library() {
         tr!("In library", "ライブラリ済み", "В библиотеке")
@@ -536,7 +546,6 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
         false,
     );
 
-    // Right side: Skip + Play
     let play_w = 152.0;
     let play_x = cx + cw - play_w;
     let skip_label = tr!("Skip (Tab)", "スキップ (Tab)", "Скип (Tab)");
@@ -554,6 +563,8 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
 
     let play_label = if cur.source.is_ready() {
         tr!("Play", "プレイ", "Играть")
+    } else if matches!(cur.source, MapSource::Failed(_)) {
+        tr!("Next", "次へ", "Дальше")
     } else {
         tr!("Loading...", "読込中...", "Загрузка...")
     };
@@ -566,7 +577,6 @@ fn draw_center_card(state: &State, c: &mut Canvas, w: f32, h: f32) {
         hit::Hit::Key(KeyCode::Enter),
         true,
     );
-    let _ = ty;
 }
 
 fn role_badge(role: &str) -> (&'static str, u32) {
@@ -592,7 +602,6 @@ impl State {
     }
 
     pub(crate) fn exit_journey(&mut self) {
-        self.journey.stop();
         self.show_select();
     }
 
@@ -608,6 +617,8 @@ impl State {
         self.journey.target_stars = Some(stars);
         self.journey.comfort_stars = stars;
         self.journey.needs_level = false;
+        self.journey.pool_exhausted = false;
+        self.journey.retry_after = None;
         self.journey_refill();
         self.journey_preview_current();
     }
@@ -615,11 +626,12 @@ impl State {
     pub(crate) fn journey_tick(&mut self) {
         let fetched = self.journey.poll_fetch(&self.library);
         let dl_done = self.journey.poll_downloads();
-        // If server returned an error (e.g. old server without journey/1), fall back to local pool.
+        // If server returned an error with an empty queue, fall back to local library cleanly.
         if fetched && self.journey.error.is_some() && self.journey.queue.is_empty() {
             let err = self.journey.error.take();
             if !self.library.is_empty() {
                 self.journey.local_mode = true;
+                self.journey.pool_exhausted = false;
                 self.journey.needs_level = self.journey.target_stars.is_none();
                 if !self.journey.needs_level {
                     self.journey_fill_local();
@@ -631,15 +643,15 @@ impl State {
         if fetched || dl_done {
             self.journey_preview_current();
         }
-        if !self.journey.needs_level
-            && self.journey.queue.len() < crate::journey::MAX_PREFETCH_AHEAD
-            && self.journey.fetching.is_none()
-        {
+        if self.journey.can_refill(Instant::now()) {
             self.journey_refill();
         }
     }
 
     fn journey_refill(&mut self) {
+        if !self.journey.can_refill(Instant::now()) {
+            return;
+        }
         let can_online = !self.cfg.online_token.is_empty() && self.journey_supported;
         if can_online && !self.journey.local_mode {
             self.journey.request_next(
@@ -665,15 +677,21 @@ impl State {
 
     fn journey_preview_current(&mut self) {
         let path = match self.journey.current().map(|q| &q.source) {
-            Some(MapSource::Local(i) | MapSource::Saved(i)) => {
-                self.library.get(*i).map(|e| e.path.clone())
-            }
+            Some(MapSource::Local(p) | MapSource::Saved(p)) => Some(p.clone()),
             Some(MapSource::Cached { entry, .. }) => Some(entry.path.clone()),
             _ => None,
         };
         if let Some(p) = path {
             self.select.select_path(&self.library, &p);
         }
+    }
+
+    /// Drops a failed download without sending a negative `JourneySkip` taste signal.
+    fn journey_drop_failed(&mut self) {
+        self.journey.advance(PastOutcome::Skipped);
+        self.journey.pool_exhausted = false;
+        self.journey_refill();
+        self.journey_preview_current();
     }
 
     pub(crate) fn journey_skip_current(&mut self) {
@@ -700,9 +718,13 @@ impl State {
     pub(crate) fn journey_play_current(&mut self) {
         let entry_idx = match self.journey.current() {
             Some(q) => match &q.source {
-                MapSource::Local(i) | MapSource::Saved(i) => {
-                    let idx = *i;
+                MapSource::Local(path) | MapSource::Saved(path) => {
+                    let path = path.clone();
                     self.journey.playing_cached = None;
+                    let Some(idx) = self.library.iter().position(|e| e.path == path) else {
+                        self.journey_drop_failed();
+                        return;
+                    };
                     idx
                 }
                 MapSource::Cached { folder, entry } => {
@@ -719,13 +741,14 @@ impl State {
                             .position(|e| e.meta.version.eq_ignore_ascii_case(&version))
                             .unwrap_or(0);
                         let Some(loaded) = entries.into_iter().nth(pos) else {
+                            self.journey_drop_failed();
                             return;
                         };
                         self.library.push(loaded);
                         self.library.len() - 1
                     }
                 }
-                MapSource::Downloading(_) => {
+                MapSource::Pending | MapSource::Downloading(_) => {
                     self.toast(
                         tr!(
                             "Still downloading this map...",
@@ -737,7 +760,8 @@ impl State {
                     return;
                 }
                 MapSource::Failed(_) => {
-                    self.journey_skip_current();
+                    // Never send a negative JourneySkip signal for a failed download.
+                    self.journey_drop_failed();
                     return;
                 }
             },
@@ -762,7 +786,6 @@ impl State {
     }
 
     pub(crate) fn journey_save_current(&mut self) {
-        // Works both on the Journey screen and on Results for the map just played.
         let cached_info = if let Some((folder, item)) = self.journey.playing_cached.clone() {
             Some((folder, item, true))
         } else if let Some(q) = self.journey.current() {
@@ -787,11 +810,9 @@ impl State {
             return;
         };
 
-        let osu_songs = self
-            .cfg
-            .songs_folder
-            .clone()
-            .unwrap_or_else(config::own_songs_dir);
+        // Resolve the real osu! Songs folder via library::song_dirs() / download_dir()
+        // rather than falling back to own_songs_dir when cfg.songs_folder is None.
+        let osu_songs = library::download_dir(&library::song_dirs());
         match crate::journey::save_cached_folder(
             &folder,
             item.custom_id.is_some(),
@@ -799,21 +820,26 @@ impl State {
             &osu_songs,
         ) {
             Ok(dest) => {
+                // Remove stale JourneyCache entries from self.library before adding the moved files
+                // so there are no duplicate dead paths.
+                self.library.retain(|e| !e.path.starts_with(&folder));
+
                 let added = crate::journey::scan_single_folder(&dest);
-                let mut saved_idx = None;
+                let mut saved_path = None;
                 for e in added {
-                    if let Some(pos) = self.library.iter().position(|x| x.path == e.path) {
-                        saved_idx.get_or_insert(pos);
-                    } else {
-                        let pos = self.library.len();
+                    let is_match = item.map_hash.is_some_and(|h| e.known_hash() == Some(h))
+                        || e.meta.version.eq_ignore_ascii_case(&item.version);
+                    if is_match || saved_path.is_none() {
+                        saved_path = Some(e.path.clone());
+                    }
+                    if !self.library.iter().any(|x| x.path == e.path) {
                         self.library.push(e);
-                        saved_idx.get_or_insert(pos);
                     }
                 }
-                if let Some(idx) = saved_idx {
+                if let Some(path) = saved_path {
                     self.select.refilter(&self.library);
                     if !from_results && let Some(q) = self.journey.current_mut() {
-                        q.source = MapSource::Saved(idx);
+                        q.source = MapSource::Saved(path);
                     }
                 }
                 if from_results {
@@ -828,7 +854,9 @@ impl State {
                 ));
             }
             Err(e) => {
-                self.toast(format!("Save failed: {e}"));
+                self.toast(
+                    tr!("Save failed: {e}", "保存失敗: {e}", "Ошибка сохранения: {e}"; [] [e]),
+                );
             }
         }
     }

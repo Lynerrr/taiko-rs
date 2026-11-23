@@ -300,7 +300,7 @@ impl Item {
     fn name(self) -> &'static str {
         match self {
             Item::Play => tr!("PLAY", "プレイ", "ИГРАТЬ"),
-            Item::Journey => tr!("JOURNEY", "ジャーニー", "ПУТЬ"),
+            Item::Journey => tr!("JOURNEY", "ジャーニー", "JOURNEY"),
             Item::Multiplayer => tr!("MULTIPLAYER", "マルチ", "МУЛЬТИПЛЕЕР"),
             Item::Download => tr!("DOWNLOAD", "ダウンロード", "ЗАГРУЗКА"),
             Item::Medals => tr!("MEDALS", "メダル", "МЕДАЛИ"),

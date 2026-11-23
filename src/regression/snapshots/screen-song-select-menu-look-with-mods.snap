@@ -51,12 +51,16 @@ text  420,406  0:00 / 0:10
 text  692,406  peak 7.0 notes/s at 0:01
 text  726,444  Play
 text   31,445  Menu
+text   80,445  Journey
 text  431,445  Mods
 text  479,445  Random
-text  538,445  Journey
-text  594,446  HR
-text  614,446  HD
+text  586,445  1.00x
+text  529,446  HR
+text  549,446  HD
+text  622,446  +
+text  572,448  -
 hit    16,437    43x23   ToMenu
+hit    65,437    61x23   JourneyButton
 hit   324,28     74x16   SortList
 hit    16,28    304x16   TextField
 hit    25,49    378x29   SongHeader(0)
@@ -78,8 +82,9 @@ hit   524,256    47x12   BoardTab(true)
 hit   779,256    47x12   BoardWebsite
 hit   416,437    43x23   ModsButton
 hit   463,437    55x23   Key(F2)
-hit   523,437    61x23   JourneyButton
-hit   589,442    40x13   ModsButton
+hit   569,442    12x13   Key(BracketLeft)
+hit   619,442    12x13   Key(BracketRight)
+hit   524,442    40x13   ModsButton
 hit   696,437   133x23   Key(Enter)
 hit   404,231     5x32   SplitList
 hit   771,2      74x14   Changelog

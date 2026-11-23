@@ -1615,8 +1615,9 @@ impl Select {
             tr!("Back", "戻る", "Назад")
         };
         let mid = self.column_end() + 4.0 - FOOT_ROW_H / 2.0;
+        let bh = FOOT_ROW_H - 2.0 * FOOT_ROW_INSET;
         // A block's rect starts 6 left of where it's put: level with the list's cards.
-        crate::style::block_button(
+        let back_w = crate::style::block_button(
             c,
             [24.0 + 6.0, mid],
             &crate::style::BACK,
@@ -1625,8 +1626,23 @@ impl Select {
             8.0,
             false,
             Hit::ToMenu,
-            FOOT_ROW_H - 2.0 * FOOT_ROW_INSET,
+            bh,
         );
+        if self.to_menu {
+            let journey_word = tr!("Journey", "ジャーニー", "Journey");
+            let jx = 24.0 + back_w + 8.0;
+            crate::style::block_button(
+                c,
+                [jx + 6.0, mid],
+                crate::menu::Item::Journey.icon_art(),
+                journey_word,
+                None,
+                8.0,
+                false,
+                Hit::JourneyButton,
+                bh,
+            );
+        }
     }
 
     /// The top and bottom of the song list's frame, for the panel beside it to line up with

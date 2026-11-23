@@ -1946,11 +1946,10 @@ fn many_mods_on_show_four_badges_and_a_count_of_the_rest_with_all_of_them_under_
         texts_in(&c, random).iter().any(|t| t == "Random"),
         "Random whole beside many mods"
     );
-    let journey = hit_rect(&c, |h| matches!(h, Hit::JourneyButton)).expect("Journey");
-    // The badges between Journey and Play: four of them and a +3, none touching the next.
+    // The badges between Random and Play: four of them and a +2, none touching the next.
     let row: Vec<(String, [f32; 4])> = text_boxes(&c)
         .into_iter()
-        .filter(|(_, r)| r[0] > journey[0] + journey[2] && r[0] + r[2] < play[0])
+        .filter(|(_, r)| r[0] > random[0] + random[2] && r[0] + r[2] < play[0])
         .filter(|(_, r)| r[1] >= play[1] && r[1] + r[3] <= play[1] + play[3])
         .collect();
     let names: Vec<&str> = row.iter().map(|(t, _)| t.as_str()).collect();
