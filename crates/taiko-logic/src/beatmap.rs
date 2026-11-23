@@ -843,7 +843,8 @@ fn convert(map: &mut Beatmap, mut body: Body) {
     }
 
     let end = notes.last().map(|n| n.end_time).unwrap_or(0.0);
-    map.barlines = build_barlines(&body.timing, end, &velocity_at);
+    let from = notes.first().map_or(0.0, |n| n.time).min(0.0);
+    map.barlines = build_barlines(&body.timing, from, end, &velocity_at);
     map.notes = notes;
     // A .tko map's fake notes, at the speed real ones at their time would have.
     map.fakes = map
@@ -973,8 +974,13 @@ fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
 /// One barline at every red line (unless it omits its first) and every measure after it, up to
 /// the next red line. A section whose measure is under a millisecond (a gimmick line) gives only
 /// its first: the rest would scroll by too fast to see.
+///
+/// None before `from`, the first note or 0, whichever is earlier (lazer's `BarLineGenerator`):
+/// a map that starts its red line seconds before the song, at a fast SV that times its spinners'
+/// PreEmpt, would otherwise send its first bars flying in before the song, where osu! has none.
 fn build_barlines(
     raw: &[RawTimingPoint],
+    from: f64,
     end: f64,
     velocity_at: &dyn Fn(f64) -> f64,
 ) -> Vec<Barline> {
@@ -993,7 +999,7 @@ fn build_barlines(
             if t >= until {
                 break;
             }
-            if !(first && p.effects & 8 != 0) {
+            if !(first && p.effects & 8 != 0) && t >= from {
                 out.push(Barline {
                     time: t,
                     velocity: velocity_at(t),
@@ -1371,6 +1377,24 @@ SliderTickRate:1
         // Only the scroll speed: the red line's barline and the beat stay where they were.
         assert_eq!(map.barlines[0].time, 41.1037077104643);
         assert_eq!(control_point_at(&map.control_points, 41.0).sv, 10.0);
+    }
+
+    #[test]
+    fn no_barlines_before_the_song_or_the_first_note() {
+        // Dynamite (Camellia's MACHO TNT REMIX) [kaBOOM] (5423149): the red line 1.7 s before the
+        // song at 3x, its first bar omitted. Its next bar, at -631, flew in at 3x before the
+        // song; osu! starts the bars at 0.
+        let map = parse(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n-1712,270.27027027027,4,1,0,100,1,8\n-1712,-33.3333333333333,4,1,0,100,0,8\n179,-133.333333333333,4,1,0,100,0,8\n855,-82.08048,4,1,0,100,0,8\n\n[HitObjects]\n256,192,855,5,8,1:0:0:0:\n256,192,5000,1,0,0:0:0:0:\n",
+        );
+        let bars: Vec<f64> = map.barlines.iter().map(|b| b.time.round()).collect();
+        assert_eq!(bars[..2], [450.0, 1531.0], "{bars:?}");
+        // A chart whose first note is before 0 keeps its bars from that note on.
+        let early = parse(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[TimingPoints]\n-3000,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,-1000,1,0,0:0:0:0:\n256,192,1000,1,0,0:0:0:0:\n",
+        );
+        let bars: Vec<f64> = early.barlines.iter().map(|b| b.time).collect();
+        assert_eq!(bars[..2], [-1000.0, 1000.0], "{bars:?}");
     }
 
     #[test]

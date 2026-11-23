@@ -1327,9 +1327,10 @@ pub(crate) mod tests {
         assert_eq!(back.timing[0].time, -250.0);
         assert!(back.timing[0].is_red());
         assert_eq!(back.to_text(), text, "and again");
-        // The game plays it too: a barline at the line, none lost.
+        // The game plays it too, from the line, with its bars from the song's start on (as in
+        // osu!, none before 0): the measure after the line's, -250 + 2000.
         let map = crate::beatmap::from_text(&text).unwrap();
-        assert_eq!(map.barlines[0].time, -250.0 + crate::beatmap::OSU_TIMING_MS);
+        assert_eq!(map.barlines[0].time, 1750.0 + crate::beatmap::OSU_TIMING_MS);
         assert_eq!(
             map.control_points[0].time,
             -250.0 + crate::beatmap::OSU_TIMING_MS
