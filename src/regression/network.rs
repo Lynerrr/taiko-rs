@@ -2205,6 +2205,68 @@ fn a_defense_lobby_map_previews_and_goes_back_to_the_lobby() {
     lobby_preview_stays("mp-preview-defense", Some(net::Defense::DEFAULT));
 }
 
+#[test]
+fn the_lobby_map_picker_opens_mods_on_f1_and_picks_from_preview_play() {
+    let room = FakeRoom::new();
+    let (mut s, _songs, mut now) = guest("lobby-picker-f1-play", maps::basics(), &room);
+    room.send(&ServerMsg::Room {
+        players: vec![player(2, "me", true), player(1, "guest", false)],
+        map: None,
+        in_match: false,
+        mapguessr: false,
+        common: None,
+        team: None,
+        locked: false,
+        slots: 16,
+    });
+    assert!(wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| m.is_host())
+    }));
+
+    // M opens the lobby map picker; F1 opens Mods (and closes it) without leaving the picker.
+    press(&mut s, KeyCode::KeyM, now);
+    assert!(s.picking_lobby_map, "M opens the map picker");
+    assert_eq!(scene_name(&s), "Select");
+
+    press(&mut s, KeyCode::F1, now);
+    assert!(
+        s.mod_select.is_some(),
+        "F1 opens mods while picking a lobby map"
+    );
+    assert!(s.picking_lobby_map, "opening mods stays in the map picker");
+    assert_eq!(scene_name(&s), "Select");
+
+    press(&mut s, KeyCode::F1, now);
+    assert!(s.mod_select.is_none(), "F1 again closes mods");
+    assert!(s.picking_lobby_map, "closing mods stays in the map picker");
+
+    // Once the preview has loaded and a start marker is set on its timeline, clicking the
+    // preview's Play button picks the map for the lobby instead of starting it solo.
+    let selected = s.select.selected().expect("a map is selected");
+    s.preview.prime_with_marker(&s.library, selected, 5000.0);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let (vx, vy) = s
+        .preview
+        .play_button_virtual()
+        .expect("preview play button is shown after seeking");
+    let k = s.window_h / crate::render::VIRTUAL_HEIGHT;
+    s.mouse = (f64::from(vx * k), f64::from(vy * k));
+    s.mouse_button(true, None);
+    s.mouse_button(false, None);
+
+    assert_eq!(
+        scene_name(&s),
+        "Lobby",
+        "clicking Play in the preview picks the map for the lobby"
+    );
+    assert!(!s.picking_lobby_map);
+    assert!(
+        room.wait_for_msg(|m| matches!(m, ClientMsg::SelectMap(_))),
+        "the picked map is sent to the lobby"
+    );
+}
+
 // Downloads from the mirrors: a mirror can keep serving a set as it was before osu! updated it
 // (osu.direct gave Marika - Soul Release with three empty placeholder difficulties and old Oni
 // files after the set was ranked), and its description of the set can be years old (catboy.best

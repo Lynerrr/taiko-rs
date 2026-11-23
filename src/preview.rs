@@ -1253,6 +1253,36 @@ impl Preview {
         self.box_rect
     }
 
+    /// Centre of the preview's Play button in the standard virtual units `mouse_virtual` returns.
+    #[cfg(test)]
+    pub fn play_button_virtual(&self) -> Option<(f32, f32)> {
+        let [bx, by, bw, bh] = self.play_rect?;
+        let k = if self.drawn_scale > 0.0 {
+            self.drawn_scale
+        } else {
+            1.0
+        };
+        Some(((bx + bw / 2.0 + self.drawn_left) * k, (by + bh / 2.0) * k))
+    }
+
+    /// Loads `library[i]` synchronously with a start marker at `at` ms so headless tests
+    /// without an audio device can draw and click the preview's Play button.
+    #[cfg(test)]
+    pub fn prime_with_marker(&mut self, library: &[Entry], i: usize, at: f64) {
+        let map = crate::beatmap::load(&library[i].path).expect("load preview map");
+        self.seen = Some(i);
+        self.requested = Some(i);
+        self.ready_for = Some(i);
+        self.game = Some(new_preview_game(&map, 1.0));
+        self.map = Some((
+            i,
+            map.clone(),
+            Details::of(&map),
+            crate::difficulty::analyze(&map),
+        ));
+        self.marker = Some((audio_path(&library[i]), at));
+    }
+
     /// Split, where the lane's corridor was last drawn, if it was.
     #[cfg(test)]
     pub fn corridor(&self) -> Option<[f32; 4]> {
