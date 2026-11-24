@@ -3880,3 +3880,101 @@ fn blocked_mirror_is_skipped_on_subsequent_set_status_lookups() {
     );
     assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/good/s/999"]);
 }
+
+/// A mirror cooling down after a transient failure is still asked when the healthy ones don't
+/// have the set: only when every mirror that could answer said 404 is the set missing (that
+/// answer is kept for two weeks).
+#[test]
+fn a_set_only_a_cooling_mirror_has_is_not_marked_missing() {
+    let (base, asked) = mirror_server(vec![("/primary/s/7", br#"{"status":"ranked"}"#.to_vec())]);
+    let primary: &'static str = Box::leak(format!("{base}/primary/s/").into_boxed_str());
+    let fallback: &'static str = Box::leak(format!("{base}/fallback/s/").into_boxed_str());
+    let mirror = |name: &'static str, set: &'static str| crate::download::Mirror {
+        name,
+        search: "",
+        search_style: crate::download::SearchStyle::Nekoha,
+        set,
+        download: "",
+        osu: "",
+    };
+    let mirrors = [
+        mirror("osu.direct", primary),
+        mirror("mirror.nekoha.moe", fallback),
+    ];
+    let defaults: Vec<String> = mirrors.iter().map(|m| m.name.to_string()).collect();
+    let router = std::sync::Mutex::new(crate::download::MirrorRouter::new(defaults, None));
+    router.lock().unwrap().record_failure(
+        "osu.direct",
+        crate::download::FailureKind::Transient,
+        std::time::Instant::now(),
+    );
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(5)))
+        .build()
+        .into();
+    assert_eq!(
+        crate::download::set_status_from(&agent, &mirrors, &router, 7).unwrap(),
+        "ranked"
+    );
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        ["/fallback/s/7", "/primary/s/7"]
+    );
+    // Its answer ended osu.direct's cooldown: it's asked first again. A set neither has is
+    // missing, once both were asked.
+    assert_eq!(
+        crate::download::set_status_from(&agent, &mirrors, &router, 8).unwrap(),
+        crate::setstatus::MISSING
+    );
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        ["/primary/s/8", "/fallback/s/8"]
+    );
+}
+
+/// Unpacking failing on this computer (here the set's folder can't be made) is no fault of the
+/// mirror that sent a good archive: it isn't put on cooldown, while one that sends something
+/// that isn't an archive is.
+#[test]
+fn a_local_unpacking_failure_does_not_cool_down_the_mirror() {
+    let good = mirror_osz(&[("a.osu", b"osu file format v14\n"), ("audio.mp3", b"mp3")]);
+    let (base, _) = mirror_server(vec![
+        ("/good/d/1", good),
+        ("/broken/d/2", b"PK not an archive".to_vec()),
+    ]);
+    let songs = std::env::temp_dir().join(format!(
+        "taiko-rs-regression-unpack-blame-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&songs);
+    std::fs::create_dir_all(&songs).unwrap();
+    // A file where the set's folder goes.
+    std::fs::write(songs.join("1 Artist - Title"), b"in the way").unwrap();
+    let (done, total) = (
+        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+    );
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let fetch = |name: &str, source: &str, url: String| {
+        crate::download::fetch(&[(source, url)], name, &songs, &done, &total, &cancel, None)
+    };
+    assert!(
+        fetch(
+            "1 Artist - Title",
+            "mirror.nekoha.moe",
+            format!("{base}/good/d/1")
+        )
+        .is_err()
+    );
+    assert!(!crate::download::mirror_cooling("mirror.nekoha.moe"));
+    assert!(
+        fetch(
+            "2 Artist - Title",
+            "mirror.hinamizawa.ai",
+            format!("{base}/broken/d/2")
+        )
+        .is_err()
+    );
+    assert!(crate::download::mirror_cooling("mirror.hinamizawa.ai"));
+    let _ = std::fs::remove_dir_all(&songs);
+}

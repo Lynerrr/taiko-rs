@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -164,11 +164,23 @@ pub(crate) struct MirrorRouter {
 
 impl MirrorRouter {
     pub(crate) fn new(defaults: Vec<String>, path: Option<PathBuf>) -> Self {
+        Self::new_at(defaults, path, unix_now())
+    }
+
+    /// Like `new`, at Unix time `now`: a saved order older than `PREFERENCE_TTL` (or one
+    /// without its time, written by an older build) is dropped, so a mirror that only stood in
+    /// for a while doesn't stay first for good.
+    pub(crate) fn new_at(defaults: Vec<String>, path: Option<PathBuf>, now: u64) -> Self {
         let mut order = Vec::new();
         if let Some(ref p) = path
             && let Ok(text) = std::fs::read_to_string(p)
         {
-            for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let saved = text
+                .lines()
+                .find_map(|l| l.trim().strip_prefix("saved "))
+                .and_then(|s| s.trim().parse::<u64>().ok());
+            let fresh = saved.is_some_and(|at| now.saturating_sub(at) < PREFERENCE_TTL.as_secs());
+            for line in text.lines().map(str::trim).filter(|_| fresh) {
                 if defaults.iter().any(|d| d == line) && !order.iter().any(|o| o == line) {
                     order.push(line.to_string());
                 }
@@ -200,37 +212,47 @@ impl MirrorRouter {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let body: String = self.order.iter().map(|n| format!("{n}\n")).collect();
-        let _ = std::fs::write(path, body);
+        let mut body = format!("saved {}\n", unix_now());
+        body.extend(self.order.iter().map(|n| format!("{n}\n")));
+        // Written aside and moved over: a crash mid-write never leaves half a file.
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, body).is_ok() && std::fs::rename(&tmp, path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
 
-    /// Indices into `candidates` to try, in priority order. Healthy mirrors come first; cooled-down
-    /// mirrors are skipped while any healthy mirror is available. When all candidates are in
-    /// cooldown, every candidate is returned (non-blocked first, soonest expiry first) so recovery
-    /// after an offline blip is immediate.
+    /// Indices into `candidates` to try, in priority order: healthy mirrors by rank, then the ones
+    /// cooling down after transient failures (soonest expiry first), so a set only one of those
+    /// has is still found. Mirrors that refused us (403) are left out while any other mirror is
+    /// healthy, and come last when none is, so recovery after an offline blip is immediate.
     pub(crate) fn ordered(&self, candidates: &[&str], now: Instant) -> Vec<usize> {
         let mut ready: Vec<usize> = Vec::with_capacity(candidates.len());
         let mut cooling: Vec<usize> = Vec::new();
+        let mut blocked: Vec<usize> = Vec::new();
         for (i, &name) in candidates.iter().enumerate() {
-            if self.health.get(name).is_some_and(|h| h.in_cooldown(now)) {
-                cooling.push(i);
-            } else {
-                ready.push(i);
+            match self.health.get(name) {
+                Some(h) if h.in_cooldown(now) && h.blocked => blocked.push(i),
+                Some(h) if h.in_cooldown(now) => cooling.push(i),
+                _ => ready.push(i),
             }
         }
-        if !ready.is_empty() {
-            ready.sort_by_key(|&i| self.rank(candidates[i], i));
-            return ready;
-        }
-        cooling.sort_by_key(|&i| {
-            let h = self.health.get(candidates[i]);
+        ready.sort_by_key(|&i| self.rank(candidates[i], i));
+        let expiry = |i: usize| {
             (
-                h.is_some_and(|h| h.blocked),
-                h.and_then(|h| h.cooldown_until),
+                self.health
+                    .get(candidates[i])
+                    .and_then(|h| h.cooldown_until),
                 self.rank(candidates[i], i),
             )
-        });
-        cooling
+        };
+        cooling.sort_by_key(|&i| expiry(i));
+        blocked.sort_by_key(|&i| expiry(i));
+        let none_healthy = ready.is_empty();
+        ready.extend(cooling);
+        if none_healthy {
+            ready.extend(blocked);
+        }
+        ready
     }
 
     /// Records a mirror failure (not 404/410, which only mean the mirror lacks one set).
@@ -294,16 +316,45 @@ impl MirrorRouter {
     }
 }
 
+/// How long a learned mirror order is kept across launches before the default order is tried
+/// again (a mirror that stood in during an outage shouldn't stay first for good).
+const PREFERENCE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Whether this thread's router has `name` cooling down now (tests).
+#[cfg(test)]
+pub(crate) fn mirror_cooling(name: &str) -> bool {
+    router()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .health
+        .get(name)
+        .is_some_and(|h| h.in_cooldown(Instant::now()))
+}
+
+#[cfg(not(test))]
 fn router() -> &'static Mutex<MirrorRouter> {
-    static ROUTER: OnceLock<Mutex<MirrorRouter>> = OnceLock::new();
+    static ROUTER: std::sync::OnceLock<Mutex<MirrorRouter>> = std::sync::OnceLock::new();
     ROUTER.get_or_init(|| {
-        // Tests pass their own temp path to `MirrorRouter::new` so they never read or write the
-        // player's cache directory.
-        let path = (!cfg!(test))
-            .then(|| crate::config::cache_dir().map(|d| d.join("mirror-order")))
-            .flatten();
+        let path = crate::config::cache_dir().map(|d| d.join("mirror-order"));
         Mutex::new(MirrorRouter::new(default_mirror_order(), path))
     })
+}
+
+/// Tests run in parallel threads: each gets its own router (and never touches the player's
+/// cache directory), so one test's failing mirror can't reorder another's.
+#[cfg(test)]
+fn router() -> &'static Mutex<MirrorRouter> {
+    thread_local! {
+        static ROUTER: &'static Mutex<MirrorRouter> =
+            Box::leak(Box::new(Mutex::new(MirrorRouter::new(default_mirror_order(), None))));
+    }
+    ROUTER.with(|r| *r)
 }
 
 fn ordered_full_mirrors() -> Vec<usize> {
@@ -708,6 +759,42 @@ fn parse_sets(json: &str) -> Result<(Vec<SetInfo>, usize), String> {
     Ok(collect_taiko_sets(sets))
 }
 
+/// Mirror.nekoha.moe's 1-based page of 100 holding our 50-set `page`, and where in it ours starts.
+fn nekoha_page(page: usize) -> (usize, usize) {
+    let offset = page * PAGE;
+    (offset / NEKOHA_PAGE + 1, offset % NEKOHA_PAGE)
+}
+
+/// Our 50-set `page` from a search reply: the taiko sets, and how many sets the mirror listed in
+/// it (a full page means there may be more). A Nekoha reply is cut to the half that's ours; when
+/// it was full there may be more after it.
+fn parse_page_for(
+    json: &str,
+    style: SearchStyle,
+    page: usize,
+) -> Result<(Vec<SetInfo>, usize), String> {
+    match style {
+        SearchStyle::V2 { .. } => parse_sets(json),
+        SearchStyle::Nekoha => {
+            let reply: NekohaSearch =
+                serde_json::from_str(json).map_err(|e| format!("unexpected reply: {e}"))?;
+            let listed = reply.beatmapsets.len();
+            let start = nekoha_page(page).1;
+            let ours: Vec<ApiSet> = reply
+                .beatmapsets
+                .into_iter()
+                .skip(start)
+                .take(PAGE)
+                .collect();
+            let (sets, count) = collect_taiko_sets(ours);
+            // Stands for the reply being full, in our page size.
+            let count = if listed >= NEKOHA_PAGE { PAGE } else { count };
+            Ok((sets, count))
+        }
+    }
+}
+
+#[cfg(test)]
 fn parse_sets_for(json: &str, style: SearchStyle) -> Result<(Vec<SetInfo>, usize), String> {
     match style {
         SearchStyle::V2 { .. } => parse_sets(json),
@@ -784,11 +871,13 @@ pub(crate) fn search_status_from(
                 (req, PAGE)
             }
             SearchStyle::Nekoha => {
+                // Its pages are always 100 sets: ask for the one holding our 50-set page and
+                // keep that half, so the same `page` means the same sets on every mirror.
                 let mut req = agent
                     .get(m.search)
                     .header("User-Agent", USER_AGENT)
                     .query("mode", "taiko")
-                    .query("page", (page + 1).to_string());
+                    .query("page", nekoha_page(page).0.to_string());
                 if !query.trim().is_empty() {
                     req = req.query("q", query);
                 }
@@ -800,7 +889,7 @@ pub(crate) fn search_status_from(
                         .query("sort", key)
                         .query("order", if desc { "desc" } else { "asc" });
                 }
-                (req, NEKOHA_PAGE)
+                (req, PAGE)
             }
         };
         let reply = req.call().map_err(|e| {
@@ -816,14 +905,18 @@ pub(crate) fn search_status_from(
                     .map_err(|e| (e.to_string(), FailureKind::Transient))
             })
             .and_then(|body| {
-                parse_sets_for(&body, m.search_style).map_err(|e| (e, FailureKind::Transient))
+                parse_page_for(&body, m.search_style, page).map_err(|e| (e, FailureKind::Transient))
             });
         match result {
             Ok((sets, count)) => {
-                router
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .record_success(m.name, Instant::now());
+                // An empty page proves little (a mirror ignoring a filter answers that too): it
+                // neither promotes the mirror nor clears its penalty.
+                if count > 0 {
+                    router
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .record_success(m.name, Instant::now());
+                }
                 return Ok((sets, count >= page_size));
             }
             Err((e, kind)) => {
@@ -870,6 +963,9 @@ pub(crate) fn set_status_from(
         .ordered(&names, Instant::now());
     let mut errors = Vec::new();
     let mut not_found = 0;
+    // Mirrors that couldn't say (timeouts, 5xx, odd replies): with one of those, "missing" isn't
+    // known. A mirror that refuses us (403) is no answer either way and doesn't count.
+    let mut unsure = 0;
     for idx in order {
         let m = &mirrors[idx];
         let url = format!("{}{set}", m.set);
@@ -908,11 +1004,13 @@ pub(crate) fn set_status_from(
                         .unwrap_or_else(|e| e.into_inner())
                         .record_failure(m.name, kind, Instant::now());
                 }
+                unsure += usize::from(kind == Some(FailureKind::Transient));
                 errors.push(format!("{}: {e}", m.name));
             }
         }
     }
-    if not_found == errors.len() {
+    // Every mirror that could answer (the ones cooling down included) said it has no such set.
+    if not_found > 0 && unsure == 0 {
         return Ok(crate::setstatus::MISSING.to_string());
     }
     Err(errors.join("; "))
@@ -2310,7 +2408,11 @@ pub(crate) fn fetch(
             }
             match download_to_classified(url, &archive, done, total, cancel) {
                 Ok(()) => {
-                    let current = match (check.as_deref_mut(), archive_md5s(&archive)) {
+                    let md5s = archive_md5s(&archive);
+                    // Whether what came is an archive at all: if it is, a failure to unpack it
+                    // is this computer's (disk full, no access) and no fault of the mirror.
+                    let readable = md5s.is_ok();
+                    let current = match (check.as_deref_mut(), md5s) {
                         (Some(check), Ok(md5s)) => check.current(&md5s),
                         // Nothing to check against, or not an archive (unpacking says why).
                         _ => true,
@@ -2359,7 +2461,9 @@ pub(crate) fn fetch(
                             return Ok(dest);
                         }
                         Err(e) => {
-                            record_mirror_failure(source_name, FailureKind::Transient);
+                            if !readable {
+                                record_mirror_failure(source_name, FailureKind::Transient);
+                            }
                             (errors[k], gone[k]) = (Some(e), true);
                         }
                     }
@@ -3218,7 +3322,9 @@ pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
         // osu! itself serves any difficulty's .osu without a login; the mirrors are the fallback
         // in adaptive health order.
         let mut sources = vec![("osu.ppy.sh", format!("https://osu.ppy.sh/osu/{beatmap}"))];
-        for idx in ordered_full_mirrors() {
+        // Two mirrors at most: each may take the whole timeout, and a preview that waits half a
+        // minute is no preview.
+        for idx in ordered_full_mirrors().into_iter().take(2) {
             let m = &MIRRORS[idx];
             sources.push((m.name, format!("{}{beatmap}", m.osu)));
         }
@@ -3973,10 +4079,11 @@ mod tests {
         r.record_failure("osu.direct", FailureKind::Transient, t0);
         r.record_success("mirror.nekoha.moe", t0);
 
-        // During cooldown, osu.direct is skipped and nekoha is first.
+        // During cooldown, nekoha is first and osu.direct is only asked after every healthy
+        // mirror (a set only it has is still found).
         assert_eq!(
             r.ordered(&names, t0 + Duration::from_secs(30)),
-            vec![1, 2, 3]
+            vec![1, 2, 3, 0]
         );
         // After cooldown expires, nekoha stays #1 and osu.direct returns behind it.
         assert_eq!(
@@ -4044,13 +4151,78 @@ mod tests {
             FailureKind::Transient,
             t0 + Duration::from_secs(1),
         );
-        assert_eq!(r.ordered(&names, t0 + Duration::from_secs(60)), vec![1]);
+        assert_eq!(r.ordered(&names, t0 + Duration::from_secs(60)), vec![1, 0]);
         assert_eq!(r.ordered(&names, t0 + Duration::from_secs(121)), vec![0, 1]);
 
         // Failing again after cooldown expires escalates to 10 minutes.
         let t2 = t0 + Duration::from_secs(125);
         r.record_failure("osu.direct", FailureKind::Transient, t2);
-        assert_eq!(r.ordered(&names, t2 + Duration::from_secs(300)), vec![1]);
+        assert_eq!(r.ordered(&names, t2 + Duration::from_secs(300)), vec![1, 0]);
         assert_eq!(r.ordered(&names, t2 + Duration::from_secs(601)), vec![0, 1]);
+    }
+
+    #[test]
+    fn a_learned_mirror_order_expires_and_an_unstamped_one_is_ignored() {
+        let dir =
+            std::env::temp_dir().join(format!("taiko-rs-mirror-router-ttl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mirror-order");
+        let defaults = vec!["osu.direct".to_string(), "mirror.nekoha.moe".to_string()];
+        let day = 24 * 60 * 60;
+        std::fs::write(&path, "saved 1000000\nmirror.nekoha.moe\nosu.direct\n").unwrap();
+        let r = MirrorRouter::new_at(defaults.clone(), Some(path.clone()), 1_000_000 + day / 2);
+        assert_eq!(r.order()[0], "mirror.nekoha.moe", "kept within a day");
+        let r = MirrorRouter::new_at(defaults.clone(), Some(path.clone()), 1_000_000 + 2 * day);
+        assert_eq!(
+            r.order()[0],
+            "osu.direct",
+            "the default order is back after a day"
+        );
+        // An order written by an older build (no time) isn't trusted.
+        std::fs::write(&path, "mirror.nekoha.moe\nosu.direct\n").unwrap();
+        let r = MirrorRouter::new_at(defaults, Some(path), 1_000_000);
+        assert_eq!(r.order()[0], "osu.direct");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_nekoha_page_of_100_is_cut_to_the_same_50_sets_other_mirrors_give() {
+        assert_eq!(nekoha_page(0), (1, 0));
+        assert_eq!(nekoha_page(1), (1, 50));
+        assert_eq!(nekoha_page(2), (2, 0));
+        let sets: Vec<serde_json::Value> = (0..100)
+            .map(|i| {
+                serde_json::json!({
+                    "id": i + 1, "artist": "a", "title": "t", "creator": "c", "status": "ranked",
+                    "beatmaps": [{"id": i + 1000, "version": "Oni", "mode": "taiko",
+                                  "mode_int": 1, "difficulty_rating": 5.0}]
+                })
+            })
+            .collect();
+        let full = serde_json::json!({ "beatmapsets": sets }).to_string();
+        let (first, count) = parse_page_for(&full, SearchStyle::Nekoha, 0).unwrap();
+        assert_eq!(first.len(), 50);
+        assert_eq!((first[0].id, first[49].id), (1, 50));
+        assert_eq!(count, PAGE, "a full reply may have more");
+        let (second, count) = parse_page_for(&full, SearchStyle::Nekoha, 1).unwrap();
+        assert_eq!((second[0].id, second[49].id), (51, 100));
+        assert_eq!(count, PAGE);
+        // A short last page: 60 sets, so our page 1 holds 10 and nothing comes after.
+        let short = serde_json::json!({ "beatmapsets": &sets_short(60) }).to_string();
+        let (tail, count) = parse_page_for(&short, SearchStyle::Nekoha, 1).unwrap();
+        assert_eq!(tail.len(), 10);
+        assert!(count < PAGE);
+    }
+
+    fn sets_short(n: usize) -> Vec<serde_json::Value> {
+        (0..n)
+            .map(|i| {
+                serde_json::json!({
+                    "id": i + 1, "beatmaps": [{"id": i + 1000, "version": "Oni", "mode": "taiko",
+                                               "mode_int": 1, "difficulty_rating": 5.0}]
+                })
+            })
+            .collect()
     }
 }
