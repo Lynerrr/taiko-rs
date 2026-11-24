@@ -37,12 +37,15 @@ impl Screen for ResultsScreen {
     fn presence(&self, state: &State) -> Option<(String, String)> {
         Some((
             state.library.get(self.entry)?.label(),
-            tr!(
-                "Looking at the results",
-                "リザルトを見ています",
-                "Смотрит итоги"
-            )
-            .into(),
+            super::play::journey_presence(
+                state,
+                tr!(
+                    "Looking at the results",
+                    "リザルトを見ています",
+                    "Смотрит итоги"
+                )
+                .into(),
+            ),
         ))
     }
 
