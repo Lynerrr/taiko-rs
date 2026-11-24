@@ -13501,7 +13501,11 @@ impl State {
                 }
             }
         }
-        if !(self.scene.is_select() || self.in_lobby()) {
+        // The mod select opens over song select, a lobby and Journey; anywhere else it goes.
+        if !(self.scene.is_select()
+            || self.in_lobby()
+            || self.scene.screen_is::<screens::journey::JourneyScreen>())
+        {
             self.mod_select = None;
         }
         if self.pick_to_edit && (self.main_menu.is_some() || !self.scene.is_select()) {

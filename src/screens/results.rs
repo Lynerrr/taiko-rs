@@ -175,10 +175,10 @@ impl Screen for ResultsScreen {
                 }
             }
             KeyCode::Escape => {
+                // The map was played: leaving its results goes on with Journey, as Next does,
+                // so it isn't left up to be skipped.
                 if state.playing_journey() {
-                    state.journey.in_play = false;
-                    state.journey.playing_cached = None;
-                    state.scene = super::journey::JourneyScreen::scene();
+                    state.journey_next_from_results(results.failed);
                 } else {
                     let path = state.library[self.entry].path.clone();
                     state.show_select();

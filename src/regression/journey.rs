@@ -508,3 +508,109 @@ fn song_select_by_its_tab_ends_journey() {
     assert!(!s.journey.active);
     assert!(!s.playing_journey());
 }
+
+#[test]
+fn journey_mods_button_opens_the_mod_select_over_journey() {
+    let songs = Songs::new("journey-mods", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_pick_level(2);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+
+    // Clicked where it is drawn, as a player does.
+    let (x, y) = s
+        .hits
+        .clone()
+        .into_iter()
+        .map(|h| (h.rect[0] + h.rect[2] / 2.0, h.rect[1] + h.rect[3] / 2.0))
+        .find(|&(x, y)| s.hit_at(x, y) == Some(hit::Hit::ModsButton))
+        .expect("Journey shows a Mods button");
+    let k = s.window_h / render::VIRTUAL_HEIGHT;
+    s.mouse_moved(f64::from(x * k), f64::from(y * k));
+    s.mouse_button(true, None);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    s.mouse_button(false, None);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert!(
+        s.mod_select.is_some(),
+        "the Mods button opens the mod select"
+    );
+    assert!(
+        s.hits.iter().any(|h| s
+            .hit_at(h.rect[0] + 1.0, h.rect[1] + 1.0)
+            .is_some_and(|hit| matches!(hit, hit::Hit::ModToggle(_)))),
+        "the mod select is drawn over Journey"
+    );
+
+    // A mod clicked there is on for the next Journey play.
+    let (x, y) = s
+        .hits
+        .clone()
+        .into_iter()
+        .map(|h| (h.rect[0] + h.rect[2] / 2.0, h.rect[1] + h.rect[3] / 2.0))
+        .find(|&(x, y)| matches!(s.hit_at(x, y), Some(hit::Hit::ModToggle(_))))
+        .unwrap();
+    s.mouse_moved(f64::from(x * k), f64::from(y * k));
+    s.mouse_button(true, None);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    s.mouse_button(false, None);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert!(s.mod_select.is_some());
+    assert!(!s.cfg.mods.is_empty(), "the mod clicked is on");
+
+    // Escape puts the mod select away and stays in Journey.
+    press(&mut s, KeyCode::Escape, now);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert!(s.mod_select.is_none());
+    assert!(s.journey.active);
+    assert_eq!(scene_name(&s), "Journey");
+}
+
+#[test]
+fn escape_from_journey_results_goes_on_to_the_next_map() {
+    let songs = Songs::new("journey-results-esc", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_pick_level(2);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let played = s.journey.current().unwrap().item.md5.clone();
+    let step = s.journey.step;
+
+    // A map played from Journey, on its results.
+    s.journey.in_play = true;
+    let mut r = ui::Results::new(
+        s.library[0].label(),
+        game::Stats::default(),
+        game::Windows::new(5.0),
+    );
+    r.shown = now - Duration::from_secs(10);
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+
+    press(&mut s, KeyCode::Escape, now);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Journey");
+    assert!(!s.journey.in_play);
+    // Counted as played, not skipped, and the next map is up.
+    assert_eq!(s.journey.step, step + 1);
+    assert_eq!(
+        s.journey.history.last().unwrap().outcome,
+        PastOutcome::Passed
+    );
+    if let Some(next) = s.journey.current() {
+        assert_ne!(next.item.md5, played);
+    }
+}
