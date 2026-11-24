@@ -51,6 +51,7 @@ text  420,406  0:00 / 0:10
 text  692,406  peak 7.0 notes/s at 0:01
 text  726,444  Play
 text   31,445  Menu
+text   80,445  Journey
 text  431,445  Mods
 text  479,445  Random
 text  586,445  1.00x
@@ -59,6 +60,7 @@ text  549,446  HD
 text  622,446  +
 text  572,448  -
 hit    16,437    43x23   ToMenu
+hit    65,437    61x23   JourneyButton
 hit   324,28     74x16   SortList
 hit    16,28    304x16   TextField
 hit    25,49    378x29   SongHeader(0)

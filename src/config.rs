@@ -142,6 +142,52 @@ impl CardFade {
     }
 }
 
+/// Where maps saved from Journey are moved when kept permanently.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum JourneySaveTo {
+    /// taiko.rs's own `Songs` folder (default: keeps your Journey library inside taiko.rs).
+    #[default]
+    Own,
+    /// osu!'s `Songs` folder.
+    Osu,
+}
+
+impl JourneySaveTo {
+    pub const ALL: [JourneySaveTo; 2] = [JourneySaveTo::Own, JourneySaveTo::Osu];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            JourneySaveTo::Own => tr!("taiko.rs folder", "taiko.rsフォルダ", "Папка taiko.rs"),
+            JourneySaveTo::Osu => tr!(
+                "osu! Songs folder",
+                "osu!のSongsフォルダ",
+                "Папка osu! Songs"
+            ),
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            JourneySaveTo::Own => "own",
+            JourneySaveTo::Osu => "osu",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<JourneySaveTo> {
+        JourneySaveTo::ALL
+            .into_iter()
+            .find(|v| v.key().eq_ignore_ascii_case(s))
+    }
+
+    pub fn step(self, dir: i32) -> JourneySaveTo {
+        let i = JourneySaveTo::ALL
+            .iter()
+            .position(|&v| v == self)
+            .unwrap_or(0) as i32;
+        JourneySaveTo::ALL[(i + dir).rem_euclid(JourneySaveTo::ALL.len() as i32) as usize]
+    }
+}
+
 /// Where an F12 screenshot goes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScreenshotTo {
@@ -238,6 +284,10 @@ pub struct Config {
     pub touch_layout: TouchLayout,
     /// Where F12 screenshots go.
     pub screenshot_to: ScreenshotTo,
+    /// Where maps saved from Journey go: taiko.rs's own Songs folder (default) or osu!'s.
+    pub journey_save_to: JourneySaveTo,
+    /// Liking a map in Journey automatically saves it from the temporary cache to the library.
+    pub journey_save_on_like: bool,
     /// The interface's language.
     pub language: crate::lang::Lang,
     /// Empty selects the original pixel font; otherwise an installed family name.
@@ -559,6 +609,8 @@ impl Default for Config {
             } else {
                 ScreenshotTo::Clipboard
             },
+            journey_save_to: JourneySaveTo::Own,
+            journey_save_on_like: true,
             language: crate::lang::Lang::En,
             ui_font: String::new(),
             // osu!'s default: a new player starts where an osu! player does.
@@ -830,6 +882,24 @@ fn custom_dir_in(folder: Option<&Path>) -> Option<PathBuf> {
         return Some(user_dir(false)?.join(CUSTOM));
     }
     own_dir_in(None, CUSTOM)
+}
+
+/// Temporary cache for maps downloaded on demand during Journey sessions (outside scanned Songs).
+pub fn journey_cache_dir() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("taiko-rs-journey-cache-{}", std::process::id()));
+    }
+    own_dir("JourneyCache").unwrap_or_else(|| {
+        std::env::temp_dir().join(format!("taiko-rs-journey-cache-{}", std::process::id()))
+    })
+}
+
+/// taiko.rs's own Songs folder (always scanned, separate from osu!'s Songs folder).
+pub fn own_songs_dir() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("taiko-rs-own-songs-{}", std::process::id()));
+    }
+    own_dir("Songs").unwrap_or_else(|| PathBuf::from("Songs"))
 }
 
 /// The default folder of TJA charts: `Tja` beside `Custom` (`custom_dir`); None in tests
@@ -1462,6 +1532,10 @@ impl Config {
                 "screenshot_to" => {
                     cfg.screenshot_to = ScreenshotTo::parse(v).unwrap_or(cfg.screenshot_to)
                 }
+                "journey_save_to" => {
+                    cfg.journey_save_to = JourneySaveTo::parse(v).unwrap_or(cfg.journey_save_to)
+                }
+                "journey_save_on_like" => cfg.journey_save_on_like = v != "false",
                 "ui_font" => cfg.ui_font = v.to_string(),
                 "language" => cfg.language = crate::lang::Lang::parse(v).unwrap_or(cfg.language),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
@@ -2098,6 +2172,14 @@ impl Config {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
         out.push_str(&format!("# Songs folder to scan instead of finding osu!'s (empty = find it)\nsongs_folder = {folder}\n"));
+        out.push_str(&format!(
+            "# where maps saved from Journey go: own (taiko.rs folder) or osu (osu! Songs)\njourney_save_to = {}\n",
+            self.journey_save_to.key()
+        ));
+        out.push_str(&format!(
+            "# automatically save a Journey map to the library when you like it\njourney_save_on_like = {}\n",
+            self.journey_save_on_like
+        ));
         let tja = self
             .tja_folder
             .as_ref()

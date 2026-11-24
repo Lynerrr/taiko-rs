@@ -264,6 +264,7 @@ fn requests() -> Vec<Request> {
                 rolls: Some(12),
                 operation_key: None,
                 tja: None,
+                from_journey: false,
             }),
         },
         // A TJA play, with its course's chart as the board knows it.
@@ -298,6 +299,7 @@ fn requests() -> Vec<Request> {
                     branches: None,
                     specials: None,
                 }),
+                from_journey: false,
             }),
         },
         Request::MapScores {
@@ -377,6 +379,7 @@ fn requests() -> Vec<Request> {
                 mods: vec!["HR".into()],
                 rate: 1.5,
                 scroll_speed: 1.2,
+                from_journey: false,
             }),
         },
         Request::MapVote {

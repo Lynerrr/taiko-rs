@@ -218,6 +218,10 @@ favourite_mods =
 note_colours = classic
 # Songs folder to scan instead of finding osu!'s (empty = find it)
 songs_folder =
+# where maps saved from Journey go: own (taiko.rs folder) or osu (osu! Songs)
+journey_save_to = own
+# automatically save a Journey map to the library when you like it
+journey_save_on_like = true
 # folder of TJA charts (empty = Tja beside Custom)
 tja_folder =
 # extra song folders / .osz files, one per line

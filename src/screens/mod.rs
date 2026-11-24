@@ -6,6 +6,7 @@ pub(crate) mod calibration;
 pub(crate) mod download;
 pub(crate) mod editor_home;
 pub(crate) mod hud_editor;
+pub(crate) mod journey;
 pub(crate) mod layout_edit;
 pub(crate) mod loading;
 pub(crate) mod lobby;

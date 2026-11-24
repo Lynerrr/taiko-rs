@@ -198,6 +198,7 @@ mod tests {
                 rolls: None,
                 operation_key: Some(key.into()),
                 tja: None,
+                from_journey: false,
             },
         }
     }
