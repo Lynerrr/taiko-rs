@@ -22,8 +22,15 @@ pub const MAX_PREFETCH_AHEAD: usize = 2;
 pub const MAX_CACHE_FOLDERS: usize = 20;
 /// Backoff after a failed online `JourneyNext` request before trying again (doubled after each
 /// failure in a row, up to `MAX_FETCH_BACKOFF`).
-const FETCH_ERROR_BACKOFF: Duration = Duration::from_secs(5);
-const MAX_FETCH_BACKOFF: Duration = Duration::from_secs(120);
+const FETCH_ERROR_BACKOFF: Duration = Duration::from_secs(2);
+const MAX_FETCH_BACKOFF: Duration = Duration::from_secs(30);
+/// How long online fetches may keep failing before a Journey with nothing left to show says the
+/// server is down: it often drops for a few seconds, and a retry within that goes on unnoticed.
+pub const OUTAGE_GRACE: Duration = Duration::from_secs(8);
+/// How often a Journey gone offline for a server outage asks the server again.
+const OFFLINE_PROBE: Duration = Duration::from_secs(30);
+/// Maps already shown that a session keeps to go back to.
+const BACK_LIMIT: usize = 16;
 /// How long an exhausted pool waits before asking again (new maps may have been fingerprinted).
 const EXHAUSTED_RETRY: Duration = Duration::from_secs(60);
 /// Most maps (and sets) a session remembers to not suggest again; the oldest go first.
@@ -45,6 +52,24 @@ pub enum PastOutcome {
     Passed,
     Failed,
     Skipped,
+}
+
+/// What Journey asks the player before it goes on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gate {
+    /// Not logged in: log in, make an account, or go on offline with the library.
+    SignedOut,
+    /// The server hasn't answered for [`OUTAGE_GRACE`] and nothing is left to play: wait for
+    /// it, or go on offline.
+    ServerDown,
+}
+
+/// The map Journey just moved on from.
+pub struct Left {
+    pub item: JourneyItem,
+    /// It had been left once already and was gone back to: the player's verdict on it was
+    /// already sent.
+    pub revisited: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -132,6 +157,19 @@ pub struct Journey {
     pub preview_cached: Option<PathBuf>,
     /// The current map's library index, found by its path (kept while it still matches).
     library_index: Option<(PathBuf, usize)>,
+    /// What Journey asks before it goes on, drawn instead of the map.
+    pub gate: Option<Gate>,
+    /// Why the player chose to go on offline, with the library only.
+    pub offline: Option<Gate>,
+    /// When the current run of failed online fetches began (none while the server answers).
+    pub outage_since: Option<Instant>,
+    /// When a Journey offline for an outage asks the server again.
+    pub next_probe: Option<Instant>,
+    /// Maps already shown, the last one last, each with what it ended with.
+    back: Vec<(QueuedMap, PastOutcome)>,
+    /// What the first maps of the queue ended with when they were left before (they were gone
+    /// back to), in queue order.
+    revisited: Vec<PastOutcome>,
 }
 
 impl Default for Journey {
@@ -168,6 +206,12 @@ impl Journey {
             local_mode: false,
             preview_cached: None,
             library_index: None,
+            gate: None,
+            offline: None,
+            outage_since: None,
+            next_probe: None,
+            back: Vec::new(),
+            revisited: Vec::new(),
         }
     }
 
@@ -239,7 +283,11 @@ impl Journey {
     /// `folder` was saved to `dest`: every queued map in it is now in the library there, and
     /// the play of it is no longer one to save.
     pub fn saved(&mut self, folder: &Path, dest: &Path) {
-        for q in &mut self.queue {
+        for q in self
+            .queue
+            .iter_mut()
+            .chain(self.back.iter_mut().map(|(q, _)| q))
+        {
             if let MapSource::Cached { folder: f, entry } = &q.source
                 && f == folder
             {
@@ -261,6 +309,7 @@ impl Journey {
         let clamped = ((stars * 4.0).round() / 4.0).clamp(1.0, 11.0);
         self.cancel_downloads();
         self.queue.clear();
+        self.revisited.clear();
         self.fetching = None;
         self.target_stars = Some(clamped);
         self.comfort_stars = clamped;
@@ -271,10 +320,11 @@ impl Journey {
         self.shown_at = Instant::now();
     }
 
-    /// Folders currently referenced by the queue or active play (protected from `prune_cache`).
+    /// Folders referenced by the queue, the maps to go back to or the active play (protected
+    /// from `prune_cache`).
     pub fn protected_cache_folders(&self) -> Vec<PathBuf> {
         let mut out = Vec::new();
-        for q in &self.queue {
+        for q in self.queue.iter().chain(self.back.iter().map(|(q, _)| q)) {
             if let MapSource::Cached { folder, .. } = &q.source {
                 out.push(folder.clone());
             }
@@ -308,17 +358,25 @@ impl Journey {
         }
     }
 
-    /// Advances past the front map and records its outcome on the top mini-lane.
-    pub fn advance(&mut self, outcome: PastOutcome) -> Option<QueuedMap> {
-        let popped = self.queue.pop_front()?;
+    /// Advances past the front map, records its outcome on the top mini-lane and keeps it to go
+    /// back to. Moving on past a map gone back to without playing it keeps what it ended with
+    /// before; playing it again counts.
+    pub fn advance(&mut self, outcome: PastOutcome) -> Option<Left> {
+        let mut popped = self.queue.pop_front()?;
+        let before = (!self.revisited.is_empty()).then(|| self.revisited.remove(0));
+        let outcome = match (before.clone(), outcome) {
+            (Some(before), PastOutcome::Skipped) => before,
+            (_, outcome) => outcome,
+        };
         if let MapSource::Downloading(job) = &popped.source {
             job.cancel.store(true, Ordering::Relaxed);
+            popped.source = MapSource::Pending;
         }
         self.playing_cached = None;
         self.history.push(PastMap {
             title: popped.item.title.clone(),
             role: popped.item.role.clone(),
-            outcome,
+            outcome: outcome.clone(),
         });
         if self.history.len() > 16 {
             self.history.remove(0);
@@ -326,7 +384,62 @@ impl Journey {
         self.step = self.step.saturating_add(1);
         self.shown_at = Instant::now();
         self.lane_slide = 28.0;
-        Some(popped)
+        let left = Left {
+            item: popped.item.clone(),
+            revisited: before.is_some(),
+        };
+        if !matches!(popped.source, MapSource::Failed(_)) {
+            self.back.push((popped, outcome));
+            let over = self.back.len().saturating_sub(BACK_LIMIT);
+            self.back.drain(..over);
+        }
+        Some(left)
+    }
+
+    /// Whether there is a map to go back to.
+    pub fn can_go_back(&self) -> bool {
+        !self.back.is_empty()
+    }
+
+    /// Goes back to the map shown before the current one. False when there is none.
+    pub fn go_back(&mut self) -> bool {
+        let Some((map, outcome)) = self.back.pop() else {
+            return false;
+        };
+        self.queue.push_front(map);
+        self.revisited.insert(0, outcome);
+        self.history.pop();
+        self.step = self.step.saturating_sub(1);
+        self.playing_cached = None;
+        self.shown_at = Instant::now();
+        self.lane_slide = -28.0;
+        true
+    }
+
+    /// Whether online fetches have kept failing for [`OUTAGE_GRACE`].
+    pub fn outage(&self, now: Instant) -> bool {
+        self.outage_since
+            .is_some_and(|since| now.saturating_duration_since(since) >= OUTAGE_GRACE)
+    }
+
+    /// Goes on with the library only, because of `reason`. Offline for an outage, the server is
+    /// asked again every [`OFFLINE_PROBE`].
+    pub fn go_offline(&mut self, reason: Gate) {
+        self.gate = None;
+        self.offline = Some(reason);
+        self.local_mode = true;
+        self.fetching = None;
+        self.error = None;
+        self.retry_after = None;
+        self.pool_exhausted = false;
+        self.next_probe = (reason == Gate::ServerDown).then(|| Instant::now() + OFFLINE_PROBE);
+    }
+
+    /// Whether a Journey offline for an outage asks the server again now.
+    pub fn probe_due(&self, now: Instant) -> bool {
+        self.offline == Some(Gate::ServerDown)
+            && self.fetching.is_none()
+            && self.next_probe.is_none_or(|at| now >= at)
     }
 
     /// Polls any in-flight `JourneyNext` RPC and returns `true` if the queue changed.
@@ -340,6 +453,17 @@ impl Journey {
                 self.error = None;
                 self.retry_after = None;
                 self.fetch_failures = 0;
+                self.outage_since = None;
+                if self.gate == Some(Gate::ServerDown) {
+                    self.gate = None;
+                }
+                // Offline for an outage, the server answered again: back online.
+                if self.offline == Some(Gate::ServerDown) {
+                    self.offline = None;
+                    self.local_mode = false;
+                    self.pool_exhausted = false;
+                    self.next_probe = None;
+                }
                 self.needs_level = batch.needs_level;
                 if batch.comfort_stars > 0.2 {
                     self.comfort_stars = batch.comfort_stars;
@@ -360,18 +484,25 @@ impl Journey {
                 true
             }
             Ok(Err(err)) => {
-                self.fetching = None;
-                self.error = Some(err);
-                self.backoff();
+                self.fetch_failed(err);
                 true
             }
             Err(mpsc::TryRecvError::Empty) => false,
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.fetching = None;
-                self.error = Some("Journey request interrupted".into());
-                self.backoff();
+                self.fetch_failed("Journey request interrupted".into());
                 true
             }
+        }
+    }
+
+    /// An online fetch failed: tried again after a backoff, while the outage is timed. Offline,
+    /// a failed probe leaves the library's maps coming.
+    fn fetch_failed(&mut self, err: String) {
+        self.fetching = None;
+        self.error = Some(err);
+        self.outage_since.get_or_insert_with(Instant::now);
+        if !self.local_mode {
+            self.backoff();
         }
     }
 
@@ -458,6 +589,17 @@ impl Journey {
             return;
         }
         let want = (MAX_PREFETCH_AHEAD.saturating_sub(self.queue.len())).clamp(1, 2) as u8;
+        self.spawn_next(server, token, scroll_speed, want);
+    }
+
+    /// Asks the server for one map while offline for an outage: an answer brings Journey back
+    /// online (`poll_fetch`).
+    pub fn probe(&mut self, server: String, token: String, scroll_speed: f64) {
+        self.next_probe = Some(Instant::now() + OFFLINE_PROBE);
+        self.spawn_next(server, token, scroll_speed, 1);
+    }
+
+    fn spawn_next(&mut self, server: String, token: String, scroll_speed: f64, want: u8) {
         let req = online::Request::JourneyNext {
             token,
             target_stars: self.target_stars,
@@ -992,5 +1134,49 @@ mod tests {
             j.exclude_md5s.last().unwrap(),
             &format!("{:032}", MAX_EXCLUDES + 49)
         );
+    }
+
+    #[test]
+    fn going_back_shows_the_last_map_again_and_moving_on_keeps_its_outcome() {
+        let mut j = Journey::new();
+        for set in 1..=3 {
+            j.queue.push_back(QueuedMap {
+                item: test_item("Oni", set),
+                source: MapSource::Local(PathBuf::from(format!("{set}.osu"))),
+            });
+        }
+        assert!(!j.can_go_back());
+        let first = j.advance(PastOutcome::Passed).unwrap();
+        assert!(!first.revisited);
+        j.advance(PastOutcome::Skipped).unwrap();
+        assert_eq!(j.step, 2);
+
+        // Back twice: the first map is up again, with nothing on the lane before it.
+        assert!(j.go_back() && j.go_back());
+        assert!(!j.go_back());
+        assert_eq!(j.step, 0);
+        assert!(j.history.is_empty());
+        assert_eq!(j.current().unwrap().item.set_id, Some(1));
+
+        // Moving on past it without playing keeps its pass; the second was skipped before.
+        let again = j.advance(PastOutcome::Skipped).unwrap();
+        assert!(again.revisited);
+        assert_eq!(j.history[0].outcome, PastOutcome::Passed);
+        // Playing the second this time counts.
+        assert!(j.advance(PastOutcome::Failed).unwrap().revisited);
+        assert_eq!(j.history[1].outcome, PastOutcome::Failed);
+        // The third was never left: a first verdict.
+        assert!(!j.advance(PastOutcome::Skipped).unwrap().revisited);
+    }
+
+    #[test]
+    fn a_failed_download_is_not_kept_to_go_back_to() {
+        let mut j = Journey::new();
+        j.queue.push_back(QueuedMap {
+            item: test_item("Oni", 1),
+            source: MapSource::Failed("gone".into()),
+        });
+        j.advance(PastOutcome::Skipped);
+        assert!(!j.can_go_back());
     }
 }

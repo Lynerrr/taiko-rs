@@ -3,7 +3,7 @@
 //! in the middle, and a Song-Select-style action bar along the bottom.
 
 use super::screen::{Frame, Key, Screen};
-use crate::journey::{LEVEL_CHOICES, MapSource, PastOutcome};
+use crate::journey::{Gate, LEVEL_CHOICES, MapSource, PastOutcome};
 use crate::*;
 
 pub(crate) struct JourneyScreen;
@@ -71,6 +71,22 @@ impl Screen for JourneyScreen {
             return;
         }
 
+        if let Some(gate) = state.journey.gate {
+            match (code, gate) {
+                (KeyCode::Escape, _) => state.exit_journey(),
+                (KeyCode::Enter | KeyCode::NumpadEnter, Gate::SignedOut) => {
+                    state.journey_login(false);
+                }
+                (KeyCode::KeyR, Gate::SignedOut) => state.journey_login(true),
+                (KeyCode::Enter | KeyCode::NumpadEnter, Gate::ServerDown) => {
+                    state.journey_retry();
+                }
+                (KeyCode::KeyO, _) => state.journey_go_offline(),
+                _ => {}
+            }
+            return;
+        }
+
         if state.journey.needs_level {
             match code {
                 KeyCode::ArrowUp | KeyCode::KeyW => {
@@ -96,6 +112,7 @@ impl Screen for JourneyScreen {
             KeyCode::Escape => state.exit_journey(),
             KeyCode::Enter | KeyCode::NumpadEnter => state.journey_play_current(),
             KeyCode::Tab | KeyCode::ArrowRight => state.journey_skip_current(),
+            KeyCode::ArrowLeft => state.journey_back(),
             KeyCode::KeyS => state.journey_save_current(),
             KeyCode::F1 => state.open_mods(),
             KeyCode::Minus | KeyCode::BracketLeft => state.journey_step_level(-1),
@@ -110,6 +127,11 @@ impl Screen for JourneyScreen {
         style::ground(canvas, 1.0);
         let w = canvas.width;
         let h = render::VIRTUAL_HEIGHT;
+
+        if let Some(gate) = state.journey.gate {
+            draw_gate(state, gate, canvas, w, h);
+            return None;
+        }
 
         if state.journey.needs_level {
             draw_level_picker(state, canvas, w, h);
@@ -128,6 +150,118 @@ impl Screen for JourneyScreen {
         draw_top_lane(state, canvas, w);
         draw_center_card(state, canvas, w, h);
         None
+    }
+}
+
+/// What Journey asks before it goes on: log in or go offline (signed out), or wait for the
+/// server or go offline (server down).
+fn draw_gate(state: &State, gate: Gate, c: &mut Canvas, w: f32, h: f32) {
+    let pw = (w - 48.0).clamp(420.0, 560.0);
+    let ph = 230.0;
+    let px = (w - pw) / 2.0;
+    let py = ((h - ph) / 2.0).max(60.0);
+    style::cold_panel(c, [px, py, pw, ph]);
+    let (title, body) = match gate {
+        Gate::SignedOut => (
+            tr!(
+                "Log in to start your Journey",
+                "ジャーニーを始めるにはログイン",
+                "Войди, чтобы начать Journey"
+            ),
+            tr!(
+                "Journey picks maps for you from the whole taiko.rs pool, downloads them as you go and learns from your plays. It needs a taiko.rs account.",
+                "ジャーニーは taiko.rs の全譜面からあなたに合う譜面を選び、その場でダウンロードし、プレイから学習します。taiko.rs アカウントが必要です。",
+                "Journey подбирает карты из всего пула taiko.rs, сам их скачивает и учится на твоих играх. Для этого нужен аккаунт taiko.rs."
+            ),
+        ),
+        Gate::ServerDown => (
+            tr!(
+                "Can't reach the taiko.rs server",
+                "taiko.rs サーバーに接続できません",
+                "Сервер taiko.rs не отвечает"
+            ),
+            tr!(
+                "Journey keeps trying in the background and goes on by itself as soon as the server answers.",
+                "バックグラウンドで再接続を続け、サーバーが応答するとそのまま再開します。",
+                "Journey продолжает пробовать в фоне и сам продолжит, как только сервер ответит."
+            ),
+        ),
+    };
+    let cx = px + pw / 2.0;
+    c.text_centered(cx, py + 22.0, 12.0, rgba(0xffffff, 0.96), title);
+    let mut y = py + 48.0;
+    for line in crate::mobile::wrap(8.0, pw - 48.0, body, 3) {
+        c.text_centered(cx, y, 8.0, rgba(0xb4b4c8, 1.0), &line);
+        y += 13.0;
+    }
+    if gate == Gate::ServerDown
+        && let Some(err) = &state.journey.error
+    {
+        c.text_centered(
+            cx,
+            y + 2.0,
+            7.0,
+            rgba(0x787890, 1.0),
+            &Canvas::fit(7.0, pw - 48.0, err),
+        );
+    }
+
+    let by = py + 128.0;
+    let bh = 26.0;
+    let offline = tr!("Continue offline", "オフラインで続ける", "Играть оффлайн");
+    let buttons: Vec<(&'static style::Icon, &str, bool, hit::Hit)> = match gate {
+        Gate::SignedOut => vec![
+            (
+                &style::PLAY,
+                tr!("Log in", "ログイン", "Войти"),
+                true,
+                hit::Hit::JourneyLogin(false),
+            ),
+            (
+                &style::SPARK,
+                tr!("Create account", "アカウント作成", "Создать аккаунт"),
+                false,
+                hit::Hit::JourneyLogin(true),
+            ),
+            (&style::FOLDER, offline, false, hit::Hit::JourneyOffline),
+        ],
+        Gate::ServerDown => vec![
+            (
+                &style::PLAY,
+                tr!("Retry now", "今すぐ再試行", "Повторить"),
+                true,
+                hit::Hit::JourneyRetry,
+            ),
+            (&style::FOLDER, offline, false, hit::Hit::JourneyOffline),
+        ],
+    };
+    // Centred: each about as wide as its label and icon (as the action bar reckons).
+    let gap = 10.0;
+    let row: f32 = buttons
+        .iter()
+        .map(|(_, label, _, _)| Canvas::text_width(8.0, label) + 34.0 + gap)
+        .sum::<f32>()
+        - gap;
+    let mut bx = cx - row / 2.0;
+    for (icon, label, lit, hit) in buttons {
+        bx += style::block_button(c, [bx, by], icon, label, None, 8.0, lit, hit, bh) + gap;
+    }
+    let note = match gate {
+        Gate::SignedOut => tr!(
+            "Offline, Journey only picks from maps already in your library: no new map downloads and no online analysis of your plays.",
+            "オフラインではライブラリ内の譜面だけから選びます。新しい譜面のダウンロードやプレイのオンライン分析はありません。",
+            "Оффлайн Journey берёт только карты из твоей библиотеки: без скачивания новых карт и без онлайн-анализа твоих игр."
+        ),
+        Gate::ServerDown => tr!(
+            "Offline, Journey only picks from maps already in your library, until the server is back: then it switches back by itself.",
+            "オフラインではサーバーが戻るまでライブラリ内の譜面だけから選び、戻ると自動で切り替わります。",
+            "Оффлайн Journey берёт только карты из твоей библиотеки, пока сервер не вернётся, а потом сам переключится обратно."
+        ),
+    };
+    let mut ny = by + 26.0;
+    for line in crate::mobile::wrap(7.0, pw - 48.0, note, 3) {
+        c.text_centered(cx, ny, 7.0, rgba(0x8888a4, 1.0), &line);
+        ny += 11.0;
     }
 }
 
@@ -207,6 +341,26 @@ fn draw_level_picker(state: &State, c: &mut Canvas, w: f32, h: f32) {
         &Canvas::fit(7.0, pw - 24.0, hint),
     );
 }
+
+/// The Skip icon turned around: back to the map before.
+const PREV_ICON: [&str; 16] = [
+    "................",
+    "................",
+    "....##......##..",
+    "...###.....###..",
+    "..####....####..",
+    ".#####...#####..",
+    "######..######..",
+    "######.#######..",
+    "######..######..",
+    ".#####...#####..",
+    "..####....####..",
+    "...###.....###..",
+    "....##......##..",
+    "................",
+    "................",
+    "................",
+];
 
 const SKIP_ICON: [&str; 16] = [
     "................",
@@ -452,7 +606,14 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         MapSource::Failed(e) => tr!("Error: {e}", "エラー: {e}", "Ошибка: {e}"; [] [e]),
     })) else {
         style::cold_panel(c, [cx, cy, cw, ch]);
-        let msg = if let Some(err) = &state.journey.error {
+        let msg = if state.journey.outage_since.is_some() && !state.journey.local_mode {
+            // A drop of a few seconds: retried before it's called an outage (`Gate::ServerDown`).
+            tr!(
+                "Reconnecting to the server...",
+                "サーバーに再接続中...",
+                "Переподключаемся к серверу..."
+            )
+        } else if let Some(err) = &state.journey.error {
             err.as_str()
         } else if state.journey.fetching.is_some() {
             tr!(
@@ -1030,9 +1191,10 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     let play_x = cx + cw - play_w;
     let skip_label = tr!("Skip", "スキップ", "Скип");
     let skip_w = Canvas::text_width(8.0, skip_label) + 34.0;
+    let skip_x = play_x - 10.0 - skip_w + 6.0;
     style::block_button(
         c,
-        [play_x - 10.0 - skip_w + 6.0, mid],
+        [skip_x, mid],
         &SKIP_ICON,
         skip_label,
         None,
@@ -1041,6 +1203,21 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         hit::Hit::Key(KeyCode::Tab),
         bh,
     );
+    if state.journey.can_go_back() {
+        let back_label = tr!("Back", "戻る", "Назад");
+        let back_w = Canvas::text_width(8.0, back_label) + 34.0;
+        style::block_button(
+            c,
+            [skip_x - 10.0 - back_w, mid],
+            &PREV_ICON,
+            back_label,
+            None,
+            8.0,
+            false,
+            hit::Hit::Key(KeyCode::ArrowLeft),
+            bh,
+        );
+    }
 
     let play_label = if is_ready {
         tr!("Play", "プレイ", "Играть")
@@ -1078,6 +1255,9 @@ impl State {
         self.picking_lobby_map = false;
         self.journey.reset();
         self.journey.screen_entered = Instant::now();
+        if self.cfg.online_token.is_empty() {
+            self.journey.gate = Some(Gate::SignedOut);
+        }
         self.journey_refill();
         self.scene = JourneyScreen::scene();
         self.journey_preview_current();
@@ -1120,35 +1300,54 @@ impl State {
     }
 
     pub(crate) fn journey_tick(&mut self) {
+        let was_offline = self.journey.offline == Some(Gate::ServerDown);
         let fetched = self.journey.poll_fetch(&self.library);
         let dl_done = self.journey.poll_downloads();
-        // If server returned an error with an empty queue, fall back to local library cleanly.
-        if fetched && self.journey.error.is_some() && self.journey.queue.is_empty() {
-            let err = self.journey.error.take();
-            if !self.library.is_empty() {
-                self.journey.local_mode = true;
-                self.journey.pool_exhausted = false;
-                self.journey.needs_level = self.journey.target_stars.is_none();
-                if !self.journey.needs_level {
-                    self.journey_fill_local();
-                }
-            } else {
-                self.journey.error = err;
-            }
+        if was_offline && self.journey.offline.is_none() {
+            self.toast(
+                tr!(
+                    "Server is back: Journey picks online again",
+                    "サーバーが復帰: オンラインの選曲に戻りました",
+                    "Сервер вернулся: Journey снова подбирает онлайн"
+                )
+                .into(),
+            );
+        }
+        let now = Instant::now();
+        // Failed fetches are retried quietly while there's a map to play, and for a few seconds
+        // with none: the server often drops only that long.
+        if self.journey.gate.is_none()
+            && !self.journey.local_mode
+            && !self.journey.needs_level
+            && self.journey.queue.is_empty()
+            && self.journey.outage(now)
+        {
+            self.journey.gate = Some(Gate::ServerDown);
         }
         if fetched || dl_done {
             self.journey_preview_current();
         }
-        if self.journey.can_refill(Instant::now()) {
+        if !self.cfg.online_token.is_empty() && self.journey.probe_due(now) {
+            self.journey.probe(
+                self.cfg.online_server.clone(),
+                self.cfg.online_token.clone(),
+                self.cfg.scroll_speed,
+            );
+        }
+        if self.journey.can_refill(now) {
             self.journey_refill();
         }
     }
 
     fn journey_refill(&mut self) {
-        if !self.journey.can_refill(Instant::now()) {
+        if self.journey.gate == Some(Gate::SignedOut) || !self.journey.can_refill(Instant::now()) {
             return;
         }
-        let can_online = !self.cfg.online_token.is_empty() && self.journey_supported;
+        // A server known to be up without Journey leaves the library. Otherwise Journey asks:
+        // the account check may not have answered yet, or the server may be down a moment.
+        let without_journey =
+            !self.journey_supported && matches!(self.mp_menu.online, Some(Ok(())));
+        let can_online = !self.cfg.online_token.is_empty() && !without_journey;
         if can_online && !self.journey.local_mode {
             self.journey.request_next(
                 self.cfg.online_server.clone(),
@@ -1220,7 +1419,13 @@ impl State {
         let Some(skipped) = self.journey.advance(PastOutcome::Skipped) else {
             return;
         };
-        if !self.journey.local_mode && !self.cfg.online_token.is_empty() {
+        // A map gone back to had its verdict sent when it was first left; a library pick made
+        // offline is no server map.
+        if !skipped.revisited
+            && !self.journey.local_mode
+            && !self.cfg.online_token.is_empty()
+            && !skipped.item.md5.starts_with("local:")
+        {
             let server = self.cfg.online_server.clone();
             let req = online::Request::JourneySkip {
                 token: self.cfg.online_token.clone(),
@@ -1234,6 +1439,38 @@ impl State {
         }
         self.journey_refill();
         self.journey_preview_current();
+    }
+
+    /// Back to the map shown before the current one.
+    pub(crate) fn journey_back(&mut self) {
+        if self.journey.go_back() {
+            self.journey_preview_current();
+        }
+    }
+
+    /// Leaves Journey for the account form: logging in (`register` false) or making an account.
+    pub(crate) fn journey_login(&mut self, register: bool) {
+        self.exit_journey();
+        self.mp_menu.open(if register {
+            multiplayer::Form::Register
+        } else {
+            multiplayer::Form::Main
+        });
+        self.goto_tab(2);
+    }
+
+    /// Goes on with the library only, for the reason Journey asked.
+    pub(crate) fn journey_go_offline(&mut self) {
+        let reason = self.journey.gate.unwrap_or(Gate::SignedOut);
+        self.journey.go_offline(reason);
+        self.journey_refill();
+        self.journey_preview_current();
+    }
+
+    /// Asks the server again now instead of after the backoff.
+    pub(crate) fn journey_retry(&mut self) {
+        self.journey.retry_after = None;
+        self.journey_refill();
     }
 
     pub(crate) fn journey_play_current(&mut self) {

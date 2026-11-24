@@ -15794,6 +15794,9 @@ impl State {
             Hit::JourneyLevelOpen => self.journey_open_level_picker(),
             Hit::JourneySave => self.journey_save_current(),
             Hit::JourneyNext => self.journey_next_from_results(false),
+            Hit::JourneyLogin(register) => self.journey_login(register),
+            Hit::JourneyOffline => self.journey_go_offline(),
+            Hit::JourneyRetry => self.journey_retry(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
                 self.toggle_mod(mods::ALL[i]);
