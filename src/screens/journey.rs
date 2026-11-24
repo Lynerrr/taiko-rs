@@ -125,8 +125,9 @@ impl Screen for JourneyScreen {
             KeyCode::ArrowLeft => state.journey_back(),
             KeyCode::KeyS => state.journey_save_current(),
             KeyCode::F1 => state.open_mods(),
-            KeyCode::Minus | KeyCode::BracketLeft => state.journey_step_level(-1),
-            KeyCode::Equal | KeyCode::BracketRight => state.journey_step_level(1),
+            KeyCode::BracketLeft | KeyCode::BracketRight => {
+                state.step_rate(code == KeyCode::BracketRight);
+            }
             _ => {}
         }
     }
@@ -632,10 +633,11 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
 fn current_entry_for_preview<'a>(
     journey: &'a crate::journey::Journey,
     library: &'a [library::Entry],
+    library_idx: Option<usize>,
 ) -> Option<&'a library::Entry> {
     let cur = journey.current()?;
     match &cur.source {
-        MapSource::Local(p) | MapSource::Saved(p) => library.iter().find(|e| &e.path == p),
+        MapSource::Local(_) | MapSource::Saved(_) => library_idx.and_then(|i| library.get(i)),
         MapSource::Cached { entry, .. } => Some(entry.as_ref()),
         _ => None,
     }
@@ -700,9 +702,10 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     };
     let (item, is_ready, is_in_library, dl_progress, is_failed, status_str) = cur_cloned;
     let (role_label, role_col) = role_badge(&item.role);
-    let preview_entry = current_entry_for_preview(&state.journey, &state.library);
+    let lib_idx = state.journey.current_library_index(&state.library);
+    let preview_entry = current_entry_for_preview(&state.journey, &state.library, lib_idx);
     let is_epic = state.journey_map_is_epic(&item, preview_entry);
-    let map_status = state.journey_map_status(&item, preview_entry);
+    let map_status = state.journey_map_status(&item, preview_entry, lib_idx);
     let (entry_path, bg_path, od_raw, entry_level) = match preview_entry {
         Some(e) => (
             is_ready.then(|| e.path.clone()),
@@ -1029,7 +1032,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
 
     let scroll_speed = state.cfg.scroll_speed;
     if let Some(entry) =
-        current_entry_for_preview(&state.journey, &state.library).filter(|_| is_ready)
+        current_entry_for_preview(&state.journey, &state.library, lib_idx).filter(|_| is_ready)
     {
         let active =
             state
@@ -1294,14 +1297,14 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     let mid = ay + actions_h / 2.0;
     let bh = actions_h - 4.0;
     let mods_word = tr!("Mods", "Mod", "Моды");
-    style::block_button(
+    let mods_w = style::block_button(
         c,
         [cx + 6.0, mid],
         &style::SLIDERS,
         mods_word,
         None,
         8.0,
-        !state.cfg.mods.is_empty() || (rate - 1.0).abs() > 1e-4,
+        !state.cfg.mods.is_empty(),
         hit::Hit::ModsButton,
         bh,
     );
@@ -1311,6 +1314,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     let skip_label = tr!("Skip", "スキップ", "Скип");
     let skip_w = Canvas::text_width(8.0, skip_label) + 34.0;
     let skip_x = play_x - 10.0 - skip_w + 6.0;
+    let mut right_left = skip_x - 6.0;
     style::block_button(
         c,
         [skip_x, mid],
@@ -1325,9 +1329,11 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     if state.journey.can_go_back() {
         let back_label = tr!("Back", "戻る", "Назад");
         let back_w = Canvas::text_width(8.0, back_label) + 34.0;
+        let back_x = skip_x - 10.0 - back_w;
+        right_left = back_x - 6.0;
         style::block_button(
             c,
-            [skip_x - 10.0 - back_w, mid],
+            [back_x, mid],
             &PREV_ICON,
             back_label,
             None,
@@ -1337,6 +1343,17 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
             bh,
         );
     }
+    let from = cx + mods_w + 10.0;
+    let room = (right_left - 10.0 - from).max(0.0);
+    crate::screens::select::song_select::draw_action_mods_and_rate(
+        c,
+        from,
+        mid,
+        bh,
+        room,
+        state.cfg.mods,
+        state.cfg.rate,
+    );
 
     let play_label = if is_ready {
         tr!("Play", "プレイ", "Играть")
@@ -1505,34 +1522,24 @@ impl State {
     }
 
     fn journey_fill_local(&mut self) {
-        let rate = self.cfg.rate;
+        let rate = self.play_speed().0;
         let stars = &self.stars;
-        let info = self.select.info.as_ref().map(|m| m.lock().unwrap().clone());
+        let info = self.select.info.as_ref().map(|m| m.lock().unwrap());
         self.journey.fill_from_local(&self.library, |i| {
-            stars.get(i, rate).or_else(|| {
-                info.as_ref()
-                    .and_then(|v| v.get(i).copied().flatten())
-                    .map(|mi| mi.stars)
-                    .filter(|s| s.is_finite() && *s > 0.1)
-            })
+            let mi = info.as_deref().and_then(|v| v.get(i).copied().flatten());
+            let st = stars
+                .get(i, rate)
+                .or_else(|| mi.map(|mi| mi.stars).filter(|s| s.is_finite() && *s > 0.1));
+            let bpm = mi
+                .map(|mi| mi.bpm)
+                .filter(|b| b.is_finite() && *b > 0.0)
+                .map_or(0.0, f64::from);
+            let length_ms = mi
+                .map(|mi| mi.length_ms)
+                .filter(|l| l.is_finite() && *l > 0.0)
+                .map_or(0, |l| l as u64);
+            (st, bpm, length_ms)
         });
-        if let Some(info) = info {
-            for q in &mut self.journey.queue {
-                let MapSource::Local(path) = &q.source else {
-                    continue;
-                };
-                if let Some(idx) = self.library.iter().position(|e| &e.path == path)
-                    && let Some(mi) = info.get(idx).copied().flatten()
-                {
-                    if q.item.bpm <= 0.0 && mi.bpm.is_finite() && mi.bpm > 0.0 {
-                        q.item.bpm = f64::from(mi.bpm);
-                    }
-                    if q.item.length_ms == 0 && mi.length_ms.is_finite() && mi.length_ms > 0.0 {
-                        q.item.length_ms = mi.length_ms as u64;
-                    }
-                }
-            }
-        }
     }
 
     pub(crate) fn journey_preview_current(&mut self) {

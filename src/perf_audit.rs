@@ -559,3 +559,100 @@ fn drum_press_in_play() {
     );
     report("input/drum-press", samples.split_off(3));
 }
+
+#[test]
+#[ignore = "opt-in performance audit; run with the perf-audit profile"]
+fn journey_large_library_frame() {
+    use crate::journey::{MapSource, QueuedMap};
+    use regression::harness::{self, *};
+    let songs = Songs::new("perf-journey", &[stream_chart(200, 120)]);
+    let base = songs.entries().remove(0);
+    let n = 20_000usize;
+    let mut entries = Vec::with_capacity(n);
+    for i in 0..n {
+        let path = if i == 0 || i == n - 1 {
+            base.path.clone()
+        } else {
+            PathBuf::from(format!(
+                "/home/player/.local/share/osu/Songs/{i} Artist {i} - Song Title {i}/Artist - Song [Oni {i}].osu"
+            ))
+        };
+        // Give index n - 1 its own distinct path so find/position reaches the very end.
+        let path = if i == n - 1 {
+            PathBuf::from(format!(
+                "/home/player/.local/share/osu/Songs/{i} Last Artist - Last Song/Last [Oni].osu"
+            ))
+        } else {
+            path
+        };
+        let mut meta = base.meta.clone();
+        meta.set_id = Some(100_000 + i as u32);
+        entries.push(library::Entry::from_parts(
+            path,
+            meta,
+            base.size,
+            base.modified,
+        ));
+    }
+    let mut s = state_with(harness::config(), entries);
+    let mut now = Instant::now();
+    frame(&mut s, now);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    s.mapinfo = None;
+    assert_eq!(s.library.len(), n);
+    s.open_journey();
+    s.journey.gate = None;
+    s.journey.needs_level = false;
+    s.journey.local_mode = true;
+    s.journey.pool_exhausted = true;
+
+    let make_item = |set_id: u32| online::JourneyItem {
+        md5: format!("{set_id:032}"),
+        map_hash: None,
+        set_id: Some(set_id),
+        custom_id: None,
+        title: "Perf Song".into(),
+        artist: "Perf Artist".into(),
+        creator: "Mapper".into(),
+        version: "Oni".into(),
+        stars: 5.5,
+        bpm: 180.0,
+        length_ms: 90_000,
+        role: "main".into(),
+        reason: "Fits your comfort level".into(),
+        scroll_velocity: 0.5,
+        profile: Default::default(),
+    };
+    let mut canvas = Canvas::default();
+
+    for (label, source) in [
+        ("idx=0", MapSource::Local(s.library[0].path.clone())),
+        ("idx=19999", MapSource::Local(s.library[n - 1].path.clone())),
+        (
+            "cached",
+            MapSource::Cached {
+                folder: base.path.parent().unwrap().to_path_buf(),
+                entry: Box::new(library::Entry::from_parts(
+                    PathBuf::from("/tmp/taiko-rs-journey-cache-0/999999 Cached/chart.osu"),
+                    base.meta.clone(),
+                    base.size,
+                    base.modified,
+                )),
+            },
+        ),
+    ] {
+        s.journey.queue.clear();
+        s.journey.queue.push_back(QueuedMap {
+            item: make_item(900_000),
+            source,
+        });
+        // Prime one frame so one-time cache misses settle; measure steady-state frames.
+        now += Duration::from_millis(16);
+        s.build_frame(&mut canvas, now, 853.3);
+        measure(&format!("journey/frame-20k/{label}"), 20, || {
+            now += Duration::from_millis(16);
+            black_box(s.build_frame(&mut canvas, now, 853.3));
+        });
+    }
+}
