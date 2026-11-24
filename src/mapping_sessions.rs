@@ -130,7 +130,20 @@ impl State {
             invite.state = social::InviteState::Declined;
             return;
         }
-        invite.state = social::InviteState::Joined;
+        if self.has_open_editor() {
+            self.toast(
+                tr!(
+                    "leave the editor first",
+                    "先にエディタを閉じてください",
+                    "сначала закройте редактор"
+                )
+                .into(),
+            );
+            return;
+        }
+        if let Some(invite) = self.social.invites.get_mut(&session) {
+            invite.state = social::InviteState::Joined;
+        }
         self.social.close();
         self.join_mapping(session);
     }

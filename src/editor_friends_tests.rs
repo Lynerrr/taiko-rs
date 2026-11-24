@@ -145,3 +145,67 @@ fn elsewhere_the_open_panel_takes_the_keyboard_at_once() {
     s.open_social();
     assert!(s.social_keys());
 }
+
+#[test]
+fn watching_joining_or_accepting_collab_does_not_discard_an_open_editor() {
+    let mut s = editing();
+    // Pretend the social connection and mapping sessions are live so every action below would
+    // actually leave the editor if the open-editor guard were missing.
+    s.social.conn = Some(online::Social::start("127.0.0.1:0".into(), "t".into()));
+    s.social.connected = true;
+    s.mapping_sessions = true;
+    // Make an unsaved edit so we prove it survives untouched.
+    if let Some(MapEditor { view, .. }) = s.scene.screen_mut::<MapEditor>() {
+        view.ed.place_hit(3000.0, false);
+        assert!(view.ed.modified());
+    }
+    // 1. Clicking a friend's "started playing" notification (NoteAction::Watch) must not leave.
+    s.social.notify(
+        "fox",
+        "playing something",
+        0x4fb4ff,
+        social::NoteAction::Watch("fox".into()),
+    );
+    s.click(crate::hit::Hit::SocialNote(0), None);
+    assert!(
+        s.scene.screen_is::<MapEditor>(),
+        "watch must not discard the open editor"
+    );
+    assert!(
+        s.toast.as_ref().is_some_and(|t| t.text.contains("editor")),
+        "{:?}",
+        s.toast.as_ref().map(|t| &t.text)
+    );
+    if let Some(MapEditor { view, .. }) = s.scene.screen_as::<MapEditor>() {
+        assert!(view.ed.modified(), "unsaved work is still there");
+    }
+
+    // 2. Joining an online lobby must not leave the open editor.
+    s.toast = None;
+    s.join_room(42, "lobby".into());
+    assert!(s.scene.screen_is::<MapEditor>());
+    assert!(s.mp_connecting.is_none());
+    assert!(s.toast.as_ref().is_some_and(|t| t.text.contains("editor")));
+
+    // 3. Accepting a mapping invite must not overwrite the open editor, and keeps the invite open.
+    s.toast = None;
+    s.social.add_invite(
+        9,
+        social::MappingInvite {
+            from: "host".into(),
+            title: "Other - Song".into(),
+            mode: taiko_proto::mapping::Mode::Collab,
+            state: social::InviteState::Open,
+        },
+        1,
+    );
+    s.click(crate::hit::Hit::MappingInvite(9, true), None);
+    assert!(s.scene.screen_is::<MapEditor>());
+    assert!(s.mapping_join.is_none());
+    assert_eq!(s.social.invites[&9].state, social::InviteState::Open);
+    assert!(s.toast.as_ref().is_some_and(|t| t.text.contains("editor")));
+
+    // Declining an invite while in the editor still works.
+    s.click(crate::hit::Hit::MappingInvite(9, false), None);
+    assert_eq!(s.social.invites[&9].state, social::InviteState::Declined);
+}
