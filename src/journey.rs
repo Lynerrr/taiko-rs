@@ -20,8 +20,14 @@ use crate::online::{self, JourneyBatch, JourneyItem, JourneyProfile};
 pub const MAX_PREFETCH_AHEAD: usize = 2;
 /// Maximum cached mapset folders kept in `JourneyCache` before oldest are pruned.
 pub const MAX_CACHE_FOLDERS: usize = 20;
-/// Backoff after a failed online `JourneyNext` request before trying again.
+/// Backoff after a failed online `JourneyNext` request before trying again (doubled after each
+/// failure in a row, up to `MAX_FETCH_BACKOFF`).
 const FETCH_ERROR_BACKOFF: Duration = Duration::from_secs(5);
+const MAX_FETCH_BACKOFF: Duration = Duration::from_secs(120);
+/// How long an exhausted pool waits before asking again (new maps may have been fingerprinted).
+const EXHAUSTED_RETRY: Duration = Duration::from_secs(60);
+/// Most maps (and sets) a session remembers to not suggest again; the oldest go first.
+const MAX_EXCLUDES: usize = 400;
 
 /// Cold-start star rating choices shown when a player has too little history.
 pub const LEVEL_CHOICES: [(&str, f64); 6] = [
@@ -107,6 +113,8 @@ pub struct Journey {
     pub pool_exhausted: bool,
     /// Earliest instant to retry after an online fetch error.
     pub retry_after: Option<Instant>,
+    /// Online fetches failed in a row (drives the backoff).
+    pub fetch_failures: u32,
     pub error: Option<String>,
     pub shown_at: Instant,
     /// When the Journey screen itself was opened (drives screen entrance animation).
@@ -119,6 +127,11 @@ pub struct Journey {
     pub playing_cached: Option<(PathBuf, JourneyItem)>,
     /// True when the active session is running against local library fallback (offline / old server).
     pub local_mode: bool,
+    /// The cached (not in the library) map the preview last played: another one is a new song
+    /// even though it's always entry 0 of its one-entry list.
+    pub preview_cached: Option<PathBuf>,
+    /// The current map's library index, found by its path (kept while it still matches).
+    library_index: Option<(PathBuf, usize)>,
 }
 
 impl Default for Journey {
@@ -145,6 +158,7 @@ impl Journey {
             fetching: None,
             pool_exhausted: false,
             retry_after: None,
+            fetch_failures: 0,
             error: None,
             shown_at: Instant::now(),
             screen_entered: Instant::now(),
@@ -152,7 +166,27 @@ impl Journey {
             in_play: false,
             playing_cached: None,
             local_mode: false,
+            preview_cached: None,
+            library_index: None,
         }
+    }
+
+    /// Where the current map is in `library`, when it's a library map (none while it's cached,
+    /// downloading or failed).
+    pub fn current_library_index(&mut self, library: &[Entry]) -> Option<usize> {
+        let path = match self.queue.front().map(|q| &q.source) {
+            Some(MapSource::Local(p) | MapSource::Saved(p)) => p,
+            _ => return None,
+        };
+        if let Some((known, i)) = &self.library_index
+            && known == path
+            && library.get(*i).is_some_and(|e| &e.path == path)
+        {
+            return Some(*i);
+        }
+        let i = library.iter().position(|e| &e.path == path)?;
+        self.library_index = Some((path.clone(), i));
+        Some(i)
     }
 
     /// Resets session state for a fresh Journey run.
@@ -182,13 +216,43 @@ impl Journey {
     }
 
     /// Stops any background prefetch downloads/extractions before gameplay starts so weak CPUs
-    /// never stutter during play; they resume automatically back on the Journey screen.
+    /// never stutter during play; they resume back on the Journey screen, from the cache when
+    /// one had already finished unpacking (`poll_downloads`).
     pub fn pause_background_downloads(&mut self) {
         for q in &mut self.queue {
             if let MapSource::Downloading(job) = &q.source {
                 job.cancel.store(true, Ordering::Relaxed);
                 q.source = MapSource::Pending;
             }
+        }
+    }
+
+    /// Waits longer after each online fetch failure in a row.
+    fn backoff(&mut self) {
+        self.fetch_failures = self.fetch_failures.saturating_add(1);
+        let wait = FETCH_ERROR_BACKOFF
+            .saturating_mul(1 << self.fetch_failures.saturating_sub(1).min(5))
+            .min(MAX_FETCH_BACKOFF);
+        self.retry_after = Some(Instant::now() + wait);
+    }
+
+    /// `folder` was saved to `dest`: every queued map in it is now in the library there, and
+    /// the play of it is no longer one to save.
+    pub fn saved(&mut self, folder: &Path, dest: &Path) {
+        for q in &mut self.queue {
+            if let MapSource::Cached { folder: f, entry } = &q.source
+                && f == folder
+            {
+                let moved = moved_path(&entry.path, folder, dest);
+                q.source = MapSource::Saved(moved);
+            }
+        }
+        if self
+            .playing_cached
+            .as_ref()
+            .is_some_and(|(f, _)| f == folder)
+        {
+            self.playing_cached = None;
         }
     }
 
@@ -238,6 +302,10 @@ impl Journey {
         if !self.exclude_sets.iter().any(|s| s == &set_key) {
             self.exclude_sets.push(set_key);
         }
+        for list in [&mut self.exclude_md5s, &mut self.exclude_sets] {
+            let over = list.len().saturating_sub(MAX_EXCLUDES);
+            list.drain(..over);
+        }
     }
 
     /// Advances past the front map and records its outcome on the top mini-lane.
@@ -246,6 +314,7 @@ impl Journey {
         if let MapSource::Downloading(job) = &popped.source {
             job.cancel.store(true, Ordering::Relaxed);
         }
+        self.playing_cached = None;
         self.history.push(PastMap {
             title: popped.item.title.clone(),
             role: popped.item.role.clone(),
@@ -270,6 +339,7 @@ impl Journey {
                 self.fetching = None;
                 self.error = None;
                 self.retry_after = None;
+                self.fetch_failures = 0;
                 self.needs_level = batch.needs_level;
                 if batch.comfort_stars > 0.2 {
                     self.comfort_stars = batch.comfort_stars;
@@ -282,6 +352,7 @@ impl Journey {
                 }
                 if !batch.needs_level && batch.items.is_empty() {
                     self.pool_exhausted = true;
+                    self.retry_after = Some(Instant::now() + EXHAUSTED_RETRY);
                 }
                 for item in batch.items {
                     self.enqueue_item(item, library);
@@ -291,14 +362,14 @@ impl Journey {
             Ok(Err(err)) => {
                 self.fetching = None;
                 self.error = Some(err);
-                self.retry_after = Some(Instant::now() + FETCH_ERROR_BACKOFF);
+                self.backoff();
                 true
             }
             Err(mpsc::TryRecvError::Empty) => false,
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.fetching = None;
                 self.error = Some("Journey request interrupted".into());
-                self.retry_after = Some(Instant::now() + FETCH_ERROR_BACKOFF);
+                self.backoff();
                 true
             }
         }
@@ -330,7 +401,14 @@ impl Journey {
         let mut changed = false;
         for q in self.queue.iter_mut().take(MAX_PREFETCH_AHEAD) {
             if matches!(q.source, MapSource::Pending) {
-                q.source = start_item_download(&q.item, &protected);
+                // A download paused for a play may have finished unpacking first.
+                q.source = match find_in_cache(&q.item) {
+                    Some((folder, entry)) => MapSource::Cached {
+                        folder,
+                        entry: Box::new(entry),
+                    },
+                    None => start_item_download(&q.item, &protected),
+                };
                 changed = true;
             }
             let finished = match &mut q.source {
@@ -363,11 +441,12 @@ impl Journey {
 
     /// Whether another refill request is allowed right now (respects `pool_exhausted` and backoff).
     pub fn can_refill(&self, now: Instant) -> bool {
-        if self.needs_level
-            || self.pool_exhausted
-            || self.fetching.is_some()
-            || self.queue.len() >= MAX_PREFETCH_AHEAD
-        {
+        if self.needs_level || self.fetching.is_some() || self.queue.len() >= MAX_PREFETCH_AHEAD {
+            return false;
+        }
+        // An exhausted pool is asked again once its wait is over (online only: the local
+        // library doesn't grow by waiting).
+        if self.pool_exhausted && (self.local_mode || self.retry_after.is_none()) {
             return false;
         }
         self.retry_after.is_none_or(|until| now >= until)
@@ -490,7 +569,7 @@ impl Journey {
             let e = &library[idx];
             used_local.insert(local_set_key(e));
             let item = JourneyItem {
-                md5: format!("local:{idx}"),
+                md5: format!("local:{}", e.path.display()),
                 map_hash: e.known_hash(),
                 set_id: e.meta.set_id,
                 custom_id: None,
@@ -600,39 +679,65 @@ fn start_item_download(item: &JourneyItem, protected: &[PathBuf]) -> MapSource {
     MapSource::Downloading(Box::new(download::start(info, cache)))
 }
 
+/// The maps in one set folder (none when it's gone). Read with a scan cache of Journey's own, so
+/// the library's cache isn't written from two places at once.
 pub fn scan_single_folder(folder: &Path) -> Vec<Entry> {
+    if !folder.is_dir() {
+        return Vec::new();
+    }
     let found = AtomicUsize::new(0);
-    crate::library::scan(&[folder.to_path_buf()], &found, &mut |_| {})
+    let cache = config::journey_cache_dir().join("scan-cache");
+    crate::library::scan_cached(&[folder.to_path_buf()], &found, &cache, &mut |_| {})
+}
+
+/// Where `path`, inside `folder`, is once `folder` has moved to `dest`.
+pub fn moved_path(path: &Path, folder: &Path, dest: &Path) -> PathBuf {
+    path.strip_prefix(folder)
+        .map_or_else(|_| path.to_path_buf(), |rel| dest.join(rel))
 }
 
 fn load_entry_from_folder(folder: &Path, item: &JourneyItem) -> Option<Entry> {
-    let entries = scan_single_folder(folder);
-    let idx = entries
-        .iter()
-        .position(|e| {
-            item.map_hash.is_some_and(|h| e.known_hash() == Some(h))
-                || e.meta.version.eq_ignore_ascii_case(&item.version)
-        })
-        .unwrap_or(0);
-    entries.into_iter().nth(idx)
+    pick_difficulty(scan_single_folder(folder), item)
+}
+
+/// The difficulty of a set that `item` is: by its hash, else by its name. None when neither
+/// matches: another difficulty of the set would be played and scored as this one.
+pub fn pick_difficulty(entries: Vec<Entry>, item: &JourneyItem) -> Option<Entry> {
+    let by_hash = item
+        .map_hash
+        .and_then(|h| entries.iter().position(|e| e.known_hash() == Some(h)));
+    let at = by_hash.or_else(|| {
+        entries
+            .iter()
+            .position(|e| e.meta.version.eq_ignore_ascii_case(&item.version))
+    })?;
+    entries.into_iter().nth(at)
 }
 
 /// Moves a cached mapset folder into the player's permanent library folder:
 /// - custom maps -> `config::custom_dir()`
 /// - osu! maps -> `config::own_songs_dir()` when `save_to == JourneySaveTo::Own` (default),
-///   or `osu_songs` when `save_to == JourneySaveTo::Osu`.
+///   or `osu_songs` when `save_to == JourneySaveTo::Osu` (an error without one: taiko.rs's own
+///   folder isn't osu!'s).
 pub fn save_cached_folder(
     cached_folder: &Path,
     is_custom: bool,
     save_to: JourneySaveTo,
-    osu_songs: &Path,
+    osu_songs: Option<&Path>,
 ) -> Result<PathBuf, String> {
     let dest_root = if is_custom {
         config::custom_dir()
     } else {
         match save_to {
             JourneySaveTo::Own => config::own_songs_dir(),
-            JourneySaveTo::Osu => osu_songs.to_path_buf(),
+            JourneySaveTo::Osu => osu_songs.map(Path::to_path_buf).ok_or_else(|| {
+                tr!(
+                    "no osu! Songs folder found: pick one in Settings > Library",
+                    "osu!のSongsフォルダが見つかりません: 設定 > ライブラリで選んでください",
+                    "папка osu! Songs не найдена: выбери её в Настройки > Библиотека"
+                )
+                .to_string()
+            })?,
         }
     };
     std::fs::create_dir_all(&dest_root)
@@ -647,7 +752,16 @@ pub fn save_cached_folder(
     if std::fs::rename(cached_folder, &dest).is_ok() {
         return Ok(dest);
     }
-    copy_dir_all(cached_folder, &dest).map_err(|e| format!("copy to {}: {e}", dest.display()))?;
+    // Another drive: copied beside it first, so a copy cut short is never taken for the set.
+    let mut part_name = name.to_os_string();
+    part_name.push(".part");
+    let part = dest_root.join(part_name);
+    let _ = std::fs::remove_dir_all(&part);
+    let copied = copy_dir_all(cached_folder, &part).and_then(|()| std::fs::rename(&part, &dest));
+    if let Err(e) = copied {
+        let _ = std::fs::remove_dir_all(&part);
+        return Err(format!("copy to {}: {e}", dest.display()));
+    }
     let _ = std::fs::remove_dir_all(cached_folder);
     Ok(dest)
 }
@@ -709,7 +823,8 @@ mod tests {
         let cache_own = base.join("cache/101 Own Artist - Own Title");
         std::fs::create_dir_all(&cache_own).unwrap();
         std::fs::write(cache_own.join("own.osu"), b"test-own").unwrap();
-        let saved_own = save_cached_folder(&cache_own, false, JourneySaveTo::Own, &osu).unwrap();
+        let saved_own =
+            save_cached_folder(&cache_own, false, JourneySaveTo::Own, Some(&osu)).unwrap();
         assert_eq!(
             saved_own,
             config::own_songs_dir().join("101 Own Artist - Own Title")
@@ -722,7 +837,8 @@ mod tests {
         let cache_osu = base.join("cache/123 Artist - Title");
         std::fs::create_dir_all(&cache_osu).unwrap();
         std::fs::write(cache_osu.join("map.osu"), b"test-osu").unwrap();
-        let saved_osu = save_cached_folder(&cache_osu, false, JourneySaveTo::Osu, &osu).unwrap();
+        let saved_osu =
+            save_cached_folder(&cache_osu, false, JourneySaveTo::Osu, Some(&osu)).unwrap();
         assert_eq!(saved_osu, osu.join("123 Artist - Title"));
         assert!(saved_osu.join("map.osu").is_file());
         assert!(!cache_osu.exists());
@@ -747,5 +863,134 @@ mod tests {
         let left = std::fs::read_dir(&base).unwrap().count();
         assert!(left <= 3, "only max_keep + protected remain: {left}");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn test_item(version: &str, set: u32) -> JourneyItem {
+        JourneyItem {
+            md5: String::new(),
+            map_hash: None,
+            set_id: Some(set),
+            custom_id: None,
+            title: "T".into(),
+            artist: "A".into(),
+            creator: "C".into(),
+            version: version.into(),
+            stars: 4.0,
+            bpm: 0.0,
+            length_ms: 0,
+            role: "main".into(),
+            reason: String::new(),
+            scroll_velocity: 0.0,
+            profile: JourneyProfile::default(),
+        }
+    }
+
+    const CHART: &str = "osu file format v14\n\n[General]\nAudioFilename: a.ogg\nMode: 1\n\n[Metadata]\nTitle:T\nArtist:A\nCreator:C\nVersion:VERSION\n\n[Difficulty]\nOverallDifficulty:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n0,400,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n";
+
+    #[test]
+    fn a_difficulty_journey_did_not_ask_for_is_never_picked() {
+        let dir = std::env::temp_dir().join(format!("taiko-journey-pick-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.osu"), CHART.replace("VERSION", "Easy")).unwrap();
+        std::fs::write(dir.join("b.osu"), CHART.replace("VERSION", "Oni")).unwrap();
+        let found = scan_single_folder(&dir);
+        assert_eq!(found.len(), 2);
+        let oni = pick_difficulty(found, &test_item("oni", 1)).unwrap();
+        assert_eq!(oni.meta.version, "Oni");
+        assert!(pick_difficulty(scan_single_folder(&dir), &test_item("Inner Oni", 1)).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+        // A folder gone (moved on Save) has no maps, rather than being read as a file.
+        assert!(scan_single_folder(&dir).is_empty());
+    }
+
+    #[test]
+    fn a_download_paused_for_a_play_resumes_from_the_cache_when_it_had_finished() {
+        let item = test_item("Oni", 4242);
+        let folder =
+            config::journey_cache_dir().join(item_to_set_info(&item).unwrap().folder_name());
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("b.osu"), CHART.replace("VERSION", "Oni")).unwrap();
+        let mut j = Journey::new();
+        j.queue.push_back(QueuedMap {
+            item,
+            source: MapSource::Pending,
+        });
+        assert!(j.poll_downloads());
+        assert!(
+            matches!(&j.queue[0].source, MapSource::Cached { folder: f, .. } if *f == folder),
+            "no download started again"
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn saving_to_osu_without_an_osu_songs_folder_is_an_error() {
+        let base =
+            std::env::temp_dir().join(format!("taiko-journey-no-osu-{}", std::process::id()));
+        let cached = base.join("7 A - T");
+        std::fs::create_dir_all(&cached).unwrap();
+        assert!(save_cached_folder(&cached, false, JourneySaveTo::Osu, None).is_err());
+        assert!(cached.is_dir(), "kept in the cache");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn saving_moves_every_queued_map_of_the_set_and_ends_the_play_to_save() {
+        let folder = PathBuf::from("/cache/5 A - T");
+        let dest = PathBuf::from("/songs/5 A - T");
+        let mut j = Journey::new();
+        let entry = |f: &str| {
+            let meta = crate::beatmap::Meta {
+                version: f.into(),
+                ..Default::default()
+            };
+            Box::new(Entry::new(folder.join(f), meta))
+        };
+        for f in ["a.osu", "b.osu"] {
+            j.queue.push_back(QueuedMap {
+                item: test_item("Oni", 5),
+                source: MapSource::Cached {
+                    folder: folder.clone(),
+                    entry: entry(f),
+                },
+            });
+        }
+        j.playing_cached = Some((folder.clone(), test_item("Oni", 5)));
+        j.saved(&folder, &dest);
+        let saved: Vec<_> = j
+            .queue
+            .iter()
+            .map(|q| match &q.source {
+                MapSource::Saved(p) => p.clone(),
+                _ => PathBuf::new(),
+            })
+            .collect();
+        assert_eq!(saved, [dest.join("a.osu"), dest.join("b.osu")]);
+        assert!(j.playing_cached.is_none());
+    }
+
+    #[test]
+    fn failed_fetches_back_off_longer_and_the_exclusions_stay_bounded() {
+        let mut j = Journey::new();
+        let t0 = Instant::now();
+        j.backoff();
+        let first = j.retry_after.unwrap() - t0;
+        j.backoff();
+        j.backoff();
+        let third = j.retry_after.unwrap() - t0;
+        assert!(third > first * 3, "{first:?} then {third:?}");
+        for i in 0..(MAX_EXCLUDES as u32 + 50) {
+            let mut item = test_item("Oni", i);
+            item.md5 = format!("{i:032}");
+            j.remember_item(&item);
+        }
+        assert_eq!(j.exclude_md5s.len(), MAX_EXCLUDES);
+        assert_eq!(j.exclude_sets.len(), MAX_EXCLUDES);
+        assert_eq!(
+            j.exclude_md5s.last().unwrap(),
+            &format!("{:032}", MAX_EXCLUDES + 49)
+        );
     }
 }

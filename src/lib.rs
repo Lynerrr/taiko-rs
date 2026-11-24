@@ -2137,6 +2137,11 @@ impl State {
         })
     }
 
+    /// The play up (or just finished) was started from Journey: its results go on with Journey.
+    pub(crate) fn playing_journey(&self) -> bool {
+        self.journey.active && self.journey.in_play
+    }
+
     fn show_select(&mut self) {
         // Leaving a test play goes back to the editor it came from.
         if self.back_to_editor() {
@@ -2146,6 +2151,7 @@ impl State {
         // to the Journey screen instead of kicking the player back to Song Select / Main Menu.
         if self.journey.active && self.journey.in_play {
             self.journey.in_play = false;
+            self.journey.playing_cached = None;
             self.journey.shown_at = Instant::now();
             self.stop_audio();
             self.report_smoothness();
@@ -9742,6 +9748,11 @@ impl State {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let path = self.library[entry].path.clone();
+        // A Journey map still in its temporary cache isn't in the library: once saved it's
+        // somewhere else.
+        if path.starts_with(config::journey_cache_dir()) {
+            return;
+        }
         if let Some(file) = config::data_dir().map(|d| d.join("plays.tsv")) {
             use std::io::Write;
             if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -13130,10 +13141,37 @@ impl State {
         self.poll_scan();
         self.poll_folder_pick();
         self.poll_data_move();
+        // Song select up, however it was reached (its tab, a score link, the browser): the
+        // Journey session is over, and plays from here aren't Journey's.
+        if self.journey.active && self.scene.is_select() {
+            self.journey.stop();
+        }
         {
             // The Download tab and Journey cached maps preview non-library maps through the same preview.
             let browsing = self.scene.screen().is_some_and(|s| s.previews_remote());
             let in_journey = self.scene.screen_is::<screens::journey::JourneyScreen>();
+            // Journey's map: its library index when it's a library map, so the preview follows
+            // it rather than song select's selection; nothing while it's downloading.
+            let journey_index = if in_journey {
+                self.journey.current_library_index(&self.library)
+            } else {
+                None
+            };
+            // A cached map is always entry 0 of its own list: the preview tells them apart by path.
+            let cached_path = if in_journey {
+                self.journey.current().and_then(|q| match &q.source {
+                    crate::journey::MapSource::Cached { entry, .. } => Some(entry.path.clone()),
+                    _ => None,
+                })
+            } else {
+                None
+            };
+            if cached_path != self.journey.preview_cached {
+                if cached_path.is_some() {
+                    self.preview.forget();
+                }
+                self.journey.preview_cached = cached_path;
+            }
             let journey_cached_entry = if in_journey {
                 self.journey.current().and_then(|q| match &q.source {
                     crate::journey::MapSource::Cached { entry, .. } => Some(entry.as_ref()),
@@ -13164,6 +13202,8 @@ impl State {
                 (&self.browse.remote, self.browse.shown)
             } else if let Some(entry) = journey_cached_entry {
                 (std::slice::from_ref(entry), Some(0))
+            } else if in_journey {
+                (&self.library, journey_index)
             } else {
                 (&self.library, self.preview_target())
             };

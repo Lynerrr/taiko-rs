@@ -494,6 +494,18 @@ impl Preview {
         self.pending_seek = None;
     }
 
+    /// The entry asked to be shown (tests).
+    #[cfg(test)]
+    pub fn requested(&self) -> Option<usize> {
+        self.requested
+    }
+
+    /// The title of the map shown (tests).
+    #[cfg(test)]
+    pub fn shown_title(&self) -> Option<String> {
+        self.map.as_ref().map(|m| m.1.meta.title.clone())
+    }
+
     /// Whether no thread works for it: the map, background and music asked for are in (or
     /// failed).
     #[cfg(test)]

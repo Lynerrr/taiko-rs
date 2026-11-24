@@ -1179,11 +1179,10 @@ impl State {
         });
         if let Some(info) = info {
             for q in &mut self.journey.queue {
-                if let Some(idx) = q
-                    .item
-                    .md5
-                    .strip_prefix("local:")
-                    .and_then(|s| s.parse::<usize>().ok())
+                let MapSource::Local(path) = &q.source else {
+                    continue;
+                };
+                if let Some(idx) = self.library.iter().position(|e| &e.path == path)
                     && let Some(mi) = info.get(idx).copied().flatten()
                 {
                     if q.item.bpm <= 0.0 && mi.bpm.is_finite() && mi.bpm > 0.0 {
@@ -1250,24 +1249,26 @@ impl State {
                     idx
                 }
                 MapSource::Cached { folder, entry } => {
-                    let folder = folder.clone();
-                    let path = entry.path.clone();
-                    let version = q.item.version.clone();
+                    // The difficulty picked when it was unpacked; gone from the cache since
+                    // (pruned, deleted by hand), it can't be played.
+                    if !entry.path.is_file() {
+                        self.journey_drop_failed();
+                        return;
+                    }
+                    let entry = library::Entry::from_parts(
+                        entry.path.clone(),
+                        entry.meta.clone(),
+                        entry.size,
+                        entry.modified,
+                    );
                     self.journey.playing_cached = Some((folder.clone(), q.item.clone()));
-                    if let Some(existing) = self.library.iter().position(|e| e.path == path) {
-                        existing
-                    } else {
-                        let entries = crate::journey::scan_single_folder(&folder);
-                        let pos = entries
-                            .iter()
-                            .position(|e| e.meta.version.eq_ignore_ascii_case(&version))
-                            .unwrap_or(0);
-                        let Some(loaded) = entries.into_iter().nth(pos) else {
-                            self.journey_drop_failed();
-                            return;
-                        };
-                        self.library.push(loaded);
-                        self.library.len() - 1
+                    match self.library.iter().position(|e| e.path == entry.path) {
+                        Some(existing) => existing,
+                        None => {
+                            // Joins the end of the list: the indices handed out stay good.
+                            self.append_maps(vec![entry]);
+                            self.library.len() - 1
+                        }
                     }
                 }
                 MapSource::Pending | MapSource::Downloading(_) => {
@@ -1311,11 +1312,12 @@ impl State {
     }
 
     pub(crate) fn journey_save_current(&mut self) {
+        // The map just played (from its results), else the one up on the Journey screen.
         let cached_info = if let Some((folder, item)) = self.journey.playing_cached.clone() {
-            Some((folder, item, true))
+            Some((folder, item))
         } else if let Some(q) = self.journey.current() {
             if let MapSource::Cached { folder, .. } = &q.source {
-                Some((folder.clone(), q.item.clone(), false))
+                Some((folder.clone(), q.item.clone()))
             } else {
                 None
             }
@@ -1323,7 +1325,7 @@ impl State {
             None
         };
 
-        let Some((folder, item, from_results)) = cached_info else {
+        let Some((folder, item)) = cached_info else {
             self.toast(
                 tr!(
                     "Already in your library",
@@ -1335,41 +1337,51 @@ impl State {
             return;
         };
 
-        // Resolve the real osu! Songs folder via library::song_dirs() / download_dir()
-        // rather than falling back to own_songs_dir when cfg.songs_folder is None.
-        let osu_songs = library::download_dir(&library::song_dirs());
+        // osu!'s Songs folder: the one picked in Settings, else an osu! install found (never
+        // taiko.rs's own, which the other choice is).
+        let own = [
+            Some(crate::config::own_songs_dir()),
+            crate::config::own_dir("Songs"),
+        ];
+        let osu_songs = library::song_dirs()
+            .into_iter()
+            .find(|d| d.is_dir() && !own.iter().flatten().any(|o| o == d));
         match crate::journey::save_cached_folder(
             &folder,
             item.custom_id.is_some(),
             self.cfg.journey_save_to,
-            &osu_songs,
+            osu_songs.as_deref(),
         ) {
             Ok(dest) => {
-                // Remove stale JourneyCache entries from self.library before adding the moved files
-                // so there are no duplicate dead paths.
-                self.library.retain(|e| !e.path.starts_with(&folder));
-
-                let added = crate::journey::scan_single_folder(&dest);
-                let mut saved_path = None;
-                for e in added {
-                    let is_match = item.map_hash.is_some_and(|h| e.known_hash() == Some(h))
-                        || e.meta.version.eq_ignore_ascii_case(&item.version);
-                    if is_match || saved_path.is_none() {
-                        saved_path = Some(e.path.clone());
-                    }
-                    if !self.library.iter().any(|x| x.path == e.path) {
-                        self.library.push(e);
+                // The maps the list has from the cache are where they were moved to now: the same
+                // entries at the same indices (a play's results, Ctrl+R, still find theirs).
+                let mut moved = Vec::new();
+                for (i, e) in self.library.iter_mut().enumerate() {
+                    if e.path.starts_with(&folder) {
+                        e.path = crate::journey::moved_path(&e.path, &folder, &dest);
+                        moved.push((i, e.path.clone(), e.modified, e.size));
                     }
                 }
-                if let Some(path) = saved_path {
+                if !moved.is_empty() {
+                    self.invalidate_library_indices();
+                    if let Some(info) = &self.mapinfo {
+                        info.extend(moved);
+                        self.mapinfo_sorted = false;
+                    }
+                }
+                // The set's other difficulties join the list too.
+                let fresh: Vec<_> = crate::journey::scan_single_folder(&dest)
+                    .into_iter()
+                    .filter(|e| !self.library.iter().any(|x| x.path == e.path))
+                    .collect();
+                if fresh.is_empty() {
                     self.select.refilter(&self.library);
-                    if !from_results && let Some(q) = self.journey.current_mut() {
-                        q.source = MapSource::Saved(path);
-                    }
+                } else {
+                    self.append_maps(fresh);
                 }
-                if from_results {
-                    self.journey.playing_cached = None;
-                }
+                // Every queued map of the set is in the library now, and the play of it has
+                // nothing left to save.
+                self.journey.saved(&folder, &dest);
                 let where_saved = self.cfg.journey_save_to.name();
                 self.toast(tr!(
                     "Saved to {where_saved}",

@@ -270,3 +270,241 @@ fn played_attempt_from_journey_wire_compat() {
     let json_j = serde_json::to_string(&from_j).unwrap();
     assert!(json_j.contains("\"from_journey\":true"));
 }
+
+/// A Journey item for set `set` and difficulty `version`.
+fn item(title: &str, version: &str, set: u32) -> online::JourneyItem {
+    online::JourneyItem {
+        md5: format!("{set:032}"),
+        map_hash: None,
+        set_id: Some(set),
+        custom_id: None,
+        title: title.into(),
+        artist: "Artist".into(),
+        creator: "Mapper".into(),
+        version: version.into(),
+        stars: 4.5,
+        bpm: 180.0,
+        length_ms: 60_000,
+        role: "main".into(),
+        reason: "Fits your comfort level".into(),
+        scroll_velocity: 0.45,
+        profile: Default::default(),
+    }
+}
+
+/// `src`'s chart, retitled and renamed as a difficulty.
+fn chart_as(src: &std::path::Path, title: &str, version: &str) -> String {
+    std::fs::read_to_string(src)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            if l.starts_with("Title:") {
+                format!("Title:{title}")
+            } else if l.starts_with("Version:") {
+                format!("Version:{version}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A set unpacked in Journey's cache: its folder and the entry for `version` of its maps
+/// (`(file name, version)`).
+fn cached_set(
+    folder_name: &str,
+    src: &std::path::Path,
+    title: &str,
+    maps: &[(&str, &str)],
+    version: &str,
+) -> (std::path::PathBuf, library::Entry) {
+    let folder = config::journey_cache_dir().join(folder_name);
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    for (file, v) in maps {
+        std::fs::write(folder.join(file), chart_as(src, title, v)).unwrap();
+    }
+    let entry = crate::journey::pick_difficulty(
+        crate::journey::scan_single_folder(&folder),
+        &item(title, version, 1),
+    )
+    .expect("the difficulty asked for");
+    (folder, entry)
+}
+
+fn copy(e: &library::Entry) -> library::Entry {
+    library::Entry::from_parts(e.path.clone(), e.meta.clone(), e.size, e.modified)
+}
+
+/// Journey up with `queue` as its whole queue, asking for nothing more.
+fn journey_with(s: &mut State, queue: Vec<QueuedMap>) {
+    s.open_journey();
+    s.journey.needs_level = false;
+    s.journey.local_mode = true;
+    s.journey.pool_exhausted = true;
+    s.journey.queue = queue.into();
+}
+
+/// The preview plays Journey's map, not song select's: each cached map (always entry 0 of a
+/// list of its own) is told from the last by its path, a library map by its index, and a map
+/// still on its way plays nothing.
+#[test]
+fn the_journey_preview_follows_journey_maps_not_song_select() {
+    let songs = Songs::new("journey-preview", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    let one = cached_set(
+        "3001 Artist - Cached One",
+        &songs.paths[0],
+        "Cached One",
+        &[("a.osu", "Oni")],
+        "Oni",
+    );
+    let two = cached_set(
+        "3002 Artist - Cached Two",
+        &songs.paths[0],
+        "Cached Two",
+        &[("a.osu", "Oni")],
+        "Oni",
+    );
+    let local = s.library.len() - 1;
+    let local_path = s.library[local].path.clone();
+    assert_ne!(
+        s.preview_target(),
+        Some(local),
+        "song select is on another map"
+    );
+    let cached = |(folder, entry): &(std::path::PathBuf, library::Entry)| MapSource::Cached {
+        folder: folder.clone(),
+        entry: Box::new(copy(entry)),
+    };
+    journey_with(
+        &mut s,
+        vec![
+            QueuedMap {
+                item: item("Cached One", "Oni", 3001),
+                source: cached(&one),
+            },
+            QueuedMap {
+                item: item("Cached Two", "Oni", 3002),
+                source: cached(&two),
+            },
+            QueuedMap {
+                item: item("Local", "Oni", 3003),
+                source: MapSource::Local(local_path),
+            },
+            QueuedMap {
+                item: item("Broken", "Oni", 3004),
+                source: MapSource::Failed("network error".into()),
+            },
+        ],
+    );
+    settle(&mut s, &mut now);
+    assert_eq!(s.preview.shown_title().as_deref(), Some("Cached One"));
+
+    s.journey.advance(PastOutcome::Skipped);
+    settle(&mut s, &mut now);
+    assert_eq!(s.preview.shown_title().as_deref(), Some("Cached Two"));
+
+    s.journey.advance(PastOutcome::Skipped);
+    settle(&mut s, &mut now);
+    assert_eq!(s.preview.requested(), Some(local));
+    assert_eq!(
+        s.preview.shown_title(),
+        Some(s.library[local].meta.title.clone())
+    );
+
+    s.journey.advance(PastOutcome::Skipped);
+    settle(&mut s, &mut now);
+    assert_eq!(s.preview.requested(), None, "nothing to play yet");
+    let _ = std::fs::remove_dir_all(&one.0);
+    let _ = std::fs::remove_dir_all(&two.0);
+}
+
+/// A cached map played from Journey and saved from its results stays the same entry at the
+/// same index, now where it was saved: Ctrl+R plays it again, and so does playing it from the
+/// Journey screen after quitting, with the difficulty Journey asked for (not the set's first).
+#[test]
+fn a_cached_map_saved_from_its_results_keeps_its_place_and_plays_again() {
+    let songs = Songs::new("journey-save-retry", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    let name = "3101 Artist - Two Diffs";
+    let (folder, entry) = cached_set(
+        name,
+        &songs.paths[0],
+        "Two Diffs",
+        &[("a-easy.osu", "Easy"), ("b-oni.osu", "Oni Two")],
+        "Oni Two",
+    );
+    assert_eq!(entry.meta.version, "Oni Two");
+    journey_with(
+        &mut s,
+        vec![QueuedMap {
+            item: item("Two Diffs", "Oni Two", 3101),
+            source: MapSource::Cached {
+                folder: folder.clone(),
+                entry: Box::new(entry),
+            },
+        }],
+    );
+    let before: Vec<std::path::PathBuf> = s.library.iter().map(|e| e.path.clone()).collect();
+
+    s.journey_play_current();
+    assert_eq!(s.scene.screen().map(|sc| sc.name()), Some("Loading"));
+    let idx = before.len();
+    assert_eq!(s.library.len(), idx + 1, "joins the end of the list");
+    assert_eq!(s.library[idx].meta.version, "Oni Two");
+    assert!(s.playing_journey());
+
+    // Saved from its results.
+    s.cfg.journey_save_to = JourneySaveTo::Own;
+    s.journey_save_current();
+    let dest = config::own_songs_dir().join(name);
+    assert!(dest.join("b-oni.osu").is_file());
+    assert!(!folder.exists());
+    let after: Vec<std::path::PathBuf> = s.library[..idx].iter().map(|e| e.path.clone()).collect();
+    assert_eq!(after, before, "no other map moved");
+    assert_eq!(s.library[idx].path, dest.join("b-oni.osu"));
+    assert_eq!(s.library[idx].meta.version, "Oni Two");
+    assert!(s.library.iter().any(|e| e.path == dest.join("a-easy.osu")));
+    assert!(s.journey.playing_cached.is_none());
+    assert!(matches!(
+        &s.journey.current().unwrap().source,
+        MapSource::Saved(p) if *p == dest.join("b-oni.osu")
+    ));
+    let saved_len = s.library.len();
+
+    // Ctrl+R: the same map again.
+    s.retry_from(idx, None);
+    assert_eq!(s.scene.screen().map(|sc| sc.name()), Some("Loading"));
+
+    // Pause -> Quit, then Play on the Journey screen: the saved map, from the library.
+    s.show_select();
+    assert_eq!(s.scene.screen().map(|sc| sc.name()), Some("Journey"));
+    s.journey_play_current();
+    assert_eq!(s.scene.screen().map(|sc| sc.name()), Some("Loading"));
+    assert_eq!(s.library.len(), saved_len);
+    let _ = std::fs::remove_dir_all(&dest);
+}
+
+/// Song select reached any way but Journey's own exit (here its tab) ends the session, so a
+/// play started there isn't taken for Journey's.
+#[test]
+fn song_select_by_its_tab_ends_journey() {
+    let songs = Songs::new("journey-songs-tab", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_pick_level(2);
+    s.journey.in_play = true;
+    s.show_songs();
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert!(!s.journey.active);
+    assert!(!s.playing_journey());
+}
