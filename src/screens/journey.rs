@@ -88,20 +88,30 @@ impl Screen for JourneyScreen {
         }
 
         if state.journey.needs_level {
+            let has_auto = level_picker_has_auto(state);
+            let total = LEVEL_CHOICES.len() + usize::from(has_auto);
             match code {
                 KeyCode::ArrowUp | KeyCode::KeyW => {
                     state.journey.level_cursor = state.journey.level_cursor.saturating_sub(1);
                 }
                 KeyCode::ArrowDown | KeyCode::KeyS => {
-                    state.journey.level_cursor =
-                        (state.journey.level_cursor + 1).min(LEVEL_CHOICES.len() - 1);
+                    state.journey.level_cursor = (state.journey.level_cursor + 1).min(total - 1);
                 }
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
-                    let idx = state.journey.level_cursor;
-                    state.journey_pick_level(idx);
+                    let cur = state.journey.level_cursor.min(total - 1);
+                    if has_auto && cur == 0 {
+                        state.journey_pick_auto();
+                    } else {
+                        let idx = cur - usize::from(has_auto);
+                        state.journey_pick_level(idx);
+                    }
                 }
                 KeyCode::Escape => {
-                    state.exit_journey();
+                    if !state.journey.queue.is_empty() {
+                        state.journey.needs_level = false;
+                    } else {
+                        state.exit_journey();
+                    }
                 }
                 _ => {}
             }
@@ -265,10 +275,40 @@ fn draw_gate(state: &State, gate: Gate, c: &mut Canvas, w: f32, h: f32) {
     }
 }
 
+/// Whether the Journey level picker should offer an Auto row (server-estimated comfort stars).
+fn level_picker_has_auto(state: &State) -> bool {
+    !state.journey.local_mode
+        && !state.cfg.online_token.is_empty()
+        && (state.journey.auto_comfort_stars.is_some()
+            || state.journey.target_stars.is_some()
+            || !state.journey.queue.is_empty())
+}
+
 fn draw_level_picker(state: &State, c: &mut Canvas, w: f32, h: f32) {
+    let has_auto = level_picker_has_auto(state);
+    let mut rows: Vec<(String, hit::Hit)> = Vec::with_capacity(LEVEL_CHOICES.len() + 1);
+    if has_auto {
+        let auto_lbl = match state.journey.auto_comfort_stars {
+            Some(s) => {
+                let stars = format!("{s:.2}");
+                tr!(
+                    "Auto (~{stars}*)",
+                    "オート (~{stars}*)",
+                    "Авто (~{stars}*)";
+                    [] [stars]
+                )
+            }
+            None => tr!("Auto (from plays)", "オート (履歴から)", "Авто (по играм)").to_string(),
+        };
+        rows.push((auto_lbl, hit::Hit::JourneyLevelAuto));
+    }
+    for (i, (label, _)) in LEVEL_CHOICES.iter().enumerate() {
+        rows.push(((*label).to_string(), hit::Hit::JourneyLevel(i)));
+    }
+
     let pw = 300.0_f32.min(w - 32.0);
     let row_h = 30.0;
-    let ph = 86.0 + LEVEL_CHOICES.len() as f32 * row_h + 26.0;
+    let ph = 86.0 + rows.len() as f32 * row_h + 26.0;
     let x = (w - pw) / 2.0;
     let y = (h - ph) / 2.0;
 
@@ -288,10 +328,11 @@ fn draw_level_picker(state: &State, c: &mut Canvas, w: f32, h: f32) {
 
     let rx = x + 16.0;
     let rw = pw - 32.0;
-    for (i, (label, _)) in LEVEL_CHOICES.iter().enumerate() {
+    let cursor = state.journey.level_cursor.min(rows.len().saturating_sub(1));
+    for (i, (label, hit_action)) in rows.iter().enumerate() {
         let ry = y + 68.0 + i as f32 * row_h;
         let rh = row_h - 4.0;
-        let selected = i == state.journey.level_cursor;
+        let selected = i == cursor;
         let hovered = c.hovered(rx, ry, rw, rh);
         if selected {
             c.round_rect(
@@ -313,9 +354,12 @@ fn draw_level_picker(state: &State, c: &mut Canvas, w: f32, h: f32) {
                 0.0,
             );
         }
-        c.hit(rx, ry, rw, rh, hit::Hit::JourneyLevel(i));
+        c.hit(rx, ry, rw, rh, *hit_action);
+        let is_auto = *hit_action == hit::Hit::JourneyLevelAuto;
         let col = if selected || hovered {
-            0xffffff
+            if is_auto { 0x62f2df } else { 0xffffff }
+        } else if is_auto {
+            0x22d4c0
         } else {
             0xb4b4c8
         };
@@ -324,7 +368,7 @@ fn draw_level_picker(state: &State, c: &mut Canvas, w: f32, h: f32) {
             ry + (rh - 10.0) / 2.0,
             10.0,
             rgba(col, 1.0),
-            label,
+            &Canvas::fit(10.0, rw - 16.0, label),
         );
     }
 
@@ -411,12 +455,16 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
         26.0,
     );
 
-    // Interactive comfort star-rating control: [-] [~7.25* JOURNEY] [+] (0.25* steps).
+    // Interactive comfort star-rating control: [-] [~7.25* AUTO] [+] (0.25* steps).
     let mode_tag = if state.journey.local_mode {
         let local = tr!("LOCAL", "ローカル", "ЛОКАЛЬНО");
         format!("~{:.2}*  {local}", state.journey.comfort_stars)
+    } else if state.journey.target_stars.is_some() {
+        let manual = tr!("MANUAL", "手動", "ВРУЧНУЮ");
+        format!("{:.2}*  {manual}", state.journey.comfort_stars)
     } else {
-        format!("~{:.2}*  JOURNEY", state.journey.comfort_stars)
+        let auto = tr!("AUTO", "オート", "АВТО");
+        format!("~{:.2}*  {auto}", state.journey.comfort_stars)
     };
     let step_w = 20.0;
     let mw = Canvas::text_width(8.0, &mode_tag) + 14.0;
@@ -1324,8 +1372,16 @@ impl State {
         let Some(&(_, stars)) = LEVEL_CHOICES.get(idx) else {
             return;
         };
-        self.journey.level_cursor = idx;
+        self.journey.level_cursor = idx + usize::from(level_picker_has_auto(self));
         self.journey.set_manual_level(stars);
+        self.journey_refill();
+        self.journey_preview_current();
+    }
+
+    /// Switches Journey back to server-estimated Auto comfort stars and refreshes the queue.
+    pub(crate) fn journey_pick_auto(&mut self) {
+        self.journey.level_cursor = 0;
+        self.journey.set_auto_level();
         self.journey_refill();
         self.journey_preview_current();
     }
@@ -1344,6 +1400,19 @@ impl State {
 
     /// Opens the comfort level picker overlay inside Journey.
     pub(crate) fn journey_open_level_picker(&mut self) {
+        let has_auto = level_picker_has_auto(self);
+        self.journey.level_cursor = if has_auto && self.journey.target_stars.is_none() {
+            0
+        } else {
+            let cur = self.journey.comfort_stars;
+            let best = LEVEL_CHOICES
+                .iter()
+                .enumerate()
+                .min_by(|(_, (_, a)), (_, (_, b))| (a - cur).abs().total_cmp(&(b - cur).abs()))
+                .map(|(i, _)| i)
+                .unwrap_or(2);
+            best + usize::from(has_auto)
+        };
         self.journey.needs_level = true;
     }
 

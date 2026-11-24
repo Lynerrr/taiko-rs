@@ -1085,3 +1085,93 @@ fn journey_match_profile_gauge_marker_matches_its_zone() {
         comfort_right
     );
 }
+
+#[test]
+fn journey_level_picker_offers_auto_and_esc_returns_to_active_card() {
+    let songs = Songs::new("journey-auto-level", &maps::all());
+    let local_hash = beatmap::map_hash(&std::fs::read(&songs.paths[0]).unwrap());
+    let mut local_item = item("Auto Test", "Oni", 8400);
+    local_item.map_hash = Some(local_hash);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen_targets = Arc::new(std::sync::Mutex::new(Vec::<Option<f64>>::new()));
+    let seen_srv = seen_targets.clone();
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            // Only Journey's requests: the account check and social connection arrive here too.
+            if reader.read_line(&mut line).is_err() || !line.contains("JourneyNext") {
+                continue;
+            }
+            let val: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+            let target_stars = val.get("target_stars").and_then(|v| v.as_f64());
+            seen_srv.lock().unwrap().push(target_stars);
+            let reply = online::Reply::Journey(online::JourneyBatch {
+                needs_level: false,
+                comfort_stars: target_stars.unwrap_or(7.76),
+                items: vec![local_item.clone()],
+                ..Default::default()
+            });
+            let mut w = stream;
+            let _ = writeln!(w, "{}", serde_json::to_string(&reply).unwrap());
+            let _ = w.flush();
+        }
+    });
+
+    let mut cfg = harness::config();
+    cfg.online_server = format!("127.0.0.1:{}", addr.port());
+    cfg.online_token = "tok".into();
+    let mut s = state_with(cfg, songs.entries());
+    s.journey_supported = true;
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    s.open_journey();
+    frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
+    assert_eq!(s.journey.auto_comfort_stars, Some(7.76));
+    assert_eq!(s.journey.target_stars, None);
+
+    // Step manual level up to 8.00*, then open the level picker.
+    s.click(hit::Hit::JourneyLevelStep(1), None);
+    assert_eq!(s.journey.target_stars, Some(8.0));
+    frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
+
+    s.click(hit::Hit::JourneyLevelOpen, None);
+    assert!(s.journey.needs_level);
+    let c = frame(&mut s, now);
+    assert!(
+        s.hits.iter().any(|h| h.hit == hit::Hit::JourneyLevelAuto),
+        "online level picker must offer Auto"
+    );
+    assert!(
+        c.texts.iter().any(|(_, t)| t.contains("Auto (~7.76*)")),
+        "Auto row must show server-estimated comfort stars"
+    );
+
+    // Esc closes the picker back to the active Journey card instead of exiting Journey.
+    press(&mut s, KeyCode::Escape, now);
+    assert!(!s.journey.needs_level);
+    assert!(s.journey.active);
+    assert_eq!(s.scene.screen().map(|sc| sc.name()), Some("Journey"));
+
+    // Reopen and choose Auto: clears target_stars and requests fresh auto picks from server.
+    s.click(hit::Hit::JourneyLevelOpen, None);
+    s.click(hit::Hit::JourneyLevelAuto, None);
+    assert!(!s.journey.needs_level);
+    assert_eq!(s.journey.target_stars, None);
+    assert_eq!(s.journey.comfort_stars, 7.76);
+    frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
+    let targets = seen_targets.lock().unwrap().clone();
+    assert!(
+        targets.len() >= 3,
+        "expected at least 3 JourneyNext calls, saw {targets:?}"
+    );
+    assert_eq!(
+        targets.last().copied().flatten(),
+        None,
+        "picking Auto must query the server with target_stars=None (saw {targets:?})"
+    );
+}

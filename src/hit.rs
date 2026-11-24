@@ -110,6 +110,7 @@ pub enum Hit {
     ModsButton,
     JourneyButton,
     JourneyLevel(usize),
+    JourneyLevelAuto,
     JourneyLevelStep(i32),
     JourneyLevelOpen,
     JourneyNext,

@@ -15792,6 +15792,7 @@ impl State {
             Hit::ModsButton => self.open_mod_select(),
             Hit::JourneyButton => self.open_journey(),
             Hit::JourneyLevel(i) => self.journey_pick_level(i),
+            Hit::JourneyLevelAuto => self.journey_pick_auto(),
             Hit::JourneyLevelStep(d) => self.journey_step_level(d),
             Hit::JourneyLevelOpen => self.journey_open_level_picker(),
             Hit::JourneySave => self.journey_save_current(),
