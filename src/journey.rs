@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::config::{self, JourneySaveTo};
 use crate::download;
 use crate::library::Entry;
-use crate::online::{self, JourneyBatch, JourneyItem};
+use crate::online::{self, JourneyBatch, JourneyItem, JourneyProfile};
 
 /// Maximum number of upcoming maps allowed to download ahead at once (on-demand only).
 pub const MAX_PREFETCH_AHEAD: usize = 2;
@@ -94,6 +94,8 @@ pub struct Journey {
     pub needs_level: bool,
     pub level_cursor: usize,
     pub comfort_stars: f64,
+    pub comfort_scroll: Option<f64>,
+    pub player_profile: Option<JourneyProfile>,
     pub target_stars: Option<f64>,
     pub step: u32,
     pub queue: VecDeque<QueuedMap>,
@@ -107,6 +109,10 @@ pub struct Journey {
     pub retry_after: Option<Instant>,
     pub error: Option<String>,
     pub shown_at: Instant,
+    /// When the Journey screen itself was opened (drives screen entrance animation).
+    pub screen_entered: Instant,
+    /// Smoothly decaying horizontal offset (virtual units) for the top session lane on advance.
+    pub lane_slide: f32,
     /// Set to true when the current play was launched from Journey (tags `PlayedAttempt` and `ScoreSubmit`).
     pub in_play: bool,
     /// Temporary cached entry currently being played (kept so results screen can Save it).
@@ -128,6 +134,8 @@ impl Journey {
             needs_level: false,
             level_cursor: 2,
             comfort_stars: 4.5,
+            comfort_scroll: None,
+            player_profile: None,
             target_stars: None,
             step: 0,
             queue: VecDeque::new(),
@@ -139,6 +147,8 @@ impl Journey {
             retry_after: None,
             error: None,
             shown_at: Instant::now(),
+            screen_entered: Instant::now(),
+            lane_slide: 0.0,
             in_play: false,
             playing_cached: None,
             local_mode: false,
@@ -169,6 +179,32 @@ impl Journey {
                 job.cancel.store(true, Ordering::Relaxed);
             }
         }
+    }
+
+    /// Stops any background prefetch downloads/extractions before gameplay starts so weak CPUs
+    /// never stutter during play; they resume automatically back on the Journey screen.
+    pub fn pause_background_downloads(&mut self) {
+        for q in &mut self.queue {
+            if let MapSource::Downloading(job) = &q.source {
+                job.cancel.store(true, Ordering::Relaxed);
+                q.source = MapSource::Pending;
+            }
+        }
+    }
+
+    /// Switches the session to a manual target star rating and rebuilds the queue for it.
+    pub fn set_manual_level(&mut self, stars: f64) {
+        let clamped = ((stars * 4.0).round() / 4.0).clamp(1.0, 11.0);
+        self.cancel_downloads();
+        self.queue.clear();
+        self.fetching = None;
+        self.target_stars = Some(clamped);
+        self.comfort_stars = clamped;
+        self.needs_level = false;
+        self.pool_exhausted = false;
+        self.retry_after = None;
+        self.error = None;
+        self.shown_at = Instant::now();
     }
 
     /// Folders currently referenced by the queue or active play (protected from `prune_cache`).
@@ -220,6 +256,7 @@ impl Journey {
         }
         self.step = self.step.saturating_add(1);
         self.shown_at = Instant::now();
+        self.lane_slide = 28.0;
         Some(popped)
     }
 
@@ -236,6 +273,12 @@ impl Journey {
                 self.needs_level = batch.needs_level;
                 if batch.comfort_stars > 0.2 {
                     self.comfort_stars = batch.comfort_stars;
+                }
+                if batch.comfort_scroll.is_some() {
+                    self.comfort_scroll = batch.comfort_scroll;
+                }
+                if batch.player_profile.is_some() {
+                    self.player_profile = batch.player_profile;
                 }
                 if !batch.needs_level && batch.items.is_empty() {
                     self.pool_exhausted = true;
@@ -331,7 +374,7 @@ impl Journey {
     }
 
     /// Spawns a background `Request::JourneyNext` call when logged in.
-    pub fn request_next(&mut self, server: String, token: String) {
+    pub fn request_next(&mut self, server: String, token: String, scroll_speed: f64) {
         if !self.can_refill(Instant::now()) {
             return;
         }
@@ -339,6 +382,7 @@ impl Journey {
         let req = online::Request::JourneyNext {
             token,
             target_stars: self.target_stars,
+            scroll_speed: (scroll_speed.is_finite() && scroll_speed > 0.1).then_some(scroll_speed),
             exclude_md5s: self.exclude_md5s.clone(),
             exclude_sets: self.exclude_sets.clone(),
             step: self.step.saturating_add(self.queue.len() as u32),
@@ -459,6 +503,8 @@ impl Journey {
                 length_ms: 0,
                 role: role.into(),
                 reason: reason.into(),
+                scroll_velocity: 0.0,
+                profile: JourneyProfile::default(),
             };
             self.remember_item(&item);
             self.queue.push_back(QueuedMap {

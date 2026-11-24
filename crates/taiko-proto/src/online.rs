@@ -223,6 +223,8 @@ pub enum Request {
         token: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_stars: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scroll_speed: Option<f64>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         exclude_md5s: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -352,6 +354,21 @@ pub enum MapVote {
     Dislike,
 }
 
+/// Compact 5-axis profile (0..=1 each) describing a chart or a player's comfort taste.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct JourneyProfile {
+    #[serde(default)]
+    pub density: f64,
+    #[serde(default)]
+    pub streams: f64,
+    #[serde(default)]
+    pub rhythm: f64,
+    #[serde(default)]
+    pub sv: f64,
+    #[serde(default)]
+    pub scroll: f64,
+}
+
 /// One recommended map returned by `Request::JourneyNext`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct JourneyItem {
@@ -371,6 +388,10 @@ pub struct JourneyItem {
     pub length_ms: u64,
     pub role: String,
     pub reason: String,
+    #[serde(default)]
+    pub scroll_velocity: f64,
+    #[serde(default)]
+    pub profile: JourneyProfile,
 }
 
 /// Batch of upcoming maps for a Journey v1 session (`Reply::Journey`).
@@ -380,6 +401,10 @@ pub struct JourneyBatch {
     pub needs_level: bool,
     #[serde(default)]
     pub comfort_stars: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comfort_scroll: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub player_profile: Option<JourneyProfile>,
     #[serde(default)]
     pub items: Vec<JourneyItem>,
 }

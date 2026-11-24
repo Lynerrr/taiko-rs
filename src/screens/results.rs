@@ -199,43 +199,9 @@ impl Screen for ResultsScreen {
                 a.play(track.clone(), *again);
             }
         }
+        results.journey = state.journey.active;
+        results.journey_save = state.journey.playing_cached.is_some();
         results.draw(canvas);
-        if state.journey.active {
-            let pw = 172.0;
-            let x = (canvas.width - 16.0 - pw).max(16.0);
-            let has_cached = state.journey.playing_cached.is_some();
-            let ph = if has_cached { 86.0 } else { 52.0 };
-            let y = 368.0;
-            style::panel(canvas, x, y, pw, ph);
-            let next_label = tr!("Next map (Enter)", "次の譜面 (Enter)", "Дальше (Enter)");
-            canvas.button(
-                x + 10.0,
-                y + 12.0,
-                pw - 20.0,
-                28.0,
-                next_label,
-                8.0,
-                hit::Hit::JourneyNext,
-                true,
-            );
-            if has_cached {
-                let save_label = tr!(
-                    "Save to library (S)",
-                    "ライブラリに保存 (S)",
-                    "Сохранить (S)"
-                );
-                canvas.button(
-                    x + 10.0,
-                    y + 46.0,
-                    pw - 20.0,
-                    26.0,
-                    save_label,
-                    8.0,
-                    hit::Hit::JourneySave,
-                    false,
-                );
-            }
-        }
         None
     }
 }

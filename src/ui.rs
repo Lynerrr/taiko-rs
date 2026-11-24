@@ -5274,6 +5274,9 @@ pub struct Results {
     pub vote: Option<crate::online::MapVote>,
     /// When the player last voted here (the thumb's pop and burst).
     pub voted_at: Option<std::time::Instant>,
+    /// Active Journey session: swaps the bottom action row to Next map / Save / Journey.
+    pub journey: bool,
+    pub journey_save: bool,
 }
 
 /// How far down the results scroll: the pp start a screen below them.
@@ -5323,6 +5326,8 @@ impl Results {
             vote_on: None,
             vote: None,
             voted_at: None,
+            journey: false,
+            journey_save: false,
         }
     }
 
@@ -5549,7 +5554,14 @@ impl Results {
 
         let mut buttons = Vec::new();
         if self.opened.is_none() {
-            buttons.push(("Retry  (Enter)", Hit::Key(KeyCode::Enter), true));
+            if self.journey {
+                buttons.push(("Next map  (Enter)", Hit::JourneyNext, true));
+                if self.journey_save {
+                    buttons.push(("Save  (S)", Hit::JourneySave, false));
+                }
+            } else {
+                buttons.push(("Retry  (Enter)", Hit::Key(KeyCode::Enter), true));
+            }
         }
         if self.replay.is_some() {
             buttons.push((
@@ -5561,6 +5573,8 @@ impl Results {
         }
         let back = if self.opened.is_some() {
             "Back  (Esc)"
+        } else if self.journey {
+            "Journey  (Esc)"
         } else {
             "Song select  (Esc)"
         };
@@ -5639,18 +5653,18 @@ impl Results {
         let (x, y) = (at(pw), 250.0);
         let ph = 36.0 + 2.0 * row_h + 4.0;
         let start = c.shapes.len();
-        crate::style::panel(c, x, y, pw, ph);
-        let title = "Rate this map";
-        let size = Canvas::fit_size(9.0, 6.0, pw - 16.0, title);
+        crate::style::cold_panel(c, [x, y, pw, ph]);
+        let title = tr!("Rate this map", "この譜面を評価", "Оценить карту");
+        let size = Canvas::fit_size(8.5, 6.0, pw - 16.0, title);
         crate::style::title(
             c,
             x + pw / 2.0 - Canvas::text_width(size, title) / 2.0,
-            y + 11.0 + (9.0 - size) / 2.0,
+            y + 10.0 + (8.5 - size) / 2.0,
             size,
             0xffffff,
             title,
         );
-        c.rect(x + 12.0, y + 28.0, pw - 24.0, 1.0, rgba(0x2a2a38, 1.0));
+        crate::style::rule(c, x + 12.0, y + 27.0, pw - 24.0);
         let since = self.voted_at.map(|v| v.elapsed().as_secs_f32() * 1000.0);
         let rows = [
             (Like, 0x5ee07a, "Like", "L", KeyCode::KeyL),

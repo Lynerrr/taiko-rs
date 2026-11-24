@@ -60,7 +60,7 @@ fn journey_cold_start_pick_level_and_skip() {
 }
 
 #[test]
-fn pause_quit_to_song_select_clears_journey_state() {
+fn pause_quit_during_journey_returns_to_journey_and_exit_clears_state() {
     let songs = Songs::new("journey-pause-quit", &maps::all());
     let mut s = state_with(harness::config(), songs.entries());
     let mut now = Instant::now();
@@ -71,10 +71,17 @@ fn pause_quit_to_song_select_clears_journey_state() {
     assert!(s.journey.active);
     s.journey.in_play = true;
 
-    // Leaving a play via Pause -> Quit calls show_select(); Journey state must not leak.
+    // Leaving a play via Pause -> Quit calls show_select(); during Journey play it returns
+    // to the Journey screen instead of dropping the player to Song Select / Main Menu.
     s.show_select();
-    assert!(!s.journey.active, "show_select must stop Journey");
+    assert!(s.journey.active, "Pause -> Quit returns to Journey");
     assert!(!s.journey.in_play, "show_select must clear in_play");
+    assert_eq!(s.scene.screen().map(|sc| sc.name()), Some("Journey"));
+
+    // Explicitly exiting Journey from the Journey screen clears all state.
+    s.exit_journey();
+    assert!(!s.journey.active, "exit_journey must stop Journey");
+    assert!(!s.journey.in_play);
 }
 
 #[test]
@@ -110,6 +117,8 @@ fn results_screen_next_and_save_on_like_in_journey() {
         length_ms: 60_000,
         role: "main".into(),
         reason: "Fits your comfort level".into(),
+        scroll_velocity: 0.45,
+        profile: Default::default(),
     };
     s.journey.in_play = true;
     s.journey.playing_cached = Some((cached_dir.clone(), item));
@@ -150,6 +159,7 @@ fn online_journey_fetches_once_and_does_not_spam_when_pool_exhausted() {
                     needs_level: false,
                     comfort_stars: 5.0,
                     items: Vec::new(),
+                    ..Default::default()
                 });
                 let mut w = stream;
                 let _ = writeln!(w, "{}", serde_json::to_string(&reply).unwrap());
@@ -213,6 +223,8 @@ fn failed_download_play_advances_without_sending_skip() {
             length_ms: 60_000,
             role: "main".into(),
             reason: "Fits".into(),
+            scroll_velocity: 0.45,
+            profile: Default::default(),
         },
         source: MapSource::Failed("network error".into()),
     });

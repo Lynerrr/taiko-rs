@@ -106,6 +106,18 @@ const SNIPPET_MS: f64 = 15_000.0;
 
 pub type Image = crate::render::BgImage;
 
+/// Summary stats of the map currently loaded in `Preview`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LoadedStats {
+    pub bpm: f64,
+    pub length_ms: f64,
+    pub dons: u32,
+    pub kats: u32,
+    pub rolls: u32,
+    pub swells: u32,
+    pub potential: Option<[f64; 3]>,
+}
+
 /// Decoded music for the selected set: all of it, or (until the full decode arrives) the part
 /// from the preview point, which belongs at song frame `base`.
 struct Song {
@@ -1194,6 +1206,72 @@ impl Preview {
 
     /// The difficulty timeline of `e` (the selected map) in `rect`, with the start point and,
     /// if `button` is given as (verb, key hint), a "<verb> 1:23" button under it.
+    /// Summary stats for the currently loaded map.
+    pub(crate) fn loaded_stats(&self) -> Option<LoadedStats> {
+        let (_, _, d, _) = self.map.as_ref()?;
+        Some(LoadedStats {
+            bpm: (d.bpm.0 + d.bpm.1) * 0.5,
+            length_ms: d.length_ms,
+            dons: d.dons as u32,
+            kats: d.kats as u32,
+            rolls: d.rolls as u32,
+            swells: d.swells as u32,
+            potential: self.potential,
+        })
+    }
+
+    /// Draws an embedded live autoplay lane inside `lane_rect` and its density timeline inside
+    /// `graph_rect` (used by the Journey screen). Returns `true` when the autoplay is active.
+    pub(crate) fn draw_embedded_preview(
+        &mut self,
+        c: &mut Canvas,
+        e: &Entry,
+        lane_rect: [f32; 4],
+        graph_rect: [f32; 4],
+        scroll_speed: f64,
+    ) -> bool {
+        let [lx, ly, lw, lh] = lane_rect;
+        c.round_rect(
+            [lx, ly],
+            [lw, lh],
+            crate::style::radius::CONTROL,
+            rgba(0x0b0d15, 0.92),
+            rgba(crate::style::tone::EDGE, 0.55),
+            1.0,
+        );
+        let ready = self.map.is_some();
+        if ready {
+            self.draw_timeline(c, e, graph_rect, None);
+            self.drawn_in(c);
+        } else {
+            self.graph_rect = None;
+        }
+        let Some(game) = self.game.as_mut().filter(|_| ready) else {
+            return false;
+        };
+        let (band_top, band_h) = game::lane_only();
+        let k = ((lh * 0.64) / band_h.max(1.0)).clamp(0.25, 0.72);
+        let full_w = c.width;
+        let start = c.shapes.len();
+        let notes_end = bare_notes_end(lx + lw);
+        c.width = ((notes_end - lx) / k).max(200.0);
+        game.view.kiai_effects = self.kiai_effects;
+        crate::game::with_look(preview_look(crate::game::playfield_look()), || {
+            game.draw_playfield(c, scroll_speed)
+        });
+        let centre = (lh - band_h * k) / 2.0;
+        let oy = ly - band_top * k + centre;
+        c.transform_since(start, [0.0, 0.0], k, lx, oy);
+        c.width = full_w;
+        bare_lane_end(&mut c.shapes, start, lx, lx, notes_end, lh);
+        let end = c.shapes.len();
+        if end > start {
+            c.clips
+                .push((start..end, [lx + 1.0, ly + 1.0, lw - 2.0, lh - 2.0]));
+        }
+        true
+    }
+
     pub fn draw_timeline(
         &mut self,
         c: &mut Canvas,

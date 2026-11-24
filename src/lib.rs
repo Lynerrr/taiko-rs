@@ -2142,8 +2142,19 @@ impl State {
         if self.back_to_editor() {
             return;
         }
-        // Any return to Song Select (Pause -> Quit, load error, etc.) ends an active Journey
-        // session so normal plays never inherit from_journey or Journey results bindings.
+        // Leaving a map played from Journey (Pause -> Quit, Esc, fail, load error) returns
+        // to the Journey screen instead of kicking the player back to Song Select / Main Menu.
+        if self.journey.active && self.journey.in_play {
+            self.journey.in_play = false;
+            self.journey.shown_at = Instant::now();
+            self.stop_audio();
+            self.report_smoothness();
+            self.scene = screens::journey::JourneyScreen::scene();
+            self.journey_preview_current();
+            return;
+        }
+        // Any explicit return to Song Select ends an active Journey session so normal plays
+        // never inherit from_journey or Journey results bindings.
         self.journey.stop();
         self.stop_audio();
         self.report_smoothness();
@@ -6901,7 +6912,9 @@ impl State {
                 return;
             }
         }
-        if self.scene.screen_is::<Preview>() {
+        if self.scene.screen_is::<Preview>()
+            || self.scene.screen_is::<screens::journey::JourneyScreen>()
+        {
             let (vx, vy) = self.mouse_virtual();
             if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() {
                 self.preview
@@ -7622,7 +7635,7 @@ impl State {
             }
             return;
         }
-        if self.in_song_select() {
+        if self.in_song_select() || self.scene.screen_is::<screens::journey::JourneyScreen>() {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
                 if !self.preview_on_top(vx, vy) {
@@ -13118,13 +13131,23 @@ impl State {
         self.poll_folder_pick();
         self.poll_data_move();
         {
-            // The Download tab previews remote maps through the same preview.
+            // The Download tab and Journey cached maps preview non-library maps through the same preview.
             let browsing = self.scene.screen().is_some_and(|s| s.previews_remote());
-            if browsing != self.preview_remote {
-                self.preview_remote = browsing;
+            let in_journey = self.scene.screen_is::<screens::journey::JourneyScreen>();
+            let journey_cached_entry = if in_journey {
+                self.journey.current().and_then(|q| match &q.source {
+                    crate::journey::MapSource::Cached { entry, .. } => Some(entry.as_ref()),
+                    _ => None,
+                })
+            } else {
+                None
+            };
+            let use_alt_source = browsing || journey_cached_entry.is_some();
+            if use_alt_source != self.preview_remote {
+                self.preview_remote = use_alt_source;
                 self.preview.forget();
             }
-            let in_select = self.in_song_select();
+            let in_select = self.in_song_select() || in_journey;
             let in_menu = in_select
                 || self
                     .scene
@@ -13134,10 +13157,13 @@ impl State {
                     prev.is_select()
                         || prev.screen().is_some_and(|s| s.room_lobby())
                         || prev.screen_is::<Preview>()
+                        || prev.screen_is::<screens::journey::JourneyScreen>()
                 })
                 || self.scene.screen().is_some_and(|s| s.tab().is_some());
-            let (entries, selected) = if browsing {
+            let (entries, selected): (&[library::Entry], Option<usize>) = if browsing {
                 (&self.browse.remote, self.browse.shown)
+            } else if let Some(entry) = journey_cached_entry {
+                (std::slice::from_ref(entry), Some(0))
             } else {
                 (&self.library, self.preview_target())
             };
@@ -13178,7 +13204,7 @@ impl State {
             let behind = if self.cfg.legacy_menu {
                 self.on_menu()
             } else {
-                self.scene.is_select()
+                self.scene.is_select() || in_journey
             };
             if self.cfg.menu_notes && behind {
                 self.ensure_library_indices();
@@ -15720,6 +15746,8 @@ impl State {
             Hit::ModsButton => self.open_mod_select(),
             Hit::JourneyButton => self.open_journey(),
             Hit::JourneyLevel(i) => self.journey_pick_level(i),
+            Hit::JourneyLevelStep(d) => self.journey_step_level(d),
+            Hit::JourneyLevelOpen => self.journey_open_level_picker(),
             Hit::JourneySave => self.journey_save_current(),
             Hit::JourneyNext => self.journey_next_from_results(false),
             Hit::ModToggle(i) => {
