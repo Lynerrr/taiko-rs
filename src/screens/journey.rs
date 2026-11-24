@@ -632,10 +632,11 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
 fn current_entry_for_preview<'a>(
     journey: &'a crate::journey::Journey,
     library: &'a [library::Entry],
+    library_idx: Option<usize>,
 ) -> Option<&'a library::Entry> {
     let cur = journey.current()?;
     match &cur.source {
-        MapSource::Local(p) | MapSource::Saved(p) => library.iter().find(|e| &e.path == p),
+        MapSource::Local(_) | MapSource::Saved(_) => library_idx.and_then(|i| library.get(i)),
         MapSource::Cached { entry, .. } => Some(entry.as_ref()),
         _ => None,
     }
@@ -700,9 +701,10 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     };
     let (item, is_ready, is_in_library, dl_progress, is_failed, status_str) = cur_cloned;
     let (role_label, role_col) = role_badge(&item.role);
-    let preview_entry = current_entry_for_preview(&state.journey, &state.library);
+    let lib_idx = state.journey.current_library_index(&state.library);
+    let preview_entry = current_entry_for_preview(&state.journey, &state.library, lib_idx);
     let is_epic = state.journey_map_is_epic(&item, preview_entry);
-    let map_status = state.journey_map_status(&item, preview_entry);
+    let map_status = state.journey_map_status(&item, preview_entry, lib_idx);
     let (entry_path, bg_path, od_raw, entry_level) = match preview_entry {
         Some(e) => (
             is_ready.then(|| e.path.clone()),
@@ -1029,7 +1031,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
 
     let scroll_speed = state.cfg.scroll_speed;
     if let Some(entry) =
-        current_entry_for_preview(&state.journey, &state.library).filter(|_| is_ready)
+        current_entry_for_preview(&state.journey, &state.library, lib_idx).filter(|_| is_ready)
     {
         let active =
             state
@@ -1507,32 +1509,22 @@ impl State {
     fn journey_fill_local(&mut self) {
         let rate = self.cfg.rate;
         let stars = &self.stars;
-        let info = self.select.info.as_ref().map(|m| m.lock().unwrap().clone());
+        let info = self.select.info.as_ref().map(|m| m.lock().unwrap());
         self.journey.fill_from_local(&self.library, |i| {
-            stars.get(i, rate).or_else(|| {
-                info.as_ref()
-                    .and_then(|v| v.get(i).copied().flatten())
-                    .map(|mi| mi.stars)
-                    .filter(|s| s.is_finite() && *s > 0.1)
-            })
+            let mi = info.as_deref().and_then(|v| v.get(i).copied().flatten());
+            let st = stars
+                .get(i, rate)
+                .or_else(|| mi.map(|mi| mi.stars).filter(|s| s.is_finite() && *s > 0.1));
+            let bpm = mi
+                .map(|mi| mi.bpm)
+                .filter(|b| b.is_finite() && *b > 0.0)
+                .map_or(0.0, f64::from);
+            let length_ms = mi
+                .map(|mi| mi.length_ms)
+                .filter(|l| l.is_finite() && *l > 0.0)
+                .map_or(0, |l| l as u64);
+            (st, bpm, length_ms)
         });
-        if let Some(info) = info {
-            for q in &mut self.journey.queue {
-                let MapSource::Local(path) = &q.source else {
-                    continue;
-                };
-                if let Some(idx) = self.library.iter().position(|e| &e.path == path)
-                    && let Some(mi) = info.get(idx).copied().flatten()
-                {
-                    if q.item.bpm <= 0.0 && mi.bpm.is_finite() && mi.bpm > 0.0 {
-                        q.item.bpm = f64::from(mi.bpm);
-                    }
-                    if q.item.length_ms == 0 && mi.length_ms.is_finite() && mi.length_ms > 0.0 {
-                        q.item.length_ms = mi.length_ms as u64;
-                    }
-                }
-            }
-        }
     }
 
     pub(crate) fn journey_preview_current(&mut self) {

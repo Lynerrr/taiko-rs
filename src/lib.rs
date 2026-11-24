@@ -9393,6 +9393,7 @@ impl State {
         self.library_own_folders = Arc::new(own_folders);
         self.library_indexed_len = self.library.len();
         self.library_indexed_ptr = self.library.as_ptr() as usize;
+        self.journey.invalidate_library_index();
     }
 
     fn extend_library_indices(&mut self, start: usize) {
@@ -9426,12 +9427,14 @@ impl State {
         }
         self.library_indexed_len = self.library.len();
         self.library_indexed_ptr = self.library.as_ptr() as usize;
+        self.journey.invalidate_library_index();
     }
 
     /// Marks the library indices out of date after an entry was replaced or moved in place
     /// (its set or folder may differ): the next `ensure_library_indices` rebuilds them.
     fn invalidate_library_indices(&mut self) {
         self.library_indexed_len = usize::MAX;
+        self.journey.invalidate_library_index();
     }
 
     /// Whether the indices still describe the library: none of its entries replaced in place
@@ -10653,12 +10656,13 @@ impl State {
         &self,
         item: &online::JourneyItem,
         entry: Option<&Entry>,
+        library_idx: Option<usize>,
     ) -> Option<(&'static str, u32)> {
         if let Some(e) = entry {
             if e.is_tja() {
                 return Some(("TJA", ui::TJA_COLOUR));
             }
-            if let Some(i) = self.library.iter().position(|x| x.path == e.path) {
+            if let Some(i) = library_idx {
                 return self.map_status(i);
             }
         }
@@ -10880,10 +10884,11 @@ impl State {
             self.select.refilter(&self.library);
         }
         let (set, map) = if self.scene.screen_is::<screens::journey::JourneyScreen>() {
+            let lib_idx = self.journey.current_library_index(&self.library);
             let cur = self.journey.current();
             let entry = cur.and_then(|q| match &q.source {
-                crate::journey::MapSource::Local(p) | crate::journey::MapSource::Saved(p) => {
-                    self.library.iter().find(|e| &e.path == p)
+                crate::journey::MapSource::Local(_) | crate::journey::MapSource::Saved(_) => {
+                    lib_idx.and_then(|i| self.library.get(i))
                 }
                 crate::journey::MapSource::Cached { entry, .. } => Some(entry.as_ref()),
                 _ => None,
@@ -13370,7 +13375,7 @@ impl State {
             let behind = if self.cfg.legacy_menu {
                 self.on_menu()
             } else {
-                self.scene.is_select() || in_journey
+                self.scene.is_select()
             };
             if self.cfg.menu_notes && behind {
                 self.ensure_library_indices();

@@ -157,8 +157,8 @@ pub struct Journey {
     /// The cached (not in the library) map the preview last played: another one is a new song
     /// even though it's always entry 0 of its one-entry list.
     pub preview_cached: Option<PathBuf>,
-    /// The current map's library index, found by its path (kept while it still matches).
-    library_index: Option<(PathBuf, usize)>,
+    /// The current map's library index, cached against `(path, library ptr, library len)`.
+    library_index: Option<(PathBuf, usize, usize, Option<usize>)>,
     /// What Journey asks before it goes on, drawn instead of the map.
     pub gate: Option<Gate>,
     /// Why the player chose to go on offline, with the library only.
@@ -225,15 +225,34 @@ impl Journey {
             Some(MapSource::Local(p) | MapSource::Saved(p)) => p,
             _ => return None,
         };
-        if let Some((known, i)) = &self.library_index
-            && known == path
-            && library.get(*i).is_some_and(|e| &e.path == path)
+        let ptr = library.as_ptr() as usize;
+        let len = library.len();
+        if let Some((known, known_ptr, known_len, cached)) = &self.library_index
+            && known.as_os_str() == path.as_os_str()
         {
-            return Some(*i);
+            match *cached {
+                Some(i)
+                    if library
+                        .get(i)
+                        .is_some_and(|e| e.path.as_os_str() == path.as_os_str()) =>
+                {
+                    return Some(i);
+                }
+                None if *known_ptr == ptr && *known_len == len => return None,
+                _ => {}
+            }
         }
-        let i = library.iter().position(|e| &e.path == path)?;
-        self.library_index = Some((path.clone(), i));
-        Some(i)
+        let i = library
+            .iter()
+            .position(|e| e.path.as_os_str() == path.as_os_str())
+            .or_else(|| library.iter().position(|e| &e.path == path));
+        self.library_index = Some((path.clone(), ptr, len, i));
+        i
+    }
+
+    /// Clears the cached library index after `State::library` is mutated or replaced.
+    pub fn invalidate_library_index(&mut self) {
+        self.library_index = None;
     }
 
     /// Resets session state for a fresh Journey run.
@@ -305,6 +324,7 @@ impl Journey {
         {
             self.playing_cached = None;
         }
+        self.library_index = None;
     }
 
     /// Switches the session to a manual target star rating and rebuilds the queue for it.
@@ -647,7 +667,12 @@ impl Journey {
     }
 
     /// Fills the queue from the player's local library (offline / server without `journey/1`).
-    pub fn fill_from_local(&mut self, library: &[Entry], stars_of: impl Fn(usize) -> Option<f32>) {
+    /// `info_of(i)` supplies `(stars, bpm, length_ms)` for `library[i]`.
+    pub fn fill_from_local(
+        &mut self,
+        library: &[Entry],
+        info_of: impl Fn(usize) -> (Option<f32>, f64, u64),
+    ) {
         self.local_mode = true;
         if self.pool_exhausted
             || (self.target_stars.is_none()
@@ -658,8 +683,17 @@ impl Journey {
             return;
         }
         let comfort = self.target_stars.unwrap_or(self.comfort_stars);
-        let excluded: HashSet<String> = self.exclude_sets.iter().cloned().collect();
-        let mut used_local: HashSet<String> = HashSet::new();
+        let mut excluded_osu: HashSet<u32> = HashSet::new();
+        let mut excluded_dirs: HashSet<String> = HashSet::new();
+        for s in &self.exclude_sets {
+            if let Some(id) = s.strip_prefix("osu:").and_then(|v| v.parse::<u32>().ok()) {
+                excluded_osu.insert(id);
+            } else if let Some(dir) = s.strip_prefix("dir:") {
+                excluded_dirs.insert(dir.to_owned());
+            }
+        }
+        let mut used_osu: HashSet<u32> = HashSet::new();
+        let mut used_dirs: HashSet<Option<&std::ffi::OsStr>> = HashSet::new();
 
         while self.queue.len() < MAX_PREFETCH_AHEAD {
             let step = self.step.saturating_add(self.queue.len() as u32);
@@ -705,14 +739,27 @@ impl Journey {
                 )
             };
 
-            let mut best: Option<(usize, f64, f64)> = None;
+            let mut best: Option<(usize, f64, f64, f64, u64)> = None;
             for (i, e) in library.iter().enumerate() {
-                let sk = local_set_key(e);
-                if excluded.contains(&sk) || used_local.contains(&sk) {
-                    continue;
+                if let Some(set_id) = e.meta.set_id {
+                    if excluded_osu.contains(&set_id) || used_osu.contains(&set_id) {
+                        continue;
+                    }
+                } else {
+                    let dir = e.path.parent().and_then(|p| p.file_name());
+                    if used_dirs.contains(&dir) {
+                        continue;
+                    }
+                    if !excluded_dirs.is_empty() {
+                        let dir_str = dir.map(|n| n.to_string_lossy()).unwrap_or_default();
+                        if excluded_dirs.contains(dir_str.as_ref()) {
+                            continue;
+                        }
+                    }
                 }
                 // Strongly prefer maps with known stars so unrated maps don't always win.
-                let (st, unrated_penalty) = match stars_of(i) {
+                let (stars_opt, bpm, length_ms) = info_of(i);
+                let (st, unrated_penalty) = match stars_opt {
                     Some(s) if s.is_finite() && s > 0.1 => (f64::from(s), 0.0),
                     _ => (0.0, 100.0),
                 };
@@ -725,16 +772,20 @@ impl Journey {
                     as f64
                     * 0.004;
                 let score = dist + jitter;
-                if best.is_none_or(|(_, b_score, _)| score < b_score) {
-                    best = Some((i, score, st));
+                if best.is_none_or(|(_, b_score, _, _, _)| score < b_score) {
+                    best = Some((i, score, st, bpm, length_ms));
                 }
             }
-            let Some((idx, _, st)) = best else {
+            let Some((idx, _, st, bpm, length_ms)) = best else {
                 self.pool_exhausted = true;
                 break;
             };
             let e = &library[idx];
-            used_local.insert(local_set_key(e));
+            if let Some(set_id) = e.meta.set_id {
+                used_osu.insert(set_id);
+            } else {
+                used_dirs.insert(e.path.parent().and_then(|p| p.file_name()));
+            }
             let item = JourneyItem {
                 md5: format!("local:{}", e.path.display()),
                 map_hash: e.known_hash(),
@@ -745,8 +796,8 @@ impl Journey {
                 creator: e.meta.creator.clone(),
                 version: e.meta.version.clone(),
                 stars: st,
-                bpm: 0.0,
-                length_ms: 0,
+                bpm,
+                length_ms,
                 role: role.into(),
                 reason: reason.into(),
                 scroll_velocity: 0.0,
@@ -769,21 +820,6 @@ pub fn set_key_of(item: &JourneyItem) -> String {
         format!("osu:{s}")
     } else {
         format!("md5:{}", item.md5)
-    }
-}
-
-fn local_set_key(e: &Entry) -> String {
-    if let Some(s) = e.meta.set_id {
-        format!("osu:{s}")
-    } else {
-        format!(
-            "dir:{}",
-            e.path
-                .parent()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        )
     }
 }
 
@@ -1203,5 +1239,85 @@ mod tests {
         });
         j.advance(PastOutcome::Skipped);
         assert!(!j.can_go_back());
+    }
+
+    #[test]
+    fn current_library_index_caches_hits_misses_and_tracks_library_changes() {
+        let entry = |p: &str, set: Option<u32>| {
+            let meta = crate::beatmap::Meta {
+                set_id: set,
+                version: "Oni".into(),
+                ..Default::default()
+            };
+            Entry::new(PathBuf::from(p), meta)
+        };
+        let mut library = vec![
+            entry("/songs/1 a/a.osu", Some(1)),
+            entry("/songs/2 b/b.osu", Some(2)),
+        ];
+        let mut j = Journey::new();
+        j.queue.push_back(QueuedMap {
+            item: test_item("Oni", 2),
+            source: MapSource::Local(PathBuf::from("/songs/2 b/b.osu")),
+        });
+        assert_eq!(j.current_library_index(&library), Some(1));
+        assert_eq!(j.current_library_index(&library), Some(1));
+
+        // Reordering library invalidates the cached slot and finds the new index.
+        library.swap(0, 1);
+        assert_eq!(j.current_library_index(&library), Some(0));
+
+        // Missing path caches None until the library changes and adds it.
+        j.queue[0].source = MapSource::Local(PathBuf::from("/songs/3 c/c.osu"));
+        assert_eq!(j.current_library_index(&library), None);
+        assert_eq!(j.current_library_index(&library), None);
+        library.push(entry("/songs/3 c/c.osu", Some(3)));
+        assert_eq!(j.current_library_index(&library), Some(2));
+
+        // Cached maps are not library entries.
+        j.queue[0].source = MapSource::Cached {
+            folder: PathBuf::from("/cache/3 c"),
+            entry: Box::new(entry("/cache/3 c/c.osu", Some(3))),
+        };
+        assert_eq!(j.current_library_index(&library), None);
+    }
+
+    #[test]
+    fn fill_from_local_respects_exclusions_and_populates_bpm_and_length() {
+        let entry = |p: &str, set: Option<u32>| {
+            let meta = crate::beatmap::Meta {
+                title: p.into(),
+                set_id: set,
+                version: "Oni".into(),
+                ..Default::default()
+            };
+            Entry::new(PathBuf::from(p), meta)
+        };
+        let library = vec![
+            entry("/songs/10 a/a.osu", Some(10)),
+            entry("/songs/20 b/b.osu", Some(20)),
+            entry("/songs/local_dir/c1.osu", None),
+            entry("/songs/local_dir/c2.osu", None),
+        ];
+        let mut j = Journey::new();
+        j.target_stars = Some(5.0);
+        j.comfort_stars = 5.0;
+        j.exclude_sets.push("osu:10".into());
+
+        j.fill_from_local(&library, |i| match i {
+            0 => (Some(4.6), 200.0, 90_000),
+            1 => (Some(4.7), 185.0, 120_000),
+            2 => (Some(5.0), 170.0, 100_000),
+            _ => (Some(5.0), 160.0, 110_000),
+        });
+
+        assert_eq!(j.queue.len(), MAX_PREFETCH_AHEAD);
+        // Set 10 is excluded; index 1 (set 20) wins warmup (4.6 target), and one of local_dir wins main.
+        assert_eq!(j.queue[0].item.set_id, Some(20));
+        assert_eq!(j.queue[0].item.bpm, 185.0);
+        assert_eq!(j.queue[0].item.length_ms, 120_000);
+        assert_eq!(j.queue[1].item.set_id, None);
+        assert_eq!(j.queue[1].item.bpm, 170.0);
+        assert_eq!(j.queue[1].item.length_ms, 100_000);
     }
 }
