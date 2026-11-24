@@ -1,0 +1,39 @@
+text  723,7    log in
+text  778,7    what's new
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text   22,50   Running 0s   In songs 0s
+text  160,239  PLAY
+text  240,239  JOURNEY
+text  332,239  EDITOR
+text  405,239  MULTIPLAYER
+text  503,239  DOWNLOAD
+text  598,239  MEDALS
+text  680,239  SETTINGS
+text  781,239  EXIT
+text  325,286  JOURNEY
+text  277,330  Endless feed tailored to your level
+text   25,437  NOW PLAYING
+text   25,452  Regression - basics [basics]
+hit   128,140    89x124  MenuItem(0)
+hit   217,140    89x124  MenuItem(1)
+hit   305,140    89x124  MenuItem(2)
+hit   394,140    89x124  MenuItem(3)
+hit   483,140    89x124  MenuItem(4)
+hit   571,140    89x124  MenuItem(5)
+hit   660,140    89x124  MenuItem(6)
+hit   749,140    89x124  MenuItem(7)
+hit   803,440    36x28   DiscordServer
+hit   260,437    26x24   Music(Prev)
+hit   290,437    26x24   Music(Toggle)
+hit   320,437    26x24   Music(Next)
+hit   350,437    26x24   Music(Open)
+hit    22,18     26x26   MenuLogo
+hit   771,2      74x14   Changelog
+hit   715,2      50x14   Account

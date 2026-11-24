@@ -37,12 +37,15 @@ impl Screen for ResultsScreen {
     fn presence(&self, state: &State) -> Option<(String, String)> {
         Some((
             state.library.get(self.entry)?.label(),
-            tr!(
-                "Looking at the results",
-                "リザルトを見ています",
-                "Смотрит итоги"
-            )
-            .into(),
+            super::play::journey_presence(
+                state,
+                tr!(
+                    "Looking at the results",
+                    "リザルトを見ています",
+                    "Смотрит итоги"
+                )
+                .into(),
+            ),
         ))
     }
 
@@ -134,7 +137,17 @@ impl Screen for ResultsScreen {
                 };
                 if let Some((map, vote)) = results.toggle_vote(vote) {
                     state.send_vote(map, vote);
+                    if vote == Some(online::MapVote::Like)
+                        && state.playing_journey()
+                        && state.cfg.journey_save_on_like
+                        && state.journey.playing_cached.is_some()
+                    {
+                        state.journey_save_current();
+                    }
                 }
+            }
+            KeyCode::KeyS if state.playing_journey() => {
+                state.journey_save_current();
             }
             KeyCode::KeyV if results.replay.is_some() => {
                 if let Some(file) = results.replay.clone() {
@@ -157,11 +170,23 @@ impl Screen for ResultsScreen {
                     state.scene = SongSelect::scene();
                 }
             }
-            KeyCode::Enter | KeyCode::NumpadEnter => state.retry_from(self.entry, self.from),
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                if state.playing_journey() {
+                    state.journey_next_from_results(results.failed);
+                } else {
+                    state.retry_from(self.entry, self.from);
+                }
+            }
             KeyCode::Escape => {
-                let path = state.library[self.entry].path.clone();
-                state.show_select();
-                state.select.select_path(&state.library, &path);
+                // The map was played: leaving its results goes on with Journey, as Next does,
+                // so it isn't left up to be skipped.
+                if state.playing_journey() {
+                    state.journey_next_from_results(results.failed);
+                } else {
+                    let path = state.library[self.entry].path.clone();
+                    state.show_select();
+                    state.select.select_path(&state.library, &path);
+                }
             }
             _ => {}
         }
@@ -178,6 +203,8 @@ impl Screen for ResultsScreen {
                 a.play(track.clone(), *again);
             }
         }
+        results.journey = state.playing_journey();
+        results.journey_save = state.journey.playing_cached.is_some();
         results.draw(canvas);
         None
     }

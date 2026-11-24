@@ -23,6 +23,7 @@ mod font_search;
 mod formats;
 mod gameplay;
 mod glyphs;
+mod journey;
 mod lens;
 mod map_delete;
 mod menu_shift;

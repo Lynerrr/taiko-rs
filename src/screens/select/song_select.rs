@@ -1216,32 +1216,19 @@ fn draw_songs(
                 inner_h,
             );
             // The mods that are on, each in its mod select column's colour, as a group in the
-            // room between Random and Play (a click on them opens the mod select too).
+            // room between Random and Play (a click on them opens the mod select too), followed
+            // by the speed stepper when no mod sets it and room allows.
             let from = rx + random_w + MOD_GROUP_GAP;
             let room = play_x - MOD_GROUP_GAP - from;
-            // After them the speed, with - and + beside it ([ and ]), when no mod sets it and
-            // every mod's badge still shows: the mods come first.
-            let badges_w = if state.cfg.mods.is_empty() {
-                -MOD_GROUP_GAP
-            } else {
-                all_badges_width(state.cfg.mods)
-            };
-            if state.cfg.mods.rate_override().is_none()
-                && badges_w + MOD_GROUP_GAP + rate_stepper_width(8.0) <= room
-            {
-                let h = inner_h.min(20.0);
-                let at = from + badges_w + MOD_GROUP_GAP;
-                rate_stepper(canvas, at, mid - h / 2.0, h, state.cfg.rate, 8.0);
-            }
-            if !state.cfg.mods.is_empty() && room >= MOD_BADGES_MIN {
-                let top = mid - MOD_BADGE_H / 2.0;
-                let bw = action_mod_badges(canvas, from, top, state.cfg.mods, room);
-                let group = [from - 2.0, top - 3.0, bw + 4.0, MOD_BADGE_H + 6.0];
-                canvas.hit(group[0], group[1], group[2], group[3], hit::Hit::ModsButton);
-                if canvas.hovered(group[0], group[1], group[2], group[3]) {
-                    mods_tip(canvas, [from, top], state.cfg.mods);
-                }
-            }
+            draw_action_mods_and_rate(
+                canvas,
+                from,
+                mid,
+                inner_h,
+                room,
+                state.cfg.mods,
+                state.cfg.rate,
+            );
             let hit = hit::Hit::Key(KeyCode::Enter);
             let bar = [
                 play_x,
@@ -1555,6 +1542,40 @@ fn draw_shift(
     if let (Some(item), Some(from), Some((to, size))) = (in_air, from, state.play_icon_at) {
         let to = [to[0] + (1.0 - ph.cam) * w, to[1]];
         menu_shift::draw_flight(canvas, item, from, (to, size), flight);
+    }
+}
+
+/// Active mod badges (clicking opens mod select; hovering lists names) and the speed stepper
+/// (`- 1.00x +`, when no mod overrides speed and room allows) along a bottom action bar starting at
+/// `from`, vertically centred on `mid` within `room`.
+pub(crate) fn draw_action_mods_and_rate(
+    canvas: &mut Canvas,
+    from: f32,
+    mid: f32,
+    inner_h: f32,
+    room: f32,
+    mods: mods::Mods,
+    rate: f64,
+) {
+    let badges_w = if mods.is_empty() {
+        -MOD_GROUP_GAP
+    } else {
+        all_badges_width(mods)
+    };
+    if mods.rate_override().is_none() && badges_w + MOD_GROUP_GAP + rate_stepper_width(8.0) <= room
+    {
+        let h = inner_h.min(20.0);
+        let at = from + badges_w + MOD_GROUP_GAP;
+        rate_stepper(canvas, at, mid - h / 2.0, h, rate, 8.0);
+    }
+    if !mods.is_empty() && room >= MOD_BADGES_MIN {
+        let top = mid - MOD_BADGE_H / 2.0;
+        let bw = action_mod_badges(canvas, from, top, mods, room);
+        let group = [from - 2.0, top - 3.0, bw + 4.0, MOD_BADGE_H + 6.0];
+        canvas.hit(group[0], group[1], group[2], group[3], hit::Hit::ModsButton);
+        if canvas.hovered(group[0], group[1], group[2], group[3]) {
+            mods_tip(canvas, [from, top], mods);
+        }
     }
 }
 

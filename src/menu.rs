@@ -10,6 +10,7 @@ use crate::render::{self, Sprite, approach, pixel_size, rgba, snap_to_grid};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
     Play,
+    Journey,
     Multiplayer,
     Download,
     Medals,
@@ -18,8 +19,9 @@ pub enum Item {
     Exit,
 }
 
-pub const ITEMS: [Item; 7] = [
+pub const ITEMS: [Item; 8] = [
     Item::Play,
+    Item::Journey,
     Item::Editor,
     Item::Multiplayer,
     Item::Download,
@@ -167,6 +169,24 @@ const OUTLINE: u32 = 0x0f0f16;
 type Icon = [&'static str; 16];
 
 const PLAY: Icon = crate::style::PLAY;
+const INFINITY: Icon = [
+    "................",
+    "................",
+    "................",
+    "................",
+    "..####....####..",
+    ".######..######.",
+    "##....####....##",
+    "##.....##.....##",
+    "##.....##.....##",
+    "##....####....##",
+    ".######..######.",
+    "..####....####..",
+    "................",
+    "................",
+    "................",
+    "................",
+];
 const PEOPLE: Icon = [
     "................",
     "................",
@@ -280,6 +300,7 @@ impl Item {
     fn name(self) -> &'static str {
         match self {
             Item::Play => tr!("PLAY", "プレイ", "ИГРАТЬ"),
+            Item::Journey => tr!("JOURNEY", "ジャーニー", "JOURNEY"),
             Item::Multiplayer => tr!("MULTIPLAYER", "マルチ", "МУЛЬТИПЛЕЕР"),
             Item::Download => tr!("DOWNLOAD", "ダウンロード", "ЗАГРУЗКА"),
             Item::Medals => tr!("MEDALS", "メダル", "МЕДАЛИ"),
@@ -294,6 +315,12 @@ impl Item {
             Item::Play => {
                 tr!("{maps} maps in your library", "ライブラリに{maps}譜面", "{maps} карт в библиотеке"; [] [maps])
             }
+            Item::Journey => tr!(
+                "Endless feed tailored to your level",
+                "レベルに合ったエンドレス譜面フィード",
+                "Бесконечная лента карт под твой уровень"
+            )
+            .into(),
             Item::Multiplayer => tr!(
                 "Play with friends and everyone else",
                 "フレンドやみんなと遊ぶ",
@@ -331,6 +358,7 @@ impl Item {
     fn colour(self) -> u32 {
         match self {
             Item::Play | Item::Download => DON,
+            Item::Journey => 0x22c8b8,
             Item::Multiplayer | Item::Settings => KAT,
             Item::Medals => 0xE8B020,
             Item::Editor => 0x9b6cff,
@@ -346,6 +374,7 @@ impl Item {
     fn icon(self) -> &'static Icon {
         match self {
             Item::Play => &PLAY,
+            Item::Journey => &INFINITY,
             Item::Multiplayer => &PEOPLE,
             Item::Download => &ARROW,
             Item::Medals => &MEDAL,
@@ -1708,11 +1737,11 @@ mod tests {
     #[test]
     fn the_short_way_round_and_back_to_the_same_note() {
         let mut m = Menu::new();
-        m.pick(6);
+        m.pick(ITEMS.len() - 1);
         assert_eq!(m.selected, -1, "Exit is one step back from Play");
         assert_eq!(m.current(), Item::Exit);
         m.step(2);
-        assert_eq!(m.current(), Item::Editor);
+        assert_eq!(m.current(), Item::Journey);
         m.pick(1);
         assert_eq!(m.selected, 1, "already there");
     }
@@ -1720,7 +1749,7 @@ mod tests {
     #[test]
     fn the_editor_opens_after_the_hit_like_the_rest() {
         let mut m = Menu::new();
-        m.pick(1);
+        m.pick(2);
         assert_eq!(m.hit(), Item::Editor);
         assert!(m.is_leaving());
         assert_eq!(m.ready(), Some(Item::Editor));
@@ -1820,7 +1849,8 @@ mod tests {
 
     #[test]
     fn the_editor_sits_after_play_with_no_new_sticker_or_glow_for_now() {
-        assert_eq!(ITEMS[1], Item::Editor);
+        assert_eq!(ITEMS[1], Item::Journey);
+        assert_eq!(ITEMS[2], Item::Editor);
         // 2026-12-31 00:00 UTC, should they come back.
         assert_eq!(NEW_UNTIL, 1_798_675_200);
         assert!(!editor_is_new(crate::setstatus::now()), "switched off");
@@ -2059,7 +2089,7 @@ mod tests {
             "sparks and bursts come from it"
         );
         // Round past the end: it goes back along, the notes still where they were.
-        m.step(4);
+        m.step(ITEMS.len() as i32 - 3);
         assert_eq!(m.index(), 0);
         assert_eq!(note_spots(&frame(&mut m, 16.0)), first);
     }
@@ -2138,7 +2168,7 @@ mod tests {
         m.clock = FADE_MS;
         assert_eq!(m.opacity(), 1.0);
         // Opening something goes straight there, with no fade out first.
-        m.pick(3);
+        m.pick(4);
         m.hit();
         assert_eq!(m.opacity(), 1.0);
         assert_eq!(m.ready(), Some(Item::Download));

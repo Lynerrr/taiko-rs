@@ -2214,7 +2214,7 @@ fn one_click_on_a_main_menu_note_opens_it() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = SongSelect::scene();
     s.main_menu = Some(menu::Menu::new());
-    s.click(crate::hit::Hit::MenuItem(5), None);
+    s.click(crate::hit::Hit::MenuItem(6), None);
     let m = s.main_menu.as_ref().unwrap();
     assert_eq!(m.current(), menu::Item::Settings);
     assert!(m.is_leaving(), "no second click at the circle needed");
@@ -3059,6 +3059,7 @@ fn a_match_ends_as_a_match_and_a_sudden_death_fail_as_a_fail_whatever_follows() 
             mods: Vec::new(),
             rate: 1.0,
             scroll_speed: 1.0,
+            from_journey: false,
         },
         failed: true,
         failed_early: true,

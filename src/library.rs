@@ -321,16 +321,25 @@ pub fn set_songs_folder(dir: Option<PathBuf>) {
     *SONGS_FOLDER.write().unwrap_or_else(|e| e.into_inner()) = dir;
 }
 
-/// The Songs folders to scan: the one picked in settings, else the osu! installs found.
+/// The Songs folders to scan: the one picked in settings, else the osu! installs found,
+/// always plus taiko.rs's own Songs folder when it exists on disk.
 pub fn song_dirs() -> Vec<PathBuf> {
-    match SONGS_FOLDER
+    let mut dirs = match SONGS_FOLDER
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
     {
         Some(dir) => vec![dir],
         None => default_song_dirs(),
+    };
+    if !cfg!(test)
+        && let Some(own) = crate::config::own_dir("Songs")
+        && own.is_dir()
+        && !dirs.contains(&own)
+    {
+        dirs.push(own);
     }
+    dirs
 }
 
 /// osu!'s own exe beside a Songs folder being used, else where osu! installs by default.

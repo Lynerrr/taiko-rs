@@ -108,6 +108,19 @@ pub enum Hit {
     /// The mod select's "+ Save": keeps the mods on now (and the speed) as a preset.
     ModPresetSave,
     ModsButton,
+    JourneyButton,
+    JourneyLevel(usize),
+    JourneyLevelAuto,
+    JourneyLevelStep(i32),
+    JourneyLevelOpen,
+    JourneyNext,
+    JourneySave,
+    /// Journey's offer to a signed-out player: log in (false) or make an account (true).
+    JourneyLogin(bool),
+    /// Journey goes on offline, with the library only.
+    JourneyOffline,
+    /// Journey asks the server again now.
+    JourneyRetry,
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
     SettingStep(usize, i32),

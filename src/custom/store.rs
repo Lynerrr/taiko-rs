@@ -236,6 +236,43 @@ pub fn own_files(folder: &Path) -> Vec<PathBuf> {
     own
 }
 
+/// Whether `folder` holds local mapping work that an automatic download (spectating a friend or
+/// joining a lobby) must not overwrite: a locally authored or collab set, an install without a
+/// manifest of its own charts to check against, any extra chart file not brought by the install,
+/// or any installed chart whose contents changed on disk.
+pub fn has_local_edits(folder: &Path) -> bool {
+    let Some(manifest) = Manifest::read(folder) else {
+        return true;
+    };
+    if matches!(manifest.origin, Some(Origin::Local | Origin::Collab)) {
+        return true;
+    }
+    if manifest.files.is_empty() {
+        return true;
+    }
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return true;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() || !is_chart(&path) {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return true;
+        };
+        let Some(expected) = manifest.file_hash(name) else {
+            return true;
+        };
+        match std::fs::read(&path) {
+            Ok(bytes) if crate::net::map_hash(&bytes) == expected => {}
+            _ => return true,
+        }
+    }
+    false
+}
+
 /// The osu! set a folder's charts say they were made from, if any.
 fn based_on(dir: &Path) -> Option<u32> {
     std::fs::read_dir(dir)
@@ -774,5 +811,51 @@ mod tests {
             p.custom.join("c12 KNOWER - Time Traveler (2)")
         );
         assert_eq!(names(&taken), ["mine.osu"], "untouched");
+    }
+
+    #[test]
+    fn has_local_edits_flags_local_changes_and_clears_unmodified_site_installs() {
+        let p = Place::new("local-edits");
+        let a = p.archive(
+            "v1",
+            &[
+                ("a [Oni].tko", &chart("Oni")),
+                ("a [Muzukashii].tko", &chart("Muzukashii")),
+            ],
+        );
+        let folder = install(&p.custom, &a, &set(1)).unwrap();
+        assert!(!has_local_edits(&folder), "clean website install");
+
+        // Deleting a difficulty is not an unsent edit.
+        std::fs::remove_file(folder.join("a [Muzukashii].tko")).unwrap();
+        assert!(!has_local_edits(&folder));
+
+        // Adding a new difficulty not in the install manifest counts as local work.
+        let extra = folder.join("a [Mine].osu");
+        std::fs::write(&extra, chart("Mine")).unwrap();
+        assert!(has_local_edits(&folder));
+        std::fs::remove_file(&extra).unwrap();
+        assert!(!has_local_edits(&folder));
+
+        // Modifying an installed chart's bytes counts as local work.
+        let orig = std::fs::read_to_string(folder.join("a [Oni].tko")).unwrap();
+        std::fs::write(folder.join("a [Oni].tko"), format!("{orig}\n// edited\n")).unwrap();
+        assert!(has_local_edits(&folder));
+        std::fs::write(folder.join("a [Oni].tko"), &orig).unwrap();
+        assert!(!has_local_edits(&folder));
+
+        // Local and collab origins are always protected, even when files match.
+        for origin in [Origin::Local, Origin::Collab] {
+            let mut m = Manifest::read(&folder).unwrap();
+            m.origin = Some(origin);
+            m.write(&folder).unwrap();
+            assert!(has_local_edits(&folder), "{origin:?} is protected");
+        }
+
+        // Legacy v1 manifest (no file list) and missing manifest are protected.
+        std::fs::write(folder.join(SIDECAR), "{\"id\": 12}\n").unwrap();
+        assert!(has_local_edits(&folder));
+        std::fs::remove_file(folder.join(SIDECAR)).unwrap();
+        assert!(has_local_edits(&folder));
     }
 }

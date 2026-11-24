@@ -52,6 +52,7 @@ mod hit;
 mod hud;
 mod hud_edit;
 mod idle;
+pub mod journey;
 mod keys;
 mod layout;
 #[cfg(test)]
@@ -444,6 +445,7 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
+    pub(crate) journey: journey::Journey,
     /// The camera on its way between the main menu and song select.
     menu_shift: Option<menu_shift::Shift>,
     /// Song select's routes behind it: where they drift to (carried on from the menu's, and back
@@ -543,6 +545,7 @@ struct State {
     /// The server lists `online::TJA_BOARDS_FEATURE`: TJA plays go to its leaderboards, and
     /// song select shows them.
     tja_boards: bool,
+    journey_supported: bool,
     /// The server lists `online::TJA_LOBBY_FILES_FEATURE`: as a lobby host we send our TJA
     /// charts to the players without them.
     pub(crate) tja_lobby_files: bool,
@@ -2134,11 +2137,31 @@ impl State {
         })
     }
 
+    /// The play up (or just finished) was started from Journey: its results go on with Journey.
+    pub(crate) fn playing_journey(&self) -> bool {
+        self.journey.active && self.journey.in_play
+    }
+
     fn show_select(&mut self) {
         // Leaving a test play goes back to the editor it came from.
         if self.back_to_editor() {
             return;
         }
+        // Leaving a map played from Journey (Pause -> Quit, Esc, fail, load error) returns
+        // to the Journey screen instead of kicking the player back to Song Select / Main Menu.
+        if self.journey.active && self.journey.in_play {
+            self.journey.in_play = false;
+            self.journey.playing_cached = None;
+            self.journey.shown_at = Instant::now();
+            self.stop_audio();
+            self.report_smoothness();
+            self.scene = screens::journey::JourneyScreen::scene();
+            self.journey_preview_current();
+            return;
+        }
+        // Any explicit return to Song Select ends an active Journey session so normal plays
+        // never inherit from_journey or Journey results bindings.
+        self.journey.stop();
         self.stop_audio();
         self.report_smoothness();
         self.column_preview = true;
@@ -2550,7 +2573,7 @@ impl State {
     fn menu_hit(&mut self) {
         let Some(m) = &mut self.main_menu else { return };
         let sound = match m.hit() {
-            menu::Item::Play | menu::Item::Editor => audio::Sfx::BigDon,
+            menu::Item::Play | menu::Item::Journey | menu::Item::Editor => audio::Sfx::BigDon,
             _ => audio::Sfx::Don,
         };
         self.sfx(sound);
@@ -2587,6 +2610,7 @@ impl State {
         }
         match item {
             menu::Item::Play => self.leave_menu_for_songs(shifts),
+            menu::Item::Journey => self.open_journey(),
             menu::Item::Multiplayer => self.open_multiplayer(),
             menu::Item::Download => self.open_download(),
             menu::Item::Medals => self.open_medals(self.mp_menu.account.clone()),
@@ -3160,6 +3184,8 @@ impl State {
             Item::NotifyMentions => on(c.notify_mentions),
             Item::NotifyRequests => on(c.notify_requests),
             Item::ShowConverts => on(self.select.show_converts),
+            Item::JourneySaveTo => self.cfg.journey_save_to.name().into(),
+            Item::JourneySaveOnLike => on(self.cfg.journey_save_on_like),
             Item::SongHeadings => on(self.select.headings),
             Item::SongsFolder
                 if self.folder_pick.is_busy() && self.folder_pick_for == Item::SongsFolder =>
@@ -3555,6 +3581,12 @@ impl State {
                 self.cfg.show_converts = self.select.show_converts;
                 self.cfg.save();
                 return;
+            }
+            Item::JourneySaveTo => {
+                self.cfg.journey_save_to = self.cfg.journey_save_to.step(dir);
+            }
+            Item::JourneySaveOnLike => {
+                self.cfg.journey_save_on_like = !self.cfg.journey_save_on_like;
             }
             Item::SongHeadings => {
                 self.select
@@ -6886,7 +6918,9 @@ impl State {
                 return;
             }
         }
-        if self.scene.screen_is::<Preview>() {
+        if self.scene.screen_is::<Preview>()
+            || self.scene.screen_is::<screens::journey::JourneyScreen>()
+        {
             let (vx, vy) = self.mouse_virtual();
             if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() {
                 self.preview
@@ -7181,7 +7215,7 @@ impl State {
             let dy = drag_y - d.from_y;
             d.moved |= dy.abs() > DRAG_START;
             if d.moved && self.scene.is_select() {
-                self.select.drag_to(dy);
+                self.select.drag_to(dy, Instant::now());
                 return CursorIcon::NsResize;
             }
         }
@@ -7322,7 +7356,9 @@ impl State {
             }
             return CursorIcon::Pointer;
         }
-        if !self.on_menu() && self.in_song_select() {
+        if !self.on_menu()
+            && (self.in_song_select() || self.scene.screen_is::<screens::journey::JourneyScreen>())
+        {
             if let Some((last, at)) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
                 if last.elapsed() >= Duration::from_millis(33) {
@@ -7607,7 +7643,7 @@ impl State {
             }
             return;
         }
-        if self.in_song_select() {
+        if self.in_song_select() || self.scene.screen_is::<screens::journey::JourneyScreen>() {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
                 if !self.preview_on_top(vx, vy) {
@@ -7703,7 +7739,7 @@ impl State {
             }
             if let Some(d) = self.list_drag.take() {
                 if d.moved {
-                    self.select.drag_end(&self.library);
+                    self.select.drag_end(&self.library, Instant::now());
                 } else {
                     self.click(d.hit, window);
                 }
@@ -8773,6 +8809,7 @@ impl State {
                 mods: g.mods().list(),
                 rate: g.rate(),
                 scroll_speed: g.scroll_speed(),
+                from_journey: self.journey.in_play,
             },
             failed: false,
             failed_early: false,
@@ -9097,6 +9134,8 @@ impl State {
                             self.select.admin = admin;
                             self.epic_asked = false;
                             self.mapping_sessions = taiko_proto::mapping::supported(&features);
+                            self.journey_supported =
+                                features.iter().any(|f| f == online::JOURNEY_FEATURE);
                             self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name)
                                 || self.cfg.online_token != token;
@@ -9354,6 +9393,7 @@ impl State {
         self.library_own_folders = Arc::new(own_folders);
         self.library_indexed_len = self.library.len();
         self.library_indexed_ptr = self.library.as_ptr() as usize;
+        self.journey.invalidate_library_index();
     }
 
     fn extend_library_indices(&mut self, start: usize) {
@@ -9387,12 +9427,14 @@ impl State {
         }
         self.library_indexed_len = self.library.len();
         self.library_indexed_ptr = self.library.as_ptr() as usize;
+        self.journey.invalidate_library_index();
     }
 
     /// Marks the library indices out of date after an entry was replaced or moved in place
     /// (its set or folder may differ): the next `ensure_library_indices` rebuilds them.
     fn invalidate_library_indices(&mut self) {
         self.library_indexed_len = usize::MAX;
+        self.journey.invalidate_library_index();
     }
 
     /// Whether the indices still describe the library: none of its entries replaced in place
@@ -9711,6 +9753,11 @@ impl State {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let path = self.library[entry].path.clone();
+        // A Journey map still in its temporary cache isn't in the library: once saved it's
+        // somewhere else.
+        if path.starts_with(config::journey_cache_dir()) {
+            return;
+        }
         if let Some(file) = config::data_dir().map(|d| d.join("plays.tsv")) {
             use std::io::Write;
             if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -10586,6 +10633,84 @@ impl State {
         })
     }
 
+    /// Whether a Journey map is marked EPIC on the online server.
+    pub(crate) fn journey_map_is_epic(
+        &self,
+        item: &online::JourneyItem,
+        entry: Option<&Entry>,
+    ) -> bool {
+        if let Some(id) = item.custom_id {
+            return self.select.server_epic.custom.contains(&id);
+        }
+        if let Some(e) = entry {
+            return self.select.is_epic(e);
+        }
+        item.set_id
+            .and_then(|set| self.select.server_epic.sets.get(&set))
+            .is_some_and(|v| ui::covers(v, &item.version))
+    }
+
+    /// The status badge `(label, colour)` for a Journey map, matching Song Select's status rules
+    /// (`RANKED`, `LOVED`, `GRAVEYARD`, `CUSTOM APPROVED`, etc.) even before download completes.
+    pub(crate) fn journey_map_status(
+        &self,
+        item: &online::JourneyItem,
+        entry: Option<&Entry>,
+        library_idx: Option<usize>,
+    ) -> Option<(&'static str, u32)> {
+        if let Some(e) = entry {
+            if e.is_tja() {
+                return Some(("TJA", ui::TJA_COLOUR));
+            }
+            if let Some(i) = library_idx {
+                return self.map_status(i);
+            }
+        }
+        if let Some(id) = item.custom_id {
+            return Some(if self.select.custom_approved.contains(&id) {
+                ("CUSTOM APPROVED", 0x4fd1b0)
+            } else {
+                ("CUSTOM", 0x9b6cff)
+            });
+        }
+        let Some(set) = item.set_id.or_else(|| entry.and_then(Entry::set_id)) else {
+            return Some(("NOT SUBMITTED", 0x8a8aa0));
+        };
+        if self
+            .select
+            .server_loved
+            .get(&set)
+            .is_some_and(|v| ui::covers(v, &item.version))
+        {
+            return Some(("LOVED HERE", 0xff66aa));
+        }
+        if let Some(Some(s)) = self.set_status.get(&set) {
+            let known = match s.as_str() {
+                "ranked" => Some(("RANKED", 0xb3ff66)),
+                "approved" => Some(("APPROVED", 0xb3ff66)),
+                "qualified" => Some(("QUALIFIED", 0x66ccff)),
+                "loved" => Some(("LOVED", 0xff66aa)),
+                "pending" => Some(("PENDING", 0xffd966)),
+                "wip" => Some(("WIP", 0xffd966)),
+                "graveyard" => Some(("GRAVEYARD", 0x8a8aa0)),
+                _ => None,
+            };
+            if known.is_some() {
+                return known;
+            }
+        }
+        let path = &entry?.path;
+        Some(match self.db_status.get(path)? {
+            4 => ("RANKED", 0xb3ff66),
+            5 => ("APPROVED", 0xb3ff66),
+            6 => ("QUALIFIED", 0x66ccff),
+            7 => ("LOVED", 0xff66aa),
+            2 => ("PENDING", 0xffd966),
+            1 => ("NOT SUBMITTED", 0x8a8aa0),
+            _ => return None,
+        })
+    }
+
     fn status_cache_due(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.status_saved) >= Duration::from_secs(15)
     }
@@ -10758,9 +10883,28 @@ impl State {
             self.status_resorted = now;
             self.select.refilter(&self.library);
         }
-        let selected = self.select.selected().and_then(|i| self.library.get(i));
-        let map = selected.and_then(|e| e.meta.beatmap_id);
-        let set = selected.and_then(Entry::set_id);
+        let (set, map) = if self.scene.screen_is::<screens::journey::JourneyScreen>() {
+            let lib_idx = self.journey.current_library_index(&self.library);
+            let cur = self.journey.current();
+            let entry = cur.and_then(|q| match &q.source {
+                crate::journey::MapSource::Local(_) | crate::journey::MapSource::Saved(_) => {
+                    lib_idx.and_then(|i| self.library.get(i))
+                }
+                crate::journey::MapSource::Cached { entry, .. } => Some(entry.as_ref()),
+                _ => None,
+            });
+            let set = cur
+                .and_then(|q| q.item.set_id)
+                .or_else(|| entry.and_then(Entry::set_id));
+            let map = entry.and_then(|e| e.meta.beatmap_id);
+            (set, map)
+        } else {
+            let selected = self.select.selected().and_then(|i| self.library.get(i));
+            (
+                selected.and_then(Entry::set_id),
+                selected.and_then(|e| e.meta.beatmap_id),
+            )
+        };
         let wants_verdict = |s: &u32| {
             map.is_some()
                 && !self.pp_verdict.contains_key(s)
@@ -11308,8 +11452,26 @@ impl State {
         }
     }
 
+    /// Whether a chart is currently open in the map editor (directly, or paused behind a test
+    /// play): social jumps (watching a friend, joining a lobby or another mapping session) must
+    /// not silently discard it.
+    pub(crate) fn has_open_editor(&self) -> bool {
+        self.scene.screen_is::<MapEditor>() || self.editor_back.is_some()
+    }
+
     /// Joins online lobby `room` (from a friend's row, or an admin's list).
     fn join_room(&mut self, room: u32, title: String) {
+        if self.has_open_editor() {
+            self.toast(
+                tr!(
+                    "leave the editor first",
+                    "先にエディタを閉じてください",
+                    "сначала закройте редактор"
+                )
+                .into(),
+            );
+            return;
+        }
         if self.mp.is_some() || self.mp_connecting.is_some() {
             self.toast("leave your lobby first".into());
             return;
@@ -11528,6 +11690,17 @@ impl State {
 
     /// Starts watching a friend's solo plays.
     fn watch(&mut self, name: String) {
+        if self.has_open_editor() {
+            self.toast(
+                tr!(
+                    "leave the editor first",
+                    "先にエディタを閉じてください",
+                    "сначала закройте редактор"
+                )
+                .into(),
+            );
+            return;
+        }
         if self.mp.is_some() {
             self.toast("leave your lobby first".into());
             return;
@@ -11631,6 +11804,7 @@ impl State {
                     // Plays it never answered go again now (`resend_unsent`).
                     self.submit_keys = features.iter().any(|f| f == online::SUBMIT_KEY_FEATURE);
                     self.tja_boards = features.iter().any(|f| f == online::TJA_BOARDS_FEATURE);
+                    self.journey_supported = features.iter().any(|f| f == online::JOURNEY_FEATURE);
                     self.tja_lobby_files = features
                         .iter()
                         .any(|f| f == online::TJA_LOBBY_FILES_FEATURE);
@@ -13098,14 +13272,51 @@ impl State {
         self.poll_scan();
         self.poll_folder_pick();
         self.poll_data_move();
+        // Song select up, however it was reached (its tab, a score link, the browser): the
+        // Journey session is over, and plays from here aren't Journey's.
+        if self.journey.active && self.scene.is_select() {
+            self.journey.stop();
+        }
         {
-            // The Download tab previews remote maps through the same preview.
+            // The Download tab and Journey cached maps preview non-library maps through the same preview.
             let browsing = self.scene.screen().is_some_and(|s| s.previews_remote());
-            if browsing != self.preview_remote {
-                self.preview_remote = browsing;
+            let in_journey = self.scene.screen_is::<screens::journey::JourneyScreen>();
+            // Journey's map: its library index when it's a library map, so the preview follows
+            // it rather than song select's selection; nothing while it's downloading.
+            let journey_index = if in_journey {
+                self.journey.current_library_index(&self.library)
+            } else {
+                None
+            };
+            // A cached map is always entry 0 of its own list: the preview tells them apart by path.
+            let cached_path = if in_journey {
+                self.journey.current().and_then(|q| match &q.source {
+                    crate::journey::MapSource::Cached { entry, .. } => Some(entry.path.clone()),
+                    _ => None,
+                })
+            } else {
+                None
+            };
+            if cached_path != self.journey.preview_cached {
+                if cached_path.is_some() {
+                    self.preview.forget();
+                }
+                self.journey.preview_cached = cached_path;
+            }
+            let journey_cached_entry = if in_journey {
+                self.journey.current().and_then(|q| match &q.source {
+                    crate::journey::MapSource::Cached { entry, .. } => Some(entry.as_ref()),
+                    _ => None,
+                })
+            } else {
+                None
+            };
+            let use_alt_source = browsing || journey_cached_entry.is_some();
+            if use_alt_source != self.preview_remote {
+                self.preview_remote = use_alt_source;
                 self.preview.forget();
             }
-            let in_select = self.in_song_select();
+            let in_select = self.in_song_select() || in_journey;
             let in_menu = in_select
                 || self
                     .scene
@@ -13115,10 +13326,15 @@ impl State {
                     prev.is_select()
                         || prev.screen().is_some_and(|s| s.room_lobby())
                         || prev.screen_is::<Preview>()
+                        || prev.screen_is::<screens::journey::JourneyScreen>()
                 })
                 || self.scene.screen().is_some_and(|s| s.tab().is_some());
-            let (entries, selected) = if browsing {
+            let (entries, selected): (&[library::Entry], Option<usize>) = if browsing {
                 (&self.browse.remote, self.browse.shown)
+            } else if let Some(entry) = journey_cached_entry {
+                (std::slice::from_ref(entry), Some(0))
+            } else if in_journey {
+                (&self.library, journey_index)
             } else {
                 (&self.library, self.preview_target())
             };
@@ -13189,6 +13405,8 @@ impl State {
                 self.select
                     .sort_selected_set(&self.library, &|i| stars.get(i, rate));
                 self.select.remember_selection(&self.library);
+            } else if in_journey {
+                self.poll_set_status(now);
             }
             let has_bg = self.preview.has_background;
             self.bg_brightness = match self.scene {
@@ -13416,7 +13634,11 @@ impl State {
                 }
             }
         }
-        if !(self.scene.is_select() || self.in_lobby()) {
+        // The mod select opens over song select, a lobby and Journey; anywhere else it goes.
+        if !(self.scene.is_select()
+            || self.in_lobby()
+            || self.scene.screen_is::<screens::journey::JourneyScreen>())
+        {
             self.mod_select = None;
         }
         if self.pick_to_edit && (self.main_menu.is_some() || !self.scene.is_select()) {
@@ -14118,6 +14340,48 @@ impl State {
         }
     }
 
+    /// The local folder holding website custom set `id`, if installed (in `custom_folder`, or on
+    /// disk in `custom_dir` even before the server lookup finishes).
+    fn custom_folder_of(&self, id: u32) -> Option<PathBuf> {
+        self.library
+            .iter()
+            .find_map(|e| {
+                let dir = e.path.parent()?;
+                (self.select.custom_folder.get(dir) == Some(&id)).then(|| dir.to_path_buf())
+            })
+            .or_else(|| {
+                self.select
+                    .custom_folder
+                    .iter()
+                    .find_map(|(dir, &sid)| (sid == id).then(|| dir.clone()))
+            })
+            .or_else(|| custom::store::folder_of(&self.custom_dir, id))
+    }
+
+    /// Starts downloading the set `lobby_lookup` found for a friend's play or a lobby.
+    ///
+    /// If the player already has that website custom set locally, it is only updated automatically
+    /// when it is an unmodified website install inside `custom_dir` (which keeps the previous
+    /// version in `CustomVersions`). Copies in osu!'s Songs folder or sets with local edits may be
+    /// unsent mapping work and are never overwritten behind the player's back.
+    fn finish_lobby_lookup(&mut self, set: download::SetInfo) {
+        if set.custom.is_some()
+            && let Some(folder) = self.custom_folder_of(set.id)
+        {
+            if folder.starts_with(&self.custom_dir) && !custom::store::has_local_edits(&folder) {
+                self.select.custom_folder.insert(folder.clone(), set.id);
+                self.start_custom_update(set, folder);
+            } else {
+                self.toast(format!(
+                    "{} - {}: keeping your local copy (update it from song select if you want the website's version)",
+                    set.artist, set.title
+                ));
+            }
+            return;
+        }
+        self.start_download(set);
+    }
+
     /// Where a lobby map's set folder must be for the host to send it: the Songs folders,
     /// taiko.rs's own custom maps folder or an opened .osz's, never the folder a loose map happens
     /// to be in (any player in the lobby can ask for it).
@@ -14709,17 +14973,7 @@ impl State {
             }
         }
         match self.lobby_lookup.poll() {
-            Some(Ok(set)) => {
-                // The lobby's version isn't the one here: the website's goes over it.
-                if set.custom.is_some()
-                    && self.select.custom_folder.values().any(|&id| id == set.id)
-                {
-                    self.select
-                        .custom_updates
-                        .insert(set.id, ui::SetUpdate::Available);
-                }
-                self.start_download(set)
-            }
+            Some(Ok(set)) => self.finish_lobby_lookup(set),
             Some(Err(e)) => self.toast(format!("download failed: {e}")),
             None => {}
         }
@@ -15699,6 +15953,16 @@ impl State {
             }
             Hit::ToMenu => self.key_inner(KeyCode::Escape, false, None, Instant::now(), window),
             Hit::ModsButton => self.open_mod_select(),
+            Hit::JourneyButton => self.open_journey(),
+            Hit::JourneyLevel(i) => self.journey_pick_level(i),
+            Hit::JourneyLevelAuto => self.journey_pick_auto(),
+            Hit::JourneyLevelStep(d) => self.journey_step_level(d),
+            Hit::JourneyLevelOpen => self.journey_open_level_picker(),
+            Hit::JourneySave => self.journey_save_current(),
+            Hit::JourneyNext => self.journey_next_from_results(false),
+            Hit::JourneyLogin(register) => self.journey_login(register),
+            Hit::JourneyOffline => self.journey_go_offline(),
+            Hit::JourneyRetry => self.journey_retry(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
                 self.toggle_mod(mods::ALL[i]);

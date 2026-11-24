@@ -83,7 +83,7 @@ fn words(item: Item) -> &'static str {
         }
         Item::Language => "english japanese russian locale английский японский русский",
         Item::TjaFolder => "tja taiko jiro opentaiko charts folder чарты папка",
-        Item::SongsFolder | Item::ShowConverts => {
+        Item::SongsFolder | Item::ShowConverts | Item::JourneySaveTo | Item::JourneySaveOnLike => {
             "library beatmaps maps osu stable библиотека карты песни"
         }
         Item::SongHeadings => {

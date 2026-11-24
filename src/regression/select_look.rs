@@ -755,7 +755,7 @@ fn the_banners_text_sits_on_a_plate_dark_at_its_left_lighter_across_and_gone_dow
     assert!(right < 0.05, "open at the right end: {right}");
     // Tall, for the picture to show (on 720), its text down at its foot: the picture open over
     // its top.
-    assert!((165.0..=185.0).contains(&tall), "the banner {tall} tall");
+    assert!((230.0..=250.0).contains(&tall), "the banner {tall} tall");
     assert!(
         plate.params[1] > 0.0 && plate.params[1] < tall,
         "fades out downwards over bottom {}: {tall}",
@@ -1193,13 +1193,13 @@ fn drag_then_wheel(
     mut each: impl FnMut(&State, &Canvas, &str),
 ) {
     for k in 1..=frames {
-        s.select.drag_to(-by * k as f32 / frames as f32);
         *now += Duration::from_millis(16);
+        s.select.drag_to(-by * k as f32 / frames as f32, *now);
         frame(s, *now);
         let c = frame(s, *now);
         each(s, &c, "dragging");
     }
-    s.select.drag_end(&s.library);
+    s.select.drag_end(&s.library, *now);
     for _ in 0..frames {
         s.wheel(-1);
         *now += Duration::from_millis(16);
@@ -1312,7 +1312,12 @@ fn dragging_or_wheeling_the_list_reads_the_cards_ahead_of_it() {
             .iter()
             .filter(|&&r| r < top && wanted(r).is_some_and(|w| !w.2))
             .count();
-        let below = rows.iter().filter(|&&r| r > bottom).count();
+        // The sets below the screen still to be drawn: a card cut by the list's bottom edge is
+        // drawn already, so it's neither ahead nor missing.
+        let below = rows
+            .iter()
+            .filter(|&&r| r > bottom && !wanted(r).is_some_and(|w| w.2))
+            .count();
         assert!(
             ahead >= shown.len().min(below),
             "{how}: at least a screen read ahead ({ahead} of {below})"
@@ -1322,6 +1327,28 @@ fn dragging_or_wheeling_the_list_reads_the_cards_ahead_of_it() {
             "{how}: more ahead than behind ({ahead}, {behind})"
         );
     });
+}
+
+#[test]
+fn a_thrown_list_is_timed_by_the_frames_not_the_wall_clock() {
+    let (mut s, _songs, mut now) = many_sets("select-look-throw-clock");
+    settled(&mut s, &mut now);
+    for k in 1..=6 {
+        now += Duration::from_millis(16);
+        s.select.drag_to(-40.0 * k as f32, now);
+        frame(&mut s, now);
+    }
+    let held = s.select.list_scroll();
+    // A slow machine: the wall clock runs on past the last frame before the button comes up.
+    // Let go in the same frame as the last move, the list is still thrown.
+    std::thread::sleep(Duration::from_millis(80));
+    s.select.drag_end(&s.library, now);
+    for _ in 0..30 {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    let gone = s.select.list_scroll();
+    assert!(gone > held + 100.0, "thrown on from {held}: {gone}");
 }
 
 #[test]
@@ -1497,12 +1524,12 @@ fn cards_lie_on_one_wave_about_the_views_middle_however_the_list_is_scrolled() {
     }
     let c = settled(&mut s, &mut now);
     check(&c, &s, "wheeled");
-    s.select.drag_to(-90.0);
     now += Duration::from_millis(16);
+    s.select.drag_to(-90.0, now);
     frame(&mut s, now);
     let c = frame(&mut s, now);
     check(&c, &s, "dragged");
-    s.select.drag_end(&s.library);
+    s.select.drag_end(&s.library, now);
     // Farther from the selection's target, fainter.
     let c = songs_on(&mut s, &mut now, 1);
     let t = target(&c, &s);
@@ -2259,9 +2286,9 @@ fn the_right_column_is_the_details_a_row_of_tabs_and_the_tab_shown_under_them() 
         (head[0] + head[2] - (c.width - 28.0)).abs() < 0.5,
         "{head:?}"
     );
-    // The details as tall as what's on them, no fixed share and no empty band; the body all
-    // the rest, much the tallest.
-    assert!(body[3] > head[3], "the body has the room: {column:?}");
+    // The details as tall as what's on them (with a generous banner for the art), and the body
+    // still has plenty of room for the compact preview and the leaderboard.
+    assert!(body[3] >= 220.0, "the body has the room: {column:?}");
     let pp = hit_rect(&c, |h| *h == Hit::PpSim).expect("the pp button");
     assert!(
         head[1] + head[3] - (pp[1] + pp[3]) < 8.0,
@@ -2355,7 +2382,7 @@ fn the_preview_s_tab_gives_the_lane_room_and_the_density_graph_height() {
     // bare timeline's 28, the lane's box taller still.
     let [_, times] = text_at(&c, "0:00 / 0:10").expect("the timeline's times");
     let gh = times - (ly + lane_h) - 8.0;
-    assert!(gh >= 60.0, "a graph to read: {gh}");
+    assert!(gh >= 50.0, "a graph to read: {gh}");
     assert!(lane_h > gh, "the lane's box over it: {lane_h} vs {gh}");
     // All within the body, near all of it used.
     assert!(times < body[1] + body[3], "{times} in {body:?}");
@@ -2447,7 +2474,7 @@ fn the_stats_the_don_and_kat_bar_and_the_pp_have_air_between_them_their_text_kep
         "{od:?} {don:?} {ss:?}"
     );
     // Taken from the body under the tabs: still room for the lane and the board.
-    assert!(body[3] > 280.0, "the body under the tabs: {body:?}");
+    assert!(body[3] >= 220.0, "the body under the tabs: {body:?}");
 }
 
 #[test]
@@ -3601,12 +3628,42 @@ fn the_collection_button_is_on_the_search_row_once_there_are_collections() {
         .map(|h| h.rect)
         .collect();
     assert!(!rows.is_empty(), "the collections' list");
-    let boxes = text_boxes(&c);
+    let edge = render::rgba(style::tone::EDGE, 1.0);
+    let left = rows.iter().map(|r| r[0]).fold(f32::MAX, f32::min);
+    let (frame_idx, frame) = c
+        .shapes
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, sh)| plain(sh) && sh.params[1] > 0.0)
+        .map(|(idx, sh)| (idx, rect(sh), *sh))
+        .find(|(_, r, _)| r[0] < left && r[0] + r[2] > left + 100.0 && r[3] > 40.0)
+        .map(|(idx, _, sh)| (idx, sh))
+        .expect("the list's frame");
+    let popup_texts: Vec<(&str, [f32; 4])> = c
+        .texts
+        .iter()
+        .filter(|(range, _)| range.start > frame_idx)
+        .filter_map(|(range, text)| {
+            let b = c.shapes.get(range.clone())?.iter().fold(
+                [f32::MAX, f32::MAX, f32::MIN, f32::MIN],
+                |[x0, y0, x1, y1], g| {
+                    [
+                        x0.min(g.center[0] - g.half[0]),
+                        y0.min(g.center[1] - g.half[1]),
+                        x1.max(g.center[0] + g.half[0]),
+                        y1.max(g.center[1] + g.half[1]),
+                    ]
+                },
+            );
+            (b[0] <= b[2]).then_some((text.as_str(), [b[0], b[1], b[2] - b[0], b[3] - b[1]]))
+        })
+        .collect();
     assert!(
-        boxes.iter().any(|(t, _)| t.starts_with("dans")),
-        "named whole: {boxes:?}"
+        popup_texts.iter().any(|(t, _)| t.starts_with("dans")),
+        "named whole: {popup_texts:?}"
     );
-    for (t, r) in boxes.iter().filter(|(_, r)| {
+    for (t, r) in popup_texts.iter().filter(|(_, r)| {
         rows.iter()
             .any(|row| inside([r[0], r[1] + r[3] / 2.0], *row, 0.0))
     }) {
@@ -3619,17 +3676,6 @@ fn the_collection_button_is_on_the_search_row_once_there_are_collections() {
             "{t:?} {r:?} within {row:?}"
         );
     }
-    let edge = render::rgba(style::tone::EDGE, 1.0);
-    let left = rows.iter().map(|r| r[0]).fold(f32::MAX, f32::min);
-    let frame = c
-        .shapes
-        .iter()
-        .rev()
-        .filter(|sh| plain(sh) && sh.params[1] > 0.0)
-        .map(|sh| (rect(sh), *sh))
-        .find(|(r, _)| r[0] < left && r[0] + r[2] > left + 100.0 && r[3] > 40.0)
-        .map(|(_, sh)| sh)
-        .expect("the list's frame");
     assert!(
         same_rgb(frame.border, edge),
         "a neutral edge round the list"

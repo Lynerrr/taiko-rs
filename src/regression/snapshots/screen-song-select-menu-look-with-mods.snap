@@ -8,49 +8,50 @@ text   33,54   basics
 text   33,66   Regression  |  mapped by tests
 text  366,82   3.16
 text   44,83   basics
-text  420,98   basics
 text   29,101  big-notes
 text   29,112  Regression  |  mapped by tests
-text  420,112  Regression
-text  791,127  3.16
-text  425,128  basics
-text  473,128  by
-text  491,128  tests
-text  701,128  NOT SUBMITTED
 text   27,130  rolls-and-swells
 text   27,142  Regression  |  mapped by tests
-text  433,152  7.0
-text  539,152  200
-text  656,152  0:09
-text  752,152  64
-text  420,153  OD
-text  521,153  BPM
-text  623,153  LENGTH
-text  724,153  NOTES
+text  420,143  basics
+text  420,157  Regression
 text   25,159  sv-and-kiai
-text  420,170  32 DON
-text  794,170  32 KAT
 text   25,171  Regression  |  mapped by tests
+text  791,172  3.16
+text  425,173  basics
+text  473,173  by
+text  491,173  tests
+text  701,174  NOT SUBMITTED
 text   24,189  stream
-text  439,189  130pp
-text  580,189  117pp
-text  714,189  99pp
-text  425,190  SS
-text  560,190  99%
-text  696,190  98%
+text  433,197  7.0
+text  539,197  200
+text  656,197  0:09
+text  752,197  64
+text  420,198  OD
+text  521,198  BPM
+text  623,198  LENGTH
+text  724,198  NOTES
 text   24,200  Regression  |  mapped by tests
-text  427,213  Preview
-text  484,213  Local
-text  531,213  Online
-text  784,214  Website
+text  420,215  32 DON
+text  794,215  32 KAT
 text   25,218  low-od
 text   24,230  Regression  |  mapped by tests
+text  425,235  SS
+text  439,235  130pp
+text  560,235  99%
+text  580,235  117pp
+text  696,235  98%
+text  714,235  99pp
 text   24,247  high-od
 text   24,259  Regression  |  mapped by tests
+text  427,259  Preview
+text  484,259  Local
+text  531,259  Online
+text  784,259  Website
 text  420,406  0:00 / 0:10
 text  692,406  peak 7.0 notes/s at 0:01
 text  726,444  Play
 text   31,445  Menu
+text   80,445  Journey
 text  431,445  Mods
 text  479,445  Random
 text  586,445  1.00x
@@ -59,6 +60,7 @@ text  549,446  HD
 text  622,446  +
 text  572,448  -
 hit    16,437    43x23   ToMenu
+hit    65,437    61x23   JourneyButton
 hit   324,28     74x16   SortList
 hit    16,28    304x16   TextField
 hit    25,49    378x29   SongHeader(0)
@@ -70,14 +72,14 @@ hit    16,184   386x29   SongHeader(4)
 hit    16,213   387x29   SongHeader(5)
 hit    16,243   387x29   SongHeader(6)
 hit     3,49     13x380  SongScrollbar
-hit   681,127    11x9    SelectLike
-hit   420,188   405x11   PpSim
-hit   420,231   399x124  Preview
-hit   419,359   408x46   Preview
-hit   420,211    52x12   PreviewTab
-hit   478,211    41x12   BoardTab(false)
-hit   524,211    47x12   BoardTab(true)
-hit   779,211    47x12   BoardWebsite
+hit   681,172    11x9    SelectLike
+hit   420,234   405x11   PpSim
+hit   420,277   399x88   Preview
+hit   419,369   408x37   Preview
+hit   420,256    52x12   PreviewTab
+hit   478,256    41x12   BoardTab(false)
+hit   524,256    47x12   BoardTab(true)
+hit   779,256    47x12   BoardWebsite
 hit   416,437    43x23   ModsButton
 hit   463,437    55x23   Key(F2)
 hit   569,442    12x13   Key(BracketLeft)

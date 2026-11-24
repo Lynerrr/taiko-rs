@@ -106,6 +106,17 @@ const SNIPPET_MS: f64 = 15_000.0;
 
 pub type Image = crate::render::BgImage;
 
+/// Summary stats of the map currently loaded in `Preview`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LoadedStats {
+    pub bpm: f64,
+    pub length_ms: f64,
+    pub dons: u32,
+    pub kats: u32,
+    pub rolls: u32,
+    pub swells: u32,
+}
+
 /// Decoded music for the selected set: all of it, or (until the full decode arrives) the part
 /// from the preview point, which belongs at song frame `base`.
 struct Song {
@@ -480,6 +491,18 @@ impl Preview {
         self.map_rx.cancel();
         self.map_ticket.cancel();
         self.pending_seek = None;
+    }
+
+    /// The entry asked to be shown (tests).
+    #[cfg(test)]
+    pub fn requested(&self) -> Option<usize> {
+        self.requested
+    }
+
+    /// The title of the map shown (tests).
+    #[cfg(test)]
+    pub fn shown_title(&self) -> Option<String> {
+        self.map.as_ref().map(|m| m.1.meta.title.clone())
     }
 
     /// Whether no thread works for it: the map, background and music asked for are in (or
@@ -1194,12 +1217,94 @@ impl Preview {
 
     /// The difficulty timeline of `e` (the selected map) in `rect`, with the start point and,
     /// if `button` is given as (verb, key hint), a "<verb> 1:23" button under it.
+    /// Summary stats for the currently loaded map.
+    pub(crate) fn loaded_stats(&self) -> Option<LoadedStats> {
+        let (_, _, d, _) = self.map.as_ref()?;
+        Some(LoadedStats {
+            bpm: (d.bpm.0 + d.bpm.1) * 0.5,
+            length_ms: d.length_ms,
+            dons: d.dons as u32,
+            kats: d.kats as u32,
+            rolls: d.rolls as u32,
+            swells: d.swells as u32,
+        })
+    }
+
+    /// Draws an embedded live autoplay lane inside `lane_rect` and its density timeline inside
+    /// `graph_rect` (used by the Journey screen). Returns `true` when the autoplay is active.
+    pub(crate) fn draw_embedded_preview(
+        &mut self,
+        c: &mut Canvas,
+        e: &Entry,
+        lane_rect: [f32; 4],
+        graph_rect: [f32; 4],
+        scroll_speed: f64,
+    ) -> bool {
+        let [lx, ly, lw, lh] = lane_rect;
+        // Modern style.rs tile matching song select's split preview.
+        let r = crate::style::radius::SMALL;
+        crate::style::tile(c, lane_rect, r, crate::style::Surface::Raised);
+        let ready = self.map.is_some();
+        if ready {
+            // Always use the modern bare pixel timeline with no overflow hint below the card,
+            // regardless of what `self.bare` was left at from another screen.
+            self.draw_timeline_styled(c, e, graph_rect, None, false, false);
+            self.drawn_in(c);
+        } else {
+            self.graph_rect = None;
+        }
+        let Some(game) = self.game.as_mut().filter(|_| ready) else {
+            return false;
+        };
+        let (band_top, band_h) = game::lane_only();
+        let k = ((lh * SPLIT_LANE_FILL) / band_h.max(1.0)).clamp(0.25, 0.72);
+        // Corridor across the tile so the notes run along a framed track rather than empty room.
+        let corr_h = band_h * k;
+        let corr_y = crate::render::snap_to_grid(ly + (lh - corr_h) / 2.0);
+        let fill = crate::style::surface_fill(crate::style::Surface::Lifted);
+        c.rect(lx, corr_y, lw, corr_h, fill);
+        let edge = rgba(crate::style::tone::EDGE, 1.0);
+        let line = crate::style::tone::LINE;
+        c.rect(lx, corr_y, lw, line, edge);
+        c.rect(lx, corr_y + corr_h - line, lw, line, edge);
+
+        let full_w = c.width;
+        let start = c.shapes.len();
+        let drum_w = crate::game::PANEL_W * k;
+        let bx = lx - if self.hide_drum { drum_w } else { 0.0 };
+        let notes_end = lx + lw;
+        c.width = ((notes_end - bx) / k).max(200.0);
+        game.view.kiai_effects = self.kiai_effects;
+        crate::game::with_look(preview_look(crate::game::playfield_look()), || {
+            game.draw_playfield(c, scroll_speed)
+        });
+        let centre = (lh - corr_h) / 2.0;
+        let oy = ly - band_top * k + centre;
+        c.transform_since(start, [0.0, 0.0], k, bx, oy);
+        c.width = full_w;
+        bare_lane_end(&mut c.shapes, start, bx, lx, notes_end, corr_h);
+        c.clip_since(start, lx + 1.0, ly + 1.0, lw - 2.0, lh - 2.0);
+        true
+    }
+
     pub fn draw_timeline(
         &mut self,
         c: &mut Canvas,
         e: &Entry,
         rect: [f32; 4],
         button: Option<(&str, &str)>,
+    ) {
+        self.draw_timeline_styled(c, e, rect, button, !self.bare, !self.bare);
+    }
+
+    fn draw_timeline_styled(
+        &mut self,
+        c: &mut Canvas,
+        e: &Entry,
+        rect: [f32; 4],
+        button: Option<(&str, &str)>,
+        boxed: bool,
+        hint: bool,
     ) {
         self.graph_rect = None;
         self.play_rect = None;
@@ -1216,20 +1321,22 @@ impl Preview {
             self.pending_seek.unwrap_or(game.time()),
             e.meta.preview_time,
             marker,
-            !self.bare,
+            boxed,
         );
         self.graph_rect = Some(rect);
         self.drawn_in(c);
-        // Bare, there's no hint: the timeline is plain enough.
-        let hint = !self.bare;
-        self.play_rect = draw_play_button(
-            c,
-            rect[0] + rect[2] / 2.0,
-            rect[1] + rect[3] + 17.0,
-            marker,
-            button,
-            hint,
-        );
+        self.play_rect = if button.is_some() || hint {
+            draw_play_button(
+                c,
+                rect[0] + rect[2] / 2.0,
+                rect[1] + rect[3] + 17.0,
+                marker,
+                button,
+                hint,
+            )
+        } else {
+            None
+        };
         // The same slack as `time_at`.
         c.hit(
             rect[0] - 2.0,
@@ -2692,10 +2799,10 @@ const STAT_GAP: f32 = 10.0;
 /// Split (song select's sections), how much of its box's height the lane's band takes at most,
 /// in the middle of it: room above and under the big notes and the drum, and for the hint under
 /// them.
-const SPLIT_LANE_FILL: f32 = 0.8;
+const SPLIT_LANE_FILL: f32 = 0.62;
 /// Split, the density graph under the lane: its share of the section's room, between the bare
 /// timeline's height and this much (tall enough to read its dense runs and peaks at a glance).
-const SPLIT_GRAPH_SHARE: f32 = 0.26;
+const SPLIT_GRAPH_SHARE: f32 = 0.28;
 const SPLIT_GRAPH_MAX: f32 = 84.0;
 /// Split, a .tko map whose playfield reaches past the lane: it is fitted whole into the box, its
 /// notes never drawn smaller than this share of a plain map's (what's still out of reach then is
@@ -2870,8 +2977,8 @@ const BANNER_WHOLE: f32 = 0.45;
 /// stays whole; the plate at its left and its right) and the room under its text. Tall enough
 /// for the picture to show on 720, the text down at its foot over the picture fading out into
 /// the panel, a plate at the left only: its top and right open.
-const SPLIT_BANNER_H: f32 = 172.0;
-const SPLIT_BANNER: (f32, (f32, f32)) = (0.5, (0.55, 0.0));
+const SPLIT_BANNER_H: f32 = 240.0;
+const SPLIT_BANNER: (f32, (f32, f32)) = (0.58, (0.55, 0.0));
 const SPLIT_BANNER_FOOT: f32 = 8.0;
 /// How bright the banner's picture is drawn: near its own, the plate under the text does the rest.
 const BANNER_BRIGHT: f32 = 0.85;
@@ -3725,12 +3832,13 @@ mod beat_tests {
         assert!(tko.k >= plain.k * SPLIT_REACH_MIN - 1e-6, "{tko:?}");
         assert!(tko.k > 0.5 * plain.k, "not tiny: {tko:?} vs {plain:?}");
         let short = SplitLane::new([0.0, 200.0], band, 480.0, k_max);
+        let short_plain = (short.lane[1] * SPLIT_LANE_FILL / band).min(k_max);
         assert!(
             tko.k > short.k,
             "bigger in a taller section: {tko:?} {short:?}"
         );
         assert!(
-            (short.k - plain.k * SPLIT_REACH_MIN).abs() < 1e-4 && short.fit < 1.0,
+            (short.k - short_plain * SPLIT_REACH_MIN).abs() < 1e-4 && short.fit < 1.0,
             "at least half a plain map's, the rest cut: {short:?}"
         );
     }

@@ -1615,8 +1615,9 @@ impl Select {
             tr!("Back", "戻る", "Назад")
         };
         let mid = self.column_end() + 4.0 - FOOT_ROW_H / 2.0;
+        let bh = FOOT_ROW_H - 2.0 * FOOT_ROW_INSET;
         // A block's rect starts 6 left of where it's put: level with the list's cards.
-        crate::style::block_button(
+        let back_w = crate::style::block_button(
             c,
             [24.0 + 6.0, mid],
             &crate::style::BACK,
@@ -1625,8 +1626,23 @@ impl Select {
             8.0,
             false,
             Hit::ToMenu,
-            FOOT_ROW_H - 2.0 * FOOT_ROW_INSET,
+            bh,
         );
+        if self.to_menu {
+            let journey_word = tr!("Journey", "ジャーニー", "Journey");
+            let jx = 24.0 + back_w + 8.0;
+            crate::style::block_button(
+                c,
+                [jx + 6.0, mid],
+                crate::menu::Item::Journey.icon_art(),
+                journey_word,
+                None,
+                8.0,
+                false,
+                Hit::JourneyButton,
+                bh,
+            );
+        }
     }
 
     /// The top and bottom of the song list's frame, for the panel beside it to line up with
@@ -2054,8 +2070,9 @@ impl Select {
     }
 
     /// Left-button drag: the list follows the pointer, `dy` (virtual units) from where it was
-    /// pressed. The selection stays put until it's let go.
-    pub fn drag_to(&mut self, dy: f32) {
+    /// pressed, at `now` (the throw's speed is measured on these times). The selection stays put
+    /// until it's let go.
+    pub fn drag_to(&mut self, dy: f32, now: std::time::Instant) {
         let a = &self.anim;
         let d = self.drag.get_or_insert_with(|| ListDrag {
             scroll: a.scroll,
@@ -2063,7 +2080,6 @@ impl Select {
             samples: Default::default(),
         });
         d.now = d.scroll - dy;
-        let now = std::time::Instant::now();
         d.samples.push_back((now, d.now));
         while d
             .samples
@@ -2080,8 +2096,9 @@ impl Select {
     }
 
     /// Lets go of the list: it carries on at the speed it was thrown and stays there. What's
-    /// selected doesn't change: a song is picked by clicking it.
-    pub fn drag_end(&mut self, library: &[Entry]) {
+    /// selected doesn't change: a song is picked by clicking it. `now` is on the clock the drag's
+    /// times (`drag_to`) were taken on.
+    pub fn drag_end(&mut self, library: &[Entry], now: std::time::Instant) {
         let Some(d) = self.drag.take() else { return };
         let velocity = match (d.samples.front(), d.samples.back()) {
             (Some(&(t0, s0)), Some(&(t1, s1))) if t1 > t0 => {
@@ -2093,7 +2110,7 @@ impl Select {
         let still = d
             .samples
             .back()
-            .is_none_or(|(t, _)| t.elapsed().as_millis() > 60);
+            .is_none_or(|(t, _)| now.saturating_duration_since(*t).as_millis() > 60);
         let throw = if still {
             0.0
         } else {
@@ -5257,6 +5274,9 @@ pub struct Results {
     pub vote: Option<crate::online::MapVote>,
     /// When the player last voted here (the thumb's pop and burst).
     pub voted_at: Option<std::time::Instant>,
+    /// Active Journey session: swaps the bottom action row to Next map / Save / Journey.
+    pub journey: bool,
+    pub journey_save: bool,
 }
 
 /// How far down the results scroll: the pp start a screen below them.
@@ -5306,6 +5326,8 @@ impl Results {
             vote_on: None,
             vote: None,
             voted_at: None,
+            journey: false,
+            journey_save: false,
         }
     }
 
@@ -5532,7 +5554,14 @@ impl Results {
 
         let mut buttons = Vec::new();
         if self.opened.is_none() {
-            buttons.push(("Retry  (Enter)", Hit::Key(KeyCode::Enter), true));
+            if self.journey {
+                buttons.push(("Next map  (Enter)", Hit::JourneyNext, true));
+                if self.journey_save {
+                    buttons.push(("Save  (S)", Hit::JourneySave, false));
+                }
+            } else {
+                buttons.push(("Retry  (Enter)", Hit::Key(KeyCode::Enter), true));
+            }
         }
         if self.replay.is_some() {
             buttons.push((
@@ -5544,6 +5573,8 @@ impl Results {
         }
         let back = if self.opened.is_some() {
             "Back  (Esc)"
+        } else if self.journey {
+            "Journey  (Esc)"
         } else {
             "Song select  (Esc)"
         };
@@ -5622,18 +5653,18 @@ impl Results {
         let (x, y) = (at(pw), 250.0);
         let ph = 36.0 + 2.0 * row_h + 4.0;
         let start = c.shapes.len();
-        crate::style::panel(c, x, y, pw, ph);
-        let title = "Rate this map";
-        let size = Canvas::fit_size(9.0, 6.0, pw - 16.0, title);
+        crate::style::cold_panel(c, [x, y, pw, ph]);
+        let title = tr!("Rate this map", "この譜面を評価", "Оценить карту");
+        let size = Canvas::fit_size(8.5, 6.0, pw - 16.0, title);
         crate::style::title(
             c,
             x + pw / 2.0 - Canvas::text_width(size, title) / 2.0,
-            y + 11.0 + (9.0 - size) / 2.0,
+            y + 10.0 + (8.5 - size) / 2.0,
             size,
             0xffffff,
             title,
         );
-        c.rect(x + 12.0, y + 28.0, pw - 24.0, 1.0, rgba(0x2a2a38, 1.0));
+        crate::style::rule(c, x + 12.0, y + 27.0, pw - 24.0);
         let since = self.voted_at.map(|v| v.elapsed().as_secs_f32() * 1000.0);
         let rows = [
             (Like, 0x5ee07a, "Like", "L", KeyCode::KeyL),

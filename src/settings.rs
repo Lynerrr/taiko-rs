@@ -71,6 +71,8 @@ pub enum Item {
     ShowConverts,
     SongHeadings,
     SongsFolder,
+    JourneySaveTo,
+    JourneySaveOnLike,
     /// The folder TJA charts are read from (`tja_maps::folder`).
     TjaFolder,
     DataFolder,
@@ -140,8 +142,10 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 146] = [
+pub const ITEMS: [(&str, Item); 148] = [
     ("LIBRARY", Item::SongsFolder),
+    ("LIBRARY", Item::JourneySaveTo),
+    ("LIBRARY", Item::JourneySaveOnLike),
     ("LIBRARY", Item::TjaFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -649,6 +653,16 @@ impl Item {
                 "Заголовки в списке песен"
             ),
             Item::SongsFolder => tr!("Songs folder", "Songsフォルダ", "Папка Songs"),
+            Item::JourneySaveTo => tr!(
+                "Journey save folder",
+                "ジャーニーの保存先",
+                "Папка сохранения Journey"
+            ),
+            Item::JourneySaveOnLike => tr!(
+                "Save Journey map on like",
+                "いいね時に譜面を保存",
+                "Сохранять карту Journey при лайке"
+            ),
             Item::TjaFolder => tr!("TJA charts folder", "TJA譜面フォルダ", "Папка TJA-чартов"),
             Item::DataFolder => tr!(
                 "Game data folder",
@@ -815,6 +829,7 @@ impl Item {
             | Item::LetterboxSize
             | Item::Accent
             | Item::SongsFolder
+            | Item::JourneySaveTo
             | Item::TjaFolder
             | Item::DataFolder => Kind::List,
             Item::RateKeepPitch
@@ -847,6 +862,7 @@ impl Item {
             | Item::NotifyMentions
             | Item::NotifyRequests
             | Item::ShowConverts
+            | Item::JourneySaveOnLike
             | Item::SongHeadings
             | Item::MenuVsync
             | Item::HalfResolution
@@ -1047,6 +1063,16 @@ impl Item {
                 "The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.",
                 "譜面のあるフォルダ。Enter: 参照、パスを入力、またはosu!のものを探すに戻す。",
                 "Папка с вашими картами. Enter: обзор, ввести путь или снова искать папку osu!."
+            ),
+            Item::JourneySaveTo => tr!(
+                "Where maps saved from Journey go: taiko.rs's own folder (default) or osu!'s Songs folder.",
+                "ジャーニーで保存した譜面の保存先: taiko.rsフォルダ（標準）またはosu!のSongsフォルダ。",
+                "Куда сохранять карты из Journey: папка taiko.rs (по умолчанию) или папка osu! Songs."
+            ),
+            Item::JourneySaveOnLike => tr!(
+                "Automatically move a cached Journey map into your library when you like it.",
+                "ジャーニーでいいねした譜面を自動でライブラリに保存します。",
+                "Автоматически переносить карту из кэша Journey в библиотеку при лайке."
             ),
             Item::TjaFolder => tr!(
                 "Where your .tja charts are read from (and dropped ones are copied to). They play here only: no online scores yet. Enter: browse, type a path, or go back to Tja beside the taiko.rs maps.",

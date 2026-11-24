@@ -39,7 +39,10 @@ impl Screen for Loading {
     fn presence(&self, state: &State) -> Option<(String, String)> {
         Some((
             state.library.get(self.entry)?.label(),
-            tr!("Loading...", "読み込み中...", "Загрузка...").into(),
+            super::play::journey_presence(
+                state,
+                tr!("Loading...", "読み込み中...", "Загрузка...").into(),
+            ),
         ))
     }
 

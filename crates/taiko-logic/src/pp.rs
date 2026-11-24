@@ -207,15 +207,18 @@ pub fn potential(map: &[u8], rate: f64, mods: Mods, scroll_speed: f64) -> Option
     Some(out)
 }
 
-/// `potential` for the selected map, worked out on a thread of its own and kept per map, speed,
-/// mods and scroll speed, so changing them back and forth costs nothing. Only the latest map
-/// asked about is worked out: the ones a run of selections passed by while it was busy are
-/// dropped, not worked through one after another.
+/// Computed full-combo pp and effective star rating for one `(map, rate, mods, scroll_speed)` key.
+type PotentialResult = (Option<[f64; 3]>, Option<f64>);
+
+/// `potential` (and the matching star rating) for the selected map, worked out on a thread of its
+/// own and kept per map, speed, mods and scroll speed, so changing them back and forth costs
+/// nothing. Only the latest map asked about is worked out: the ones a run of selections passed by
+/// while it was busy are dropped, not worked through one after another.
 pub struct Potentials {
     tx: Sender<(PotentialKey, PathBuf)>,
     /// Each answer, or none for a map dropped before its turn (asked again if it's wanted again).
-    rx: Receiver<(PotentialKey, Option<Option<[f64; 3]>>)>,
-    known: std::collections::HashMap<PotentialKey, Option<[f64; 3]>>,
+    rx: Receiver<(PotentialKey, Option<PotentialResult>)>,
+    known: std::collections::HashMap<PotentialKey, PotentialResult>,
     /// Asked for and not answered yet.
     waiting: usize,
 }
@@ -241,13 +244,18 @@ impl Potentials {
                     }
                     let (key, path) = job;
                     let (rate, scroll) = (key.1 as f64 / 100.0, key.3 as f64 / 100.0);
-                    let pp = std::panic::catch_unwind(|| {
-                        read(&path)
-                            .and_then(|map| potential(&map, rate, Mods::parse_set(&key.2), scroll))
+                    let mods = Mods::parse_set(&key.2);
+                    let res = std::panic::catch_unwind(|| {
+                        read(&path).map(|map| {
+                            let pp = potential(&map, rate, mods, scroll);
+                            let stars = crate::stars::star_rating_for(&map, rate, mods, scroll);
+                            (pp, stars)
+                        })
                     })
                     .ok()
-                    .flatten();
-                    if done.send((key, Some(pp))).is_err() {
+                    .flatten()
+                    .unwrap_or((None, None));
+                    if done.send((key, Some(res))).is_err() {
                         return;
                     }
                 }
@@ -271,14 +279,25 @@ impl Potentials {
         mods: Mods,
         scroll_speed: f64,
     ) -> Option<[f64; 3]> {
+        self.get_with_stars(path, rate, mods, scroll_speed).0
+    }
+
+    /// Both full-combo pp and effective star rating for these, once worked out.
+    pub fn get_with_stars(
+        &mut self,
+        path: &Path,
+        rate: f64,
+        mods: Mods,
+        scroll_speed: f64,
+    ) -> (Option<[f64; 3]>, Option<f64>) {
         let key = self.take_in(path, rate, mods, scroll_speed);
         match self.known.get(&key) {
-            Some(pp) => *pp,
+            Some(res) => *res,
             None => {
-                self.known.insert(key.clone(), None);
+                self.known.insert(key.clone(), (None, None));
                 self.waiting += 1;
                 let _ = self.tx.send((key, path.to_path_buf()));
-                None
+                (None, None)
             }
         }
     }
@@ -293,7 +312,7 @@ impl Potentials {
         scroll_speed: f64,
     ) -> Option<[f64; 3]> {
         let key = self.take_in(path, rate, mods, scroll_speed);
-        self.known.get(&key).copied().flatten()
+        self.known.get(&key).and_then(|(pp, _)| *pp)
     }
 
     /// Whether an answer is still on its way.
@@ -303,11 +322,11 @@ impl Potentials {
 
     /// Takes in the answers that came, and gives the key for these.
     fn take_in(&mut self, path: &Path, rate: f64, mods: Mods, scroll_speed: f64) -> PotentialKey {
-        while let Ok((key, pp)) = self.rx.try_recv() {
+        while let Ok((key, res)) = self.rx.try_recv() {
             self.waiting = self.waiting.saturating_sub(1);
-            match pp {
-                Some(pp) => {
-                    self.known.insert(key, pp);
+            match res {
+                Some(res) => {
+                    self.known.insert(key, res);
                 }
                 None => {
                     self.known.remove(&key);
@@ -719,6 +738,34 @@ mod tests {
         });
         assert_eq!(got, Some([p100, p99, p98]));
         assert!(!worker.is_busy());
+
+        // `get_with_stars` returns the matching star rating too, including for unranked mods.
+        let bytes = std::fs::read(&path).unwrap();
+        let nomod_stars = crate::stars::star_rating_for(&bytes, 1.0, Mods::NONE, 1.0).unwrap();
+        let dt_stars = crate::stars::star_rating_for(&bytes, 1.5, Mods::NONE, 1.0).unwrap();
+        let (pp_nomod, sr_nomod) = worker.get_with_stars(&path, 1.0, Mods::NONE, 1.0);
+        assert_eq!(pp_nomod, Some([p100, p99, p98]));
+        assert!((sr_nomod.unwrap() - nomod_stars).abs() < 1e-6);
+
+        let dt_res = (0..1000).find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let res = worker.get_with_stars(&path, 1.5, Mods::NONE, 1.0);
+            res.1.map(|sr| (res.0, sr))
+        });
+        let (pp_dt, sr_dt) = dt_res.expect("DT potential and stars");
+        assert!(pp_dt.is_some());
+        assert!((sr_dt - dt_stars).abs() < 1e-6);
+        assert!(sr_dt > sr_nomod.unwrap());
+
+        let at_sr = (0..1000).find_map(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            worker.get_with_stars(&path, 1.0, Mods::parse("AT"), 1.0).1
+        });
+        assert!(at_sr.is_some(), "unranked mods still report stars");
+        assert_eq!(
+            worker.get_with_stars(&path, 1.0, Mods::parse("AT"), 1.0).0,
+            None
+        );
 
         // A run of selections: the ones passed by while the worker was busy are dropped, the
         // latest is worked out, and a dropped one is asked again when it's wanted again.
