@@ -1234,3 +1234,107 @@ fn journey_card_displays_map_status_badge() {
         "Journey must queue on-demand status lookup for unknown sets"
     );
 }
+
+#[test]
+fn journey_rate_keys_and_stepper_change_speed_without_resetting_queue() {
+    let songs = Songs::new("journey-rate", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    let map_path = s.library[0].path.clone();
+    let bytes = std::fs::read(&map_path).unwrap();
+    let nomod_sr = taiko_logic::stars::star_rating_for(&bytes, 1.0, mods::Mods::NONE, 1.0).unwrap();
+    let fast_sr = taiko_logic::stars::star_rating_for(&bytes, 1.25, mods::Mods::NONE, 1.0).unwrap();
+    let fast_pp = pp::potential(&map_path, 1.25, mods::Mods::NONE, 1.0).unwrap();
+    assert!(fast_sr > nomod_sr + 0.05, "fixture must scale up at 1.25x");
+
+    let queue = vec![
+        QueuedMap {
+            item: item("Rate Song A", "Oni", 9201),
+            source: MapSource::Local(map_path.clone()),
+        },
+        QueuedMap {
+            item: item("Rate Song B", "Oni", 9202),
+            source: MapSource::Local(s.library[1].path.clone()),
+        },
+    ];
+    journey_with(&mut s, queue);
+    s.journey.comfort_stars = 5.0;
+    s.journey.target_stars = None;
+
+    now += Duration::from_millis(300);
+    let c = frame(&mut s, now);
+
+    // Bottom bar shows the rate stepper with working [-] and [+] hit targets.
+    assert!(
+        c.texts.iter().any(|(_, t)| t == "1.00x"),
+        "Journey bottom bar must show 1.00x rate stepper"
+    );
+    assert!(
+        s.hits
+            .iter()
+            .any(|h| h.hit == hit::Hit::Key(KeyCode::BracketLeft))
+            && s.hits
+                .iter()
+                .any(|h| h.hit == hit::Hit::Key(KeyCode::BracketRight)),
+        "Journey bottom bar must expose BracketLeft/BracketRight stepper buttons"
+    );
+
+    // Pressing ] steps map speed up by 0.05x without switching Journey to manual level or wiping queue.
+    press(&mut s, KeyCode::BracketRight, now);
+    assert!((s.cfg.rate - 1.05).abs() < 1e-9, "rate was {}", s.cfg.rate);
+    assert_eq!(
+        s.journey.target_stars, None,
+        "] must not alter target_stars"
+    );
+    assert_eq!(s.journey.queue.len(), 2, "] must not clear Journey queue");
+    assert_eq!(s.journey.current().unwrap().item.title, "Rate Song A");
+
+    // Clicking the stepper's - button twice steps down to 0.95x and updates the readout.
+    s.click(hit::Hit::Key(KeyCode::BracketLeft), None);
+    s.click(hit::Hit::Key(KeyCode::BracketLeft), None);
+    assert!((s.cfg.rate - 0.95).abs() < 1e-9, "rate was {}", s.cfg.rate);
+    assert_eq!(s.journey.current().unwrap().item.title, "Rate Song A");
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert!(
+        c.texts.iter().any(|(_, t)| t == "0.95x"),
+        "stepper readout must update to 0.95x"
+    );
+
+    // Shift + ] jumps by +0.25x (to 1.20x) and live star rating updates on the same map.
+    s.modifiers_shift = true;
+    press(&mut s, KeyCode::BracketRight, now);
+    s.modifiers_shift = false;
+    press(&mut s, KeyCode::BracketRight, now);
+    assert!((s.cfg.rate - 1.25).abs() < 1e-9, "rate was {}", s.cfg.rate);
+    assert_eq!(s.journey.current().unwrap().item.title, "Rate Song A");
+    let fast_label = format!("{fast_sr:.2}");
+    frames_until(&mut s, &mut now, |s| {
+        s.preview
+            .potential
+            .is_some_and(|p| (p[0] - fast_pp[0]).abs() < 0.5)
+    });
+    let c_fast = frame(&mut s, now);
+    assert!(
+        c_fast.texts.iter().any(|(_, t)| t == &fast_label),
+        "star chip must update to 1.25x rating {fast_label}"
+    );
+
+    // Enabling DT hides the custom rate stepper (mod overrides speed) and shows the DT badge.
+    s.cfg.mods = mods::Mods::parse("DT");
+    now += Duration::from_millis(16);
+    let c_dt = frame(&mut s, now);
+    assert!(
+        c_dt.texts.iter().any(|(_, t)| t == "DT"),
+        "Journey bottom bar must show active DT mod badge"
+    );
+    assert!(
+        !s.hits.iter().any(|h| matches!(
+            h.hit,
+            hit::Hit::Key(KeyCode::BracketLeft | KeyCode::BracketRight)
+        )),
+        "custom rate stepper must hide while DT overrides speed"
+    );
+}

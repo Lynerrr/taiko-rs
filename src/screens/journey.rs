@@ -125,8 +125,9 @@ impl Screen for JourneyScreen {
             KeyCode::ArrowLeft => state.journey_back(),
             KeyCode::KeyS => state.journey_save_current(),
             KeyCode::F1 => state.open_mods(),
-            KeyCode::Minus | KeyCode::BracketLeft => state.journey_step_level(-1),
-            KeyCode::Equal | KeyCode::BracketRight => state.journey_step_level(1),
+            KeyCode::BracketLeft | KeyCode::BracketRight => {
+                state.step_rate(code == KeyCode::BracketRight);
+            }
             _ => {}
         }
     }
@@ -1296,14 +1297,14 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     let mid = ay + actions_h / 2.0;
     let bh = actions_h - 4.0;
     let mods_word = tr!("Mods", "Mod", "Моды");
-    style::block_button(
+    let mods_w = style::block_button(
         c,
         [cx + 6.0, mid],
         &style::SLIDERS,
         mods_word,
         None,
         8.0,
-        !state.cfg.mods.is_empty() || (rate - 1.0).abs() > 1e-4,
+        !state.cfg.mods.is_empty(),
         hit::Hit::ModsButton,
         bh,
     );
@@ -1313,6 +1314,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     let skip_label = tr!("Skip", "スキップ", "Скип");
     let skip_w = Canvas::text_width(8.0, skip_label) + 34.0;
     let skip_x = play_x - 10.0 - skip_w + 6.0;
+    let mut right_left = skip_x - 6.0;
     style::block_button(
         c,
         [skip_x, mid],
@@ -1327,9 +1329,11 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     if state.journey.can_go_back() {
         let back_label = tr!("Back", "戻る", "Назад");
         let back_w = Canvas::text_width(8.0, back_label) + 34.0;
+        let back_x = skip_x - 10.0 - back_w;
+        right_left = back_x - 6.0;
         style::block_button(
             c,
-            [skip_x - 10.0 - back_w, mid],
+            [back_x, mid],
             &PREV_ICON,
             back_label,
             None,
@@ -1339,6 +1343,17 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
             bh,
         );
     }
+    let from = cx + mods_w + 10.0;
+    let room = (right_left - 10.0 - from).max(0.0);
+    crate::screens::select::song_select::draw_action_mods_and_rate(
+        c,
+        from,
+        mid,
+        bh,
+        room,
+        state.cfg.mods,
+        state.cfg.rate,
+    );
 
     let play_label = if is_ready {
         tr!("Play", "プレイ", "Играть")
@@ -1507,7 +1522,7 @@ impl State {
     }
 
     fn journey_fill_local(&mut self) {
-        let rate = self.cfg.rate;
+        let rate = self.play_speed().0;
         let stars = &self.stars;
         let info = self.select.info.as_ref().map(|m| m.lock().unwrap());
         self.journey.fill_from_local(&self.library, |i| {
