@@ -842,3 +842,246 @@ fn journey_goes_back_and_forward_through_its_maps() {
     assert_eq!(s.journey.history.len(), 1);
     assert_eq!(s.journey.history[0].outcome, PastOutcome::Skipped);
 }
+
+#[test]
+fn journey_updates_stars_and_potential_pp_for_current_map_and_mods() {
+    let songs = Songs::new("journey-live-stars-pp", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    // Seed stale pp as left behind by Song Select.
+    s.preview.potential = Some([999.0, 950.0, 900.0]);
+    let map_path = s.library[0].path.clone();
+    let bytes = std::fs::read(&map_path).unwrap();
+    let nomod_sr = taiko_logic::stars::star_rating_for(&bytes, 1.0, mods::Mods::NONE, 1.0).unwrap();
+    let nomod_pp = pp::potential(&map_path, 1.0, mods::Mods::NONE, 1.0).unwrap();
+    let dt = mods::Mods::parse("DT");
+    let dt_sr = taiko_logic::stars::star_rating_for(&bytes, 1.5, dt, 1.0).unwrap();
+    let dt_pp = pp::potential(&map_path, 1.5, dt, 1.0).unwrap();
+    assert!(dt_sr > nomod_sr + 0.05, "fixture must scale up with DT");
+
+    let mut q_item = item("Star Test", "Oni", 8100);
+    // Deliberately different from the real chart so we prove live calculation takes over.
+    q_item.stars = 1.23;
+    journey_with(
+        &mut s,
+        vec![QueuedMap {
+            item: q_item,
+            source: MapSource::Local(map_path),
+        }],
+    );
+
+    // Wait for Potentials worker to populate real pp and stars for the Journey map.
+    frames_until(&mut s, &mut now, |s| {
+        s.preview
+            .potential
+            .is_some_and(|p| (p[0] - nomod_pp[0]).abs() < 0.5)
+    });
+    assert!(
+        s.preview
+            .potential
+            .is_some_and(|p| (p[0] - nomod_pp[0]).abs() < 0.5),
+        "Journey must replace stale Song Select pp with the current map's pp: {:?}",
+        s.preview.potential
+    );
+
+    let c = frame(&mut s, now);
+    let nomod_label = format!("{nomod_sr:.2}");
+    assert!(
+        c.texts.iter().any(|(_, t)| t == &nomod_label),
+        "star chip must show live nomod rating {nomod_label}, saw: {:?}",
+        c.texts.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>()
+    );
+
+    // Enable DT: both star rating and potential pp must update.
+    s.cfg.mods = dt;
+    frames_until(&mut s, &mut now, |s| {
+        s.preview
+            .potential
+            .is_some_and(|p| (p[0] - dt_pp[0]).abs() < 0.5)
+    });
+    assert!(
+        s.preview
+            .potential
+            .is_some_and(|p| (p[0] - dt_pp[0]).abs() < 0.5),
+        "DT must update Journey potential pp"
+    );
+    let c_dt = frame(&mut s, now);
+    let dt_label = format!("{dt_sr:.2}");
+    assert!(
+        c_dt.texts.iter().any(|(_, t)| t == &dt_label),
+        "star chip must show DT star rating {dt_label}"
+    );
+
+    // A map still downloading/pending must clear potential pp rather than keep the previous one.
+    s.journey.queue[0].source = MapSource::Pending;
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(s.preview.potential, None);
+}
+
+#[test]
+fn journey_embedded_preview_stays_inside_card_and_scrubs_on_drag() {
+    let songs = Songs::new("journey-preview-ui", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    // Simulate entering Journey straight from Main Menu (preview.bare still false).
+    s.preview.bare = false;
+    let map_path = s.library[0].path.clone();
+    let mut q_item = item("Preview Bounds", "Oni", 8200);
+    q_item.role = "explore".into();
+    journey_with(
+        &mut s,
+        vec![QueuedMap {
+            item: q_item,
+            source: MapSource::Local(map_path),
+        }],
+    );
+    s.preview.prime_with_marker(&s.library, 0, 1000.0);
+
+    now += Duration::from_millis(300);
+    let c = frame(&mut s, now);
+
+    // Must never render the classic hint outside the Journey card.
+    assert!(
+        !c.texts.iter().any(|(_, t)| t.contains("wheel to scroll")),
+        "embedded Journey timeline must not draw overflow scroll hint"
+    );
+    // Card spans y = 76..424 at virtual height 480; bottom action bar starts at 432.
+    // No text may sit in the gap between the card bottom (424) and the action bar (432).
+    for (range, text) in &c.texts {
+        if range.is_empty() {
+            continue;
+        }
+        let min_y = c.shapes[range.clone()]
+            .iter()
+            .map(|sh| sh.center[1] - sh.half[1])
+            .fold(f32::INFINITY, f32::min);
+        let max_y = c.shapes[range.clone()]
+            .iter()
+            .map(|sh| sh.center[1] + sh.half[1])
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            !(min_y >= 422.0 && max_y <= 434.0),
+            "text {text:?} leaked outside card bottom ({min_y:.1}..{max_y:.1})"
+        );
+    }
+
+    // The top bar's EXPLORE label must not be crossed by the horizontal track line (y = 48..50).
+    let explore_range = c
+        .texts
+        .iter()
+        .find(|(_, t)| t == "EXPLORE")
+        .map(|(r, _)| r.clone())
+        .expect("top bar EXPLORE label");
+    let explore_left = c.shapes[explore_range.clone()]
+        .iter()
+        .map(|sh| sh.center[0] - sh.half[0])
+        .fold(f32::INFINITY, f32::min);
+    let track_crosses_label = c.shapes.iter().any(|sh| {
+        let top = sh.center[1] - sh.half[1];
+        let bot = sh.center[1] + sh.half[1];
+        let right = sh.center[0] + sh.half[0];
+        let h = bot - top;
+        (h - 2.0).abs() < 0.2 && (top - 48.0).abs() < 0.5 && right > explore_left - 2.0
+    });
+    assert!(
+        !track_crosses_label,
+        "top lane track line must stop before the EXPLORE label (left={explore_left:.1})"
+    );
+
+    // Hovering and dragging over the Journey density graph must show Pointer and scrub.
+    let rect = s
+        .preview
+        .graph_rect()
+        .expect("Journey density graph rect must be set");
+    let scale = s.window_h / render::VIRTUAL_HEIGHT;
+    let to_px = |vx: f32, vy: f32| (f64::from(vx * scale), f64::from(vy * scale));
+    let (gx0, gy) = (rect[0] + rect[2] * 0.25, rect[1] + rect[3] * 0.5);
+    let (gx1, _) = (rect[0] + rect[2] * 0.75, gy);
+
+    let cursor = s.mouse_moved(to_px(gx0, gy).0, to_px(gx0, gy).1);
+    assert_eq!(
+        cursor,
+        winit::window::CursorIcon::Pointer,
+        "hovering Journey timeline must show Pointer cursor"
+    );
+
+    s.mouse_button(true, None);
+    assert!(
+        s.scrubbing.is_some(),
+        "pressing on Journey timeline starts scrub"
+    );
+    let first_t = s.scrubbing.unwrap().1;
+    // Force throttle window elapsed so drag updates immediately.
+    s.scrubbing = Some((Instant::now() - Duration::from_millis(100), first_t));
+    let drag_cursor = s.mouse_moved(to_px(gx1, gy).0, to_px(gx1, gy).1);
+    assert_eq!(drag_cursor, winit::window::CursorIcon::Pointer);
+    let dragged_t = s.scrubbing.unwrap().1;
+    assert!(
+        dragged_t > first_t + 100.0,
+        "dragging across Journey timeline must seek forward ({first_t} -> {dragged_t})"
+    );
+    s.mouse_button(false, None);
+}
+
+#[test]
+fn journey_match_profile_gauge_marker_matches_its_zone() {
+    let songs = Songs::new("journey-gauge", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    // Comfort 7.76*, map 8.05* (+0.29*): stretch (red) marker must sit inside the red stretch zone.
+    let mut q_item = item("Stretch Pick", "Oni", 8300);
+    q_item.stars = 8.05;
+    journey_with(
+        &mut s,
+        vec![QueuedMap {
+            item: q_item,
+            source: MapSource::Pending,
+        }],
+    );
+    s.journey.comfort_stars = 7.76;
+
+    now += Duration::from_millis(300);
+    let c = frame(&mut s, now);
+
+    let stretch_fill = render::rgba(0xff4d5a, 0.28);
+    let comfort_fill = render::rgba(0x4ee07a, 0.35);
+    let marker_fill = render::rgba(0xff4d5a, 1.0);
+    let eq = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.02);
+
+    let stretch = c
+        .shapes
+        .iter()
+        .find(|sh| eq(sh.fill, stretch_fill) && (sh.half[1] * 2.0 - 4.0).abs() < 0.2)
+        .expect("stretch zone rect");
+    let comfort = c
+        .shapes
+        .iter()
+        .find(|sh| eq(sh.fill, comfort_fill) && (sh.half[1] * 2.0 - 4.0).abs() < 0.2)
+        .expect("comfort zone rect");
+    let marker = c
+        .shapes
+        .iter()
+        .find(|sh| {
+            eq(sh.fill, marker_fill)
+                && (sh.half[0] - 4.5).abs() < 0.2
+                && (sh.center[1] - stretch.center[1]).abs() < 1.0
+        })
+        .expect("stretch marker circle");
+
+    let comfort_right = comfort.center[0] + comfort.half[0];
+    let stretch_left = stretch.center[0] - stretch.half[0];
+    assert!(
+        marker.center[0] >= stretch_left - 0.1,
+        "red stretch marker ({:.1}) must sit in stretch zone (>= {:.1}), not comfort zone (<= {:.1})",
+        marker.center[0],
+        stretch_left,
+        comfort_right
+    );
+}

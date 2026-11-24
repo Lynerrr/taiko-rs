@@ -499,15 +499,22 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
     if lane_right - lane_left < 120.0 {
         return;
     }
+    let role_w = Canvas::text_width(7.0, role_label);
+    let show_role = lane_right - lane_left >= role_w + 180.0;
+    let track_right = if show_role {
+        lane_right - role_w - 14.0
+    } else {
+        lane_right
+    };
     let slide = state.journey.lane_slide;
     c.rect(
         lane_left,
         mid_y - 1.0,
-        lane_right - lane_left,
+        (track_right - lane_left).max(0.0),
         2.0,
         rgba(0x2a2a3c, 1.0),
     );
-    let center_x = (lane_left + lane_right) / 2.0;
+    let center_x = (lane_left + track_right) / 2.0;
     // Coloured glow along the active half of the track.
     c.rect(
         lane_left,
@@ -555,7 +562,7 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
 
     for (k, next_q) in state.journey.queue.iter().skip(1).take(3).enumerate() {
         let nx = center_x + 36.0 + k as f32 * 26.0 + slide;
-        if nx > lane_right - 14.0 || nx < center_x + 16.0 {
+        if nx > track_right - 12.0 || nx < center_x + 16.0 {
             continue;
         }
         let (_, ncol) = role_badge(&next_q.item.role);
@@ -563,9 +570,14 @@ fn draw_top_lane(state: &State, c: &mut Canvas, w: f32) {
         c.circle(nx, mid_y, 6.0, rgba(ncol, alpha), rgba(0xffffff, 0.35), 1.0);
     }
 
-    let rx = center_x + 112.0;
-    if rx + Canvas::text_width(7.0, role_label) < lane_right {
-        c.text(rx, mid_y - 3.5, 7.0, rgba(role_col, 0.95), role_label);
+    if show_role {
+        c.text(
+            lane_right - role_w,
+            mid_y - 3.5,
+            7.0,
+            rgba(role_col, 0.95),
+            role_label,
+        );
     }
 }
 
@@ -605,6 +617,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         }
         MapSource::Failed(e) => tr!("Error: {e}", "エラー: {e}", "Ошибка: {e}"; [] [e]),
     })) else {
+        state.preview.potential = None;
         style::cold_panel(c, [cx, cy, cw, ch]);
         let msg = if state.journey.outage_since.is_some() && !state.journey.local_mode {
             // A drop of a few seconds: retried before it's called an outage (`Gate::ServerDown`).
@@ -639,9 +652,33 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     };
     let (item, is_ready, is_in_library, dl_progress, is_failed, status_str) = cur_cloned;
     let (role_label, role_col) = role_badge(&item.role);
-    let bg_path = current_entry_for_preview(&state.journey, &state.library)
-        .and_then(crate::preview::background_path);
-    let od_val = current_entry_for_preview(&state.journey, &state.library).map(|e| e.meta.od);
+    let (entry_path, bg_path, od_raw, entry_level) =
+        match current_entry_for_preview(&state.journey, &state.library) {
+            Some(e) => (
+                is_ready.then(|| e.path.clone()),
+                crate::preview::background_path(e),
+                Some(e.meta.od),
+                e.meta.level,
+            ),
+            None => (None, None, None, None),
+        };
+    let rate = state.play_speed().0;
+    let (pot_pp, live_stars) = match &entry_path {
+        Some(path) => {
+            state
+                .potentials
+                .get_with_stars(path, rate, state.cfg.mods, state.cfg.scroll_speed)
+        }
+        None => (None, None),
+    };
+    state.preview.potential = pot_pp;
+    state.preview.mods = state.cfg.mods;
+    let shown_stars = live_stars
+        .filter(|s| s.is_finite() && *s > 0.05)
+        .unwrap_or(item.stars);
+    let od_val = od_raw.map(|od| {
+        crate::beatmap::od_at_rate(state.cfg.mods.od_with(od, crate::od_override::get()), rate)
+    });
     let loaded_stats = state.preview.loaded_stats();
 
     let card_start = c.shapes.len();
@@ -694,8 +731,8 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     let inner_w = cw - pad * 2.0;
 
     // Top-left role pill + difficulty delta + reason.
-    let delta = if item.stars > 0.1 && state.journey.comfort_stars > 0.1 {
-        Some(item.stars - state.journey.comfort_stars)
+    let delta = if shown_stars > 0.1 && state.journey.comfort_stars > 0.1 {
+        Some(shown_stars - state.journey.comfort_stars)
     } else {
         None
     };
@@ -729,9 +766,10 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         &Canvas::fit(7.5, reason_room, &item.reason),
     );
 
-    // Top-right star chip + source badge.
-    let stars_opt = (item.stars > 0.05).then_some(item.stars as f32);
-    let star_w = style::star_chip(c, cx + cw - pad, cy + 11.0, 9.5, None, stars_opt);
+    // Top-right star chip + source badge (star_chip frames at y - 3, so y = cy + 14 aligns with
+    // the role pill and source badge along cy + 19).
+    let stars_opt = (shown_stars > 0.05).then_some(shown_stars as f32);
+    let star_w = style::star_chip(c, cx + cw - pad, cy + 14.0, 9.5, entry_level, stars_opt);
     let source_text = if item.custom_id.is_some() {
         tr!("taiko.rs custom", "taiko.rsカスタム", "кастомка")
     } else if state.journey.local_mode {
@@ -795,7 +833,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
 
     // --- LEFT COLUMN: stats, Don/Kat bar, pp row, live autoplay preview + density graph ---
     let mut ly = body_y + 10.0;
-    let (bpm_val, len_ms, dons, kats, rolls, swells, pot_pp) = match loaded_stats {
+    let (raw_bpm, raw_len_ms, dons, kats, rolls, swells) = match loaded_stats {
         Some(st) => (
             if st.bpm > 0.0 { st.bpm } else { item.bpm },
             if st.length_ms > 0.0 {
@@ -807,9 +845,15 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
             Some(st.kats),
             st.rolls,
             st.swells,
-            st.potential,
         ),
-        None => (item.bpm, item.length_ms, None, None, 0, 0, None),
+        None => (item.bpm, item.length_ms, None, None, 0, 0),
+    };
+    let speed = rate.max(0.01);
+    let bpm_val = raw_bpm * speed;
+    let len_ms = if raw_len_ms > 0 {
+        ((raw_len_ms as f64) / speed).round() as u64
+    } else {
+        0
     };
     let od_str = od_val
         .map(|od| format!("{od:.1}"))
@@ -978,11 +1022,13 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     c.text(right_x, ry, 7.0, rgba(role_col, 0.95), heading);
     ry += 14.0;
 
-    // Difficulty vs comfort gauge.
+    // Difficulty vs comfort gauge (spans comfort - 1.5* .. comfort + 1.5*).
+    const GAUGE_EASIER_DELTA: f64 = -0.30;
+    const GAUGE_STRETCH_DELTA: f64 = 0.25;
     let comfort = state.journey.comfort_stars.max(1.0);
-    let diff_label = if item.stars > 0.1 {
-        let d = item.stars - comfort;
-        format!("~{comfort:.1}*  ->  {:.2}* ({d:+.1}*)", item.stars)
+    let diff_label = if shown_stars > 0.1 {
+        let d = shown_stars - comfort;
+        format!("~{comfort:.1}*  ->  {shown_stars:.2}* ({d:+.1}*)")
     } else {
         format!("~{comfort:.1}*")
     };
@@ -995,8 +1041,10 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     );
     ry += 11.0;
 
-    // Gauge track: blue (easier) -> green/gold (comfort) -> red (stretch).
+    // Gauge track: blue (easier) -> green (comfort) -> red (stretch), matching marker thresholds.
     let g_h = 6.0;
+    let comfort_lo = ((GAUGE_EASIER_DELTA + 1.5) / 3.0) as f32;
+    let comfort_hi = ((GAUGE_STRETCH_DELTA + 1.5) / 3.0) as f32;
     c.round_rect(
         [right_x, ry],
         [right_w, g_h],
@@ -1007,27 +1055,27 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     );
     // Comfort zone highlight in the middle.
     c.rect(
-        right_x + right_w * 0.36,
+        right_x + right_w * comfort_lo,
         ry + 1.0,
-        right_w * 0.28,
+        right_w * (comfort_hi - comfort_lo),
         g_h - 2.0,
         rgba(0x4ee07a, 0.35),
     );
     // Stretch zone tint on the right.
     c.rect(
-        right_x + right_w * 0.64,
+        right_x + right_w * comfort_hi,
         ry + 1.0,
-        right_w * 0.36 - 1.0,
+        right_w * (1.0 - comfort_hi) - 1.0,
         g_h - 2.0,
         rgba(0xff4d5a, 0.28),
     );
     // Marker for current map.
-    if item.stars > 0.1 {
-        let frac = ((item.stars - comfort + 1.5) / 3.0).clamp(0.04, 0.96) as f32;
+    if shown_stars > 0.1 {
+        let frac = ((shown_stars - comfort + 1.5) / 3.0).clamp(0.04, 0.96) as f32;
         let mx = right_x + right_w * frac;
-        let mcol = if item.stars > comfort + 0.25 {
+        let mcol = if shown_stars > comfort + GAUGE_STRETCH_DELTA {
             0xff4d5a
-        } else if item.stars < comfort - 0.3 {
+        } else if shown_stars < comfort + GAUGE_EASIER_DELTA {
             0x4ea8ff
         } else {
             0x4ee07a
@@ -1182,7 +1230,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         mods_word,
         None,
         8.0,
-        !state.cfg.mods.is_empty(),
+        !state.cfg.mods.is_empty() || (rate - 1.0).abs() > 1e-4,
         hit::Hit::ModsButton,
         bh,
     );

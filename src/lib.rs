@@ -7356,7 +7356,9 @@ impl State {
             }
             return CursorIcon::Pointer;
         }
-        if !self.on_menu() && self.in_song_select() {
+        if !self.on_menu()
+            && (self.in_song_select() || self.scene.screen_is::<screens::journey::JourneyScreen>())
+        {
             if let Some((last, at)) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
                 if last.elapsed() >= Duration::from_millis(33) {
