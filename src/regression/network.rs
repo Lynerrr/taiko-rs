@@ -3637,3 +3637,344 @@ fn a_mirror_refusing_a_download_is_not_asked_again() {
     // No pass after the first, so none of the waits between them.
     assert!(started.elapsed() < std::time::Duration::from_secs(4));
 }
+
+/// When the primary mirror fails (e.g. osu.direct 503) and a fallback (mirror.nekoha.moe)
+/// answers, future searches — including after a restart — go straight to the working mirror
+/// instead of stalling on the broken one every time.
+#[test]
+fn failing_mirror_switches_search_permanently_to_nekoha_fallback() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let (tx, asked) = std::sync::mpsc::channel();
+    let nekoha_body = r#"{"beatmapsets":[{"id":2617901,"artist":"kaitendaentai","title":"Hubris","creator":"ulko","status":"ranked","ranked_date":"2026-11-24T00:03:28Z","beatmaps":[{"id":5872564,"version":"Oni","mode":"taiko","mode_int":1,"difficulty_rating":6.2}]}]}"#;
+    let nekoha_resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        nekoha_body.len(),
+        nekoha_body
+    );
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut out = stream;
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+            }
+            let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+            let _ = tx.send(path.clone());
+            let reply = if path.starts_with("/primary/") {
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            } else if path.starts_with("/blocked/") {
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            } else {
+                &nekoha_resp
+            };
+            let _ = out.write_all(reply.as_bytes());
+        }
+    });
+
+    let primary_search: &'static str = Box::leak(format!("{base}/primary/search").into_boxed_str());
+    let nekoha_search: &'static str = Box::leak(format!("{base}/nekoha/search").into_boxed_str());
+    let blocked_search: &'static str = Box::leak(format!("{base}/blocked/search").into_boxed_str());
+    let mirrors = [
+        crate::download::Mirror {
+            name: "osu.direct",
+            search: primary_search,
+            search_style: crate::download::SearchStyle::V2 {
+                query_key: "query",
+                amount_key: "amount",
+                server_sort: true,
+            },
+            set: "",
+            download: "",
+            osu: "",
+        },
+        crate::download::Mirror {
+            name: "mirror.nekoha.moe",
+            search: nekoha_search,
+            search_style: crate::download::SearchStyle::Nekoha,
+            set: "",
+            download: "",
+            osu: "",
+        },
+        crate::download::Mirror {
+            name: "catboy.best",
+            search: blocked_search,
+            search_style: crate::download::SearchStyle::V2 {
+                query_key: "q",
+                amount_key: "limit",
+                server_sort: false,
+            },
+            set: "",
+            download: "",
+            osu: "",
+        },
+    ];
+
+    let dir = std::env::temp_dir().join(format!(
+        "taiko-rs-regression-mirror-switch-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let state_path = dir.join("mirror-order");
+    let defaults: Vec<String> = mirrors.iter().map(|m| m.name.to_string()).collect();
+    let router = std::sync::Mutex::new(crate::download::MirrorRouter::new(
+        defaults.clone(),
+        Some(state_path.clone()),
+    ));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(5)))
+        .build()
+        .into();
+
+    // First search: primary 503s -> falls back to nekoha -> succeeds and switches permanently.
+    let (sets, more) = crate::download::search_status_from(
+        &agent,
+        &mirrors,
+        &router,
+        "hubris",
+        Some(1),
+        (crate::download::SortKey::Ranked, true),
+        0,
+    )
+    .unwrap();
+    assert_eq!(sets.len(), 1);
+    assert_eq!(sets[0].id, 2617901);
+    assert!(!more);
+
+    let first_round: Vec<String> = asked.try_iter().collect();
+    assert_eq!(first_round.len(), 2);
+    assert!(first_round[0].starts_with("/primary/search?"));
+    assert!(first_round[1].starts_with("/nekoha/search?"));
+    assert!(first_round[1].contains("mode=taiko"));
+    assert!(first_round[1].contains("page=1"));
+    assert!(first_round[1].contains("status=ranked"));
+    assert!(first_round[1].contains("sort=ranked"));
+    assert!(first_round[1].contains("order=desc"));
+    assert!(first_round[1].contains("q=hubris"));
+
+    // Second search: goes straight to nekoha without touching the failing primary.
+    let (sets2, _) = crate::download::search_status_from(
+        &agent,
+        &mirrors,
+        &router,
+        "hubris",
+        Some(1),
+        (crate::download::SortKey::Ranked, true),
+        0,
+    )
+    .unwrap();
+    assert_eq!(sets2[0].id, 2617901);
+    let second_round: Vec<String> = asked.try_iter().collect();
+    assert_eq!(second_round.len(), 1);
+    assert!(second_round[0].starts_with("/nekoha/search?"));
+
+    // Fresh router (simulated restart): loads persisted order and still goes straight to nekoha.
+    let restarted = std::sync::Mutex::new(crate::download::MirrorRouter::new(
+        defaults,
+        Some(state_path),
+    ));
+    let (sets3, _) = crate::download::search_status_from(
+        &agent,
+        &mirrors,
+        &restarted,
+        "hubris",
+        Some(1),
+        (crate::download::SortKey::Ranked, true),
+        0,
+    )
+    .unwrap();
+    assert_eq!(sets3[0].id, 2617901);
+    let third_round: Vec<String> = asked.try_iter().collect();
+    assert_eq!(third_round.len(), 1);
+    assert!(third_round[0].starts_with("/nekoha/search?"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A geo-blocked mirror (403) is demoted and skipped on subsequent `set_status` calls, while a
+/// 404 on one set does not demote a healthy mirror.
+#[test]
+fn blocked_mirror_is_skipped_on_subsequent_set_status_lookups() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let (tx, asked) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut out = stream;
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+            }
+            let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+            let _ = tx.send(path.clone());
+            let reply = if path.starts_with("/blocked/") {
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            } else if path.ends_with("/999") {
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            } else {
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{\"status\":\"ranked\"}"
+            };
+            let _ = out.write_all(reply.as_bytes());
+        }
+    });
+
+    let blocked_set: &'static str = Box::leak(format!("{base}/blocked/s/").into_boxed_str());
+    let good_set: &'static str = Box::leak(format!("{base}/good/s/").into_boxed_str());
+    let mirrors = [
+        crate::download::Mirror {
+            name: "catboy.best",
+            search: "",
+            search_style: crate::download::SearchStyle::V2 {
+                query_key: "q",
+                amount_key: "limit",
+                server_sort: false,
+            },
+            set: blocked_set,
+            download: "",
+            osu: "",
+        },
+        crate::download::Mirror {
+            name: "mirror.nekoha.moe",
+            search: "",
+            search_style: crate::download::SearchStyle::Nekoha,
+            set: good_set,
+            download: "",
+            osu: "",
+        },
+    ];
+    let defaults: Vec<String> = mirrors.iter().map(|m| m.name.to_string()).collect();
+    let router = std::sync::Mutex::new(crate::download::MirrorRouter::new(defaults, None));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(5)))
+        .build()
+        .into();
+
+    // First lookup: blocked returns 403 -> good returns ranked -> blocked is demoted & cooled down.
+    assert_eq!(
+        crate::download::set_status_from(&agent, &mirrors, &router, 1).unwrap(),
+        "ranked"
+    );
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        ["/blocked/s/1", "/good/s/1"]
+    );
+
+    // Next lookup skips the blocked mirror completely; 404 returns MISSING without hurting good.
+    assert_eq!(
+        crate::download::set_status_from(&agent, &mirrors, &router, 999).unwrap(),
+        crate::setstatus::MISSING
+    );
+    assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/good/s/999"]);
+}
+
+/// A mirror cooling down after a transient failure is still asked when the healthy ones don't
+/// have the set: only when every mirror that could answer said 404 is the set missing (that
+/// answer is kept for two weeks).
+#[test]
+fn a_set_only_a_cooling_mirror_has_is_not_marked_missing() {
+    let (base, asked) = mirror_server(vec![("/primary/s/7", br#"{"status":"ranked"}"#.to_vec())]);
+    let primary: &'static str = Box::leak(format!("{base}/primary/s/").into_boxed_str());
+    let fallback: &'static str = Box::leak(format!("{base}/fallback/s/").into_boxed_str());
+    let mirror = |name: &'static str, set: &'static str| crate::download::Mirror {
+        name,
+        search: "",
+        search_style: crate::download::SearchStyle::Nekoha,
+        set,
+        download: "",
+        osu: "",
+    };
+    let mirrors = [
+        mirror("osu.direct", primary),
+        mirror("mirror.nekoha.moe", fallback),
+    ];
+    let defaults: Vec<String> = mirrors.iter().map(|m| m.name.to_string()).collect();
+    let router = std::sync::Mutex::new(crate::download::MirrorRouter::new(defaults, None));
+    router.lock().unwrap().record_failure(
+        "osu.direct",
+        crate::download::FailureKind::Transient,
+        std::time::Instant::now(),
+    );
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(5)))
+        .build()
+        .into();
+    assert_eq!(
+        crate::download::set_status_from(&agent, &mirrors, &router, 7).unwrap(),
+        "ranked"
+    );
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        ["/fallback/s/7", "/primary/s/7"]
+    );
+    // Its answer ended osu.direct's cooldown: it's asked first again. A set neither has is
+    // missing, once both were asked.
+    assert_eq!(
+        crate::download::set_status_from(&agent, &mirrors, &router, 8).unwrap(),
+        crate::setstatus::MISSING
+    );
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        ["/primary/s/8", "/fallback/s/8"]
+    );
+}
+
+/// Unpacking failing on this computer (here the set's folder can't be made) is no fault of the
+/// mirror that sent a good archive: it isn't put on cooldown, while one that sends something
+/// that isn't an archive is.
+#[test]
+fn a_local_unpacking_failure_does_not_cool_down_the_mirror() {
+    let good = mirror_osz(&[("a.osu", b"osu file format v14\n"), ("audio.mp3", b"mp3")]);
+    let (base, _) = mirror_server(vec![
+        ("/good/d/1", good),
+        ("/broken/d/2", b"PK not an archive".to_vec()),
+    ]);
+    let songs = std::env::temp_dir().join(format!(
+        "taiko-rs-regression-unpack-blame-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&songs);
+    std::fs::create_dir_all(&songs).unwrap();
+    // A file where the set's folder goes.
+    std::fs::write(songs.join("1 Artist - Title"), b"in the way").unwrap();
+    let (done, total) = (
+        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+    );
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let fetch = |name: &str, source: &str, url: String| {
+        crate::download::fetch(&[(source, url)], name, &songs, &done, &total, &cancel, None)
+    };
+    assert!(
+        fetch(
+            "1 Artist - Title",
+            "mirror.nekoha.moe",
+            format!("{base}/good/d/1")
+        )
+        .is_err()
+    );
+    assert!(!crate::download::mirror_cooling("mirror.nekoha.moe"));
+    assert!(
+        fetch(
+            "2 Artist - Title",
+            "mirror.hinamizawa.ai",
+            format!("{base}/broken/d/2")
+        )
+        .is_err()
+    );
+    assert!(crate::download::mirror_cooling("mirror.hinamizawa.ai"));
+    let _ = std::fs::remove_dir_all(&songs);
+}
