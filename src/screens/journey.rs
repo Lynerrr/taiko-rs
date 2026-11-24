@@ -700,16 +700,18 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     };
     let (item, is_ready, is_in_library, dl_progress, is_failed, status_str) = cur_cloned;
     let (role_label, role_col) = role_badge(&item.role);
-    let (entry_path, bg_path, od_raw, entry_level) =
-        match current_entry_for_preview(&state.journey, &state.library) {
-            Some(e) => (
-                is_ready.then(|| e.path.clone()),
-                crate::preview::background_path(e),
-                Some(e.meta.od),
-                e.meta.level,
-            ),
-            None => (None, None, None, None),
-        };
+    let preview_entry = current_entry_for_preview(&state.journey, &state.library);
+    let is_epic = state.journey_map_is_epic(&item, preview_entry);
+    let map_status = state.journey_map_status(&item, preview_entry);
+    let (entry_path, bg_path, od_raw, entry_level) = match preview_entry {
+        Some(e) => (
+            is_ready.then(|| e.path.clone()),
+            crate::preview::background_path(e),
+            Some(e.meta.od),
+            e.meta.level,
+        ),
+        None => (None, None, None, None),
+    };
     let rate = state.play_speed().0;
     let (pot_pp, live_stars) = match &entry_path {
         Some(path) => {
@@ -778,6 +780,55 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     let pad = 16.0;
     let inner_w = cw - pad * 2.0;
 
+    // Top-right star chip + map status badge (EPIC / RANKED / LOVED / GRAVEYARD / etc.).
+    // Drawn before the reason text so we know the exact room left on the top banner row.
+    // star_chip frames at y - 3, so y = cy + 14 aligns with the role pill and status badge along cy + 19.
+    let stars_opt = (shown_stars > 0.05).then_some(shown_stars as f32);
+    let star_w = style::star_chip(c, cx + cw - pad, cy + 14.0, 9.5, entry_level, stars_opt);
+    let status_w = if is_epic {
+        let pw = crate::epic::pill_width();
+        let ex = cx + cw - pad - star_w - 8.0 - pw;
+        crate::epic::pill(c, ex, cy + 12.5, 1.0, style::pulse());
+        pw
+    } else if let Some((label, col)) = map_status {
+        let bw = Canvas::text_width(7.0, label) + 12.0;
+        let bx = cx + cw - pad - star_w - 8.0 - bw;
+        c.round_rect(
+            [bx, cy + 11.5],
+            [bw, 15.0],
+            style::radius::SMALL,
+            rgba(col, 0.16),
+            rgba(col, 0.85),
+            1.0,
+        );
+        c.text_centered(bx + bw / 2.0, cy + 15.5, 7.0, rgba(col, 1.0), label);
+        bw
+    } else {
+        let source_text = if state.journey.local_mode {
+            tr!("library", "ライブラリ", "библиотека")
+        } else {
+            "osu!"
+        };
+        let src_w = Canvas::text_width(7.0, source_text) + 10.0;
+        let src_x = cx + cw - pad - star_w - 8.0 - src_w;
+        c.round_rect(
+            [src_x, cy + 12.0],
+            [src_w, 14.0],
+            style::radius::SMALL,
+            rgba(0x161926, 0.78),
+            rgba(style::tone::EDGE, 0.8),
+            1.0,
+        );
+        c.text_centered(
+            src_x + src_w / 2.0,
+            cy + 15.5,
+            7.0,
+            rgba(0xb8b8d0, 1.0),
+            source_text,
+        );
+        src_w
+    };
+
     // Top-left role pill + difficulty delta + reason.
     let delta = if shown_stars > 0.1 && state.journey.comfort_stars > 0.1 {
         Some(shown_stars - state.journey.comfort_stars)
@@ -805,42 +856,14 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         &pill_text,
     );
     let reason_x = cx + pad + pill_w + 10.0;
-    let reason_room = (cw - pad * 2.0 - pill_w - 130.0).max(40.0);
+    let right_used = star_w + 8.0 + status_w + 12.0;
+    let reason_room = (cw - pad * 2.0 - pill_w - 10.0 - right_used).max(40.0);
     c.text(
         reason_x,
         cy + 15.5,
         7.5,
         rgba(0xd4d4e8, 0.92),
         &Canvas::fit(7.5, reason_room, &item.reason),
-    );
-
-    // Top-right star chip + source badge (star_chip frames at y - 3, so y = cy + 14 aligns with
-    // the role pill and source badge along cy + 19).
-    let stars_opt = (shown_stars > 0.05).then_some(shown_stars as f32);
-    let star_w = style::star_chip(c, cx + cw - pad, cy + 14.0, 9.5, entry_level, stars_opt);
-    let source_text = if item.custom_id.is_some() {
-        tr!("taiko.rs custom", "taiko.rsカスタム", "кастомка")
-    } else if state.journey.local_mode {
-        tr!("library", "ライブラリ", "библиотека")
-    } else {
-        "osu!"
-    };
-    let src_w = Canvas::text_width(7.0, source_text) + 10.0;
-    let src_x = cx + cw - pad - star_w - 8.0 - src_w;
-    c.round_rect(
-        [src_x, cy + 12.0],
-        [src_w, 14.0],
-        style::radius::SMALL,
-        rgba(0x161926, 0.78),
-        rgba(style::tone::EDGE, 0.8),
-        1.0,
-    );
-    c.text_centered(
-        src_x + src_w / 2.0,
-        cy + 15.5,
-        7.0,
-        rgba(0xb8b8d0, 1.0),
-        source_text,
     );
 
     // Bottom of banner: title, artist, difficulty + mapper.

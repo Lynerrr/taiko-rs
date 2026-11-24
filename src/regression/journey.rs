@@ -1175,3 +1175,62 @@ fn journey_level_picker_offers_auto_and_esc_returns_to_active_card() {
         "picking Auto must query the server with target_stars=None (saw {targets:?})"
     );
 }
+
+#[test]
+fn journey_card_displays_map_status_badge() {
+    let songs = Songs::new("journey-status", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    // Graveyard osu! map shows GRAVEYARD rather than just "osu!".
+    let mut gy_item = item("Graveyard Pick", "Oni", 9101);
+    gy_item.stars = 6.5;
+    s.set_status.insert(9101, Some("graveyard".into()));
+    journey_with(
+        &mut s,
+        vec![QueuedMap {
+            item: gy_item.clone(),
+            source: MapSource::Pending,
+        }],
+    );
+    now += Duration::from_millis(300);
+    let c = frame(&mut s, now);
+    assert!(
+        c.texts.iter().any(|(_, t)| t == "GRAVEYARD"),
+        "Journey card must display GRAVEYARD badge, saw: {:?}",
+        c.texts.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>()
+    );
+
+    // Ranked map shows RANKED.
+    s.set_status.insert(9101, Some("ranked".into()));
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert!(c.texts.iter().any(|(_, t)| t == "RANKED"));
+
+    // Custom approved vs unapproved custom map.
+    let mut custom_item = item("Custom Pick", "Oni", 9102);
+    custom_item.set_id = None;
+    custom_item.custom_id = Some(42);
+    s.journey.queue[0].item = custom_item;
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert!(c.texts.iter().any(|(_, t)| t == "CUSTOM"));
+
+    s.select.custom_approved.insert(42);
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert!(c.texts.iter().any(|(_, t)| t == "CUSTOM APPROVED"));
+
+    // Unknown osu! set triggers on-demand status lookup wait on Journey.
+    let unknown_item = item("Fresh Set", "Oni", 9199);
+    s.journey.queue[0].item = unknown_item;
+    s.status_wait = None;
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(
+        s.status_wait.map(|(set, _)| set),
+        Some(9199),
+        "Journey must queue on-demand status lookup for unknown sets"
+    );
+}
