@@ -3935,7 +3935,8 @@ fn a_set_only_a_cooling_mirror_has_is_not_marked_missing() {
     );
 }
 
-/// Unpacking failing on this computer (here the set's folder can't be made) is no fault of the
+/// Unpacking failing on this computer (here the folder it's unpacked into first can't be made)
+/// is no fault of the
 /// mirror that sent a good archive: it isn't put on cooldown, while one that sends something
 /// that isn't an archive is.
 #[test]
@@ -3951,8 +3952,9 @@ fn a_local_unpacking_failure_does_not_cool_down_the_mirror() {
     ));
     let _ = std::fs::remove_dir_all(&songs);
     std::fs::create_dir_all(&songs).unwrap();
-    // A file where the set's folder goes.
-    std::fs::write(songs.join("1 Artist - Title"), b"in the way").unwrap();
+    // A file where the set is unpacked first. Not where the set's folder itself goes: Windows
+    // renames the unpacked folder over a file there, so nothing would fail.
+    std::fs::write(songs.join("1 Artist - Title.partial"), b"in the way").unwrap();
     let (done, total) = (
         std::sync::atomic::AtomicU64::new(0),
         std::sync::atomic::AtomicU64::new(0),
