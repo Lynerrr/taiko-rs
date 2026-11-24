@@ -738,7 +738,7 @@ impl Browse {
             c,
             3,
             match (source, self.category) {
-                (Source::Osu, _) => "maps from catboy.best / osu.direct",
+                (Source::Osu, _) => "maps from public osu! mirrors",
                 (Source::Ours, Category::LovedHere) => {
                     "osu! maps loved on taiko.rs (they give pp here), from the mirrors"
                 }
