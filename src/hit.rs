@@ -114,6 +114,12 @@ pub enum Hit {
     JourneyLevelOpen,
     JourneyNext,
     JourneySave,
+    /// Journey's offer to a signed-out player: log in (false) or make an account (true).
+    JourneyLogin(bool),
+    /// Journey goes on offline, with the library only.
+    JourneyOffline,
+    /// Journey asks the server again now.
+    JourneyRetry,
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
     SettingStep(usize, i32),

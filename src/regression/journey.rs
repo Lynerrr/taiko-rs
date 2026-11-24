@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use super::harness::{self, *};
 use super::maps;
 use crate::config::{Config, JourneySaveTo};
-use crate::journey::{MAX_PREFETCH_AHEAD, MapSource, PastOutcome, QueuedMap};
+use crate::journey::{Gate, MAX_PREFETCH_AHEAD, MapSource, OUTAGE_GRACE, PastOutcome, QueuedMap};
 use crate::*;
 
 #[test]
@@ -26,8 +26,16 @@ fn journey_cold_start_pick_level_and_skip() {
     now += Duration::from_millis(50);
     frame(&mut s, now);
     assert!(s.journey.active);
-    assert!(s.journey.needs_level);
     assert_eq!(s.scene.screen().map(|sc| sc.name()), Some("Journey"));
+
+    // Signed out, Journey asks first; on offline, it asks for a level.
+    assert_eq!(s.journey.gate, Some(Gate::SignedOut));
+    s.click(hit::Hit::JourneyOffline, None);
+    now += Duration::from_millis(50);
+    frame(&mut s, now);
+    assert_eq!(s.journey.gate, None);
+    assert_eq!(s.journey.offline, Some(Gate::SignedOut));
+    assert!(s.journey.needs_level);
 
     // Pick comfort level (4 - 5*).
     s.click(hit::Hit::JourneyLevel(2), None);
@@ -67,6 +75,8 @@ fn pause_quit_during_journey_returns_to_journey_and_exit_clears_state() {
     ready(&mut s, &mut now);
 
     s.open_journey();
+    // Signed out: on offline, with the library.
+    s.journey_go_offline();
     s.journey_pick_level(2);
     assert!(s.journey.active);
     s.journey.in_play = true;
@@ -92,6 +102,8 @@ fn results_screen_next_and_save_on_like_in_journey() {
     ready(&mut s, &mut now);
 
     s.open_journey();
+    // Signed out: on offline, with the library.
+    s.journey_go_offline();
     s.journey_pick_level(2);
     let step_before = s.journey.step;
 
@@ -340,6 +352,7 @@ fn copy(e: &library::Entry) -> library::Entry {
 /// Journey up with `queue` as its whole queue, asking for nothing more.
 fn journey_with(s: &mut State, queue: Vec<QueuedMap>) {
     s.open_journey();
+    s.journey.gate = None;
     s.journey.needs_level = false;
     s.journey.local_mode = true;
     s.journey.pool_exhausted = true;
@@ -500,6 +513,8 @@ fn song_select_by_its_tab_ends_journey() {
     let mut now = Instant::now();
     ready(&mut s, &mut now);
     s.open_journey();
+    // Signed out: on offline, with the library.
+    s.journey_go_offline();
     s.journey_pick_level(2);
     s.journey.in_play = true;
     s.show_songs();
@@ -516,6 +531,8 @@ fn journey_mods_button_opens_the_mod_select_over_journey() {
     let mut now = Instant::now();
     ready(&mut s, &mut now);
     s.open_journey();
+    // Signed out: on offline, with the library.
+    s.journey_go_offline();
     s.journey_pick_level(2);
     now += Duration::from_millis(16);
     frame(&mut s, now);
@@ -581,6 +598,8 @@ fn escape_from_journey_results_goes_on_to_the_next_map() {
     let mut now = Instant::now();
     ready(&mut s, &mut now);
     s.open_journey();
+    // Signed out: on offline, with the library.
+    s.journey_go_offline();
     s.journey_pick_level(2);
     now += Duration::from_millis(16);
     frame(&mut s, now);
@@ -613,4 +632,213 @@ fn escape_from_journey_results_goes_on_to_the_next_map() {
     if let Some(next) = s.journey.current() {
         assert_ne!(next.item.md5, played);
     }
+}
+
+/// Signed out, Journey asks to log in, make an account or go on offline, and says what offline
+/// leaves out; it fetches nothing meanwhile.
+#[test]
+fn signed_out_journey_offers_log_in_register_or_offline() {
+    let songs = Songs::new("journey-signed-out", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    s.click(hit::Hit::JourneyButton, None);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(s.journey.gate, Some(Gate::SignedOut));
+    assert!(s.journey.queue.is_empty() && s.journey.fetching.is_none());
+    for offer in [
+        hit::Hit::JourneyLogin(false),
+        hit::Hit::JourneyLogin(true),
+        hit::Hit::JourneyOffline,
+    ] {
+        assert!(s.hits.iter().any(|h| h.hit == offer), "{offer:?} is drawn");
+    }
+    assert!(!s.hits.iter().any(|h| h.hit == hit::Hit::ModsButton));
+
+    // Log in: the account form, Journey left.
+    s.click(hit::Hit::JourneyLogin(false), None);
+    frame(&mut s, now);
+    assert!(!s.journey.active);
+    assert_eq!(scene_name(&s), "MpMenu");
+    assert_eq!(s.mp_menu.form, multiplayer::Form::Main);
+
+    // Make an account: the sign-up form.
+    s.open_journey();
+    press(&mut s, KeyCode::KeyR, now);
+    assert!(!s.journey.active);
+    assert_eq!(s.mp_menu.form, multiplayer::Form::Register);
+
+    // Offline: Journey picks from the library.
+    s.open_journey();
+    press(&mut s, KeyCode::KeyO, now);
+    assert_eq!(s.journey.offline, Some(Gate::SignedOut));
+    s.click(hit::Hit::JourneyLevel(2), None);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert!(s.journey.local_mode);
+    assert!(!s.journey.queue.is_empty());
+}
+
+/// A server answering the first `fail` Journey requests with a dropped connection, then with
+/// an empty Journey batch.
+fn flaky_server(fail: usize) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            // Only Journey's requests: the account check and the social connection go here too.
+            if reader.read_line(&mut line).is_err() || !line.contains("ourney") {
+                continue;
+            }
+            if counted.fetch_add(1, Ordering::SeqCst) < fail {
+                drop(stream);
+                continue;
+            }
+            let reply = online::Reply::Journey(online::JourneyBatch {
+                needs_level: false,
+                comfort_stars: 5.0,
+                items: Vec::new(),
+                ..Default::default()
+            });
+            let mut w = stream;
+            let _ = writeln!(w, "{}", serde_json::to_string(&reply).unwrap());
+            let _ = w.flush();
+        }
+    });
+    (format!("127.0.0.1:{}", addr.port()), calls)
+}
+
+/// Frames until `done`, for at most 3 s.
+fn frames_until(s: &mut State, now: &mut Instant, done: impl Fn(&State) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && !done(s) {
+        *now += Duration::from_millis(16);
+        frame(s, *now);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The server dropping for a few seconds goes unnoticed; down for longer with nothing to play,
+/// Journey says so and offers to go on offline, keeps asking, and goes on by itself once the
+/// server answers.
+#[test]
+fn a_short_server_drop_is_retried_quietly_and_a_long_one_offers_offline() {
+    let (server, calls) = flaky_server(1);
+    let songs = Songs::new("journey-outage", &maps::all());
+    let mut cfg = harness::config();
+    cfg.online_server = server;
+    cfg.online_token = "tok".into();
+    let mut s = state_with(cfg, songs.entries());
+    s.journey_supported = true;
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    s.open_journey();
+    assert_eq!(s.journey.gate, None, "signed in: no offer");
+    frames_until(&mut s, &mut now, |s| s.journey.outage_since.is_some());
+    assert!(s.journey.outage_since.is_some(), "the first request failed");
+    // Within the grace: still online, nothing asked.
+    assert_eq!(s.journey.gate, None);
+    assert!(!s.journey.local_mode);
+
+    // Down for longer than the grace, with nothing to play: Journey asks.
+    s.journey.outage_since = Some(Instant::now() - OUTAGE_GRACE - Duration::from_secs(1));
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert_eq!(s.journey.gate, Some(Gate::ServerDown));
+    assert!(s.hits.iter().any(|h| h.hit == hit::Hit::JourneyOffline));
+
+    // Retry: the server answers now, and Journey goes on online.
+    s.click(hit::Hit::JourneyRetry, None);
+    frames_until(&mut s, &mut now, |s| s.journey.gate.is_none());
+    assert_eq!(s.journey.gate, None);
+    assert_eq!(s.journey.outage_since, None);
+    assert!(!s.journey.local_mode);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+/// Offline for an outage, Journey plays the library and asks the server again now and then:
+/// once it answers, Journey is back online.
+#[test]
+fn offline_for_an_outage_goes_back_online_when_the_server_answers() {
+    let (server, _calls) = flaky_server(0);
+    let songs = Songs::new("journey-outage-offline", &maps::all());
+    let mut cfg = harness::config();
+    cfg.online_server = server;
+    cfg.online_token = "tok".into();
+    let mut s = state_with(cfg, songs.entries());
+    s.journey_supported = true;
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    s.open_journey();
+    s.journey.fetching = None;
+    s.journey.gate = Some(Gate::ServerDown);
+    press(&mut s, KeyCode::KeyO, now);
+    assert_eq!(s.journey.offline, Some(Gate::ServerDown));
+    assert!(s.journey.local_mode);
+    s.journey_pick_level(2);
+    assert!(!s.journey.queue.is_empty(), "the library's maps");
+
+    // The next probe is due: the server answers.
+    s.journey.next_probe = Some(Instant::now());
+    frames_until(&mut s, &mut now, |s| s.journey.offline.is_none());
+    assert_eq!(s.journey.offline, None);
+    assert!(!s.journey.local_mode, "back online");
+    assert!(
+        !s.journey.queue.is_empty(),
+        "the library's maps stay queued"
+    );
+}
+
+/// Back goes to the map before, by key or its button; moving on past it again sends no second
+/// skip and keeps how it ended.
+#[test]
+fn journey_goes_back_and_forward_through_its_maps() {
+    let songs = Songs::new("journey-back", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    let queue = (0..3)
+        .map(|i| QueuedMap {
+            item: item(&format!("Song {i}"), "Oni", 7000 + i),
+            source: MapSource::Local(s.library[i as usize].path.clone()),
+        })
+        .collect();
+    journey_with(&mut s, queue);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let title = |s: &State| s.journey.current().unwrap().item.title.clone();
+    assert!(
+        !s.hits
+            .iter()
+            .any(|h| h.hit == hit::Hit::Key(KeyCode::ArrowLeft)),
+        "nothing to go back to yet"
+    );
+
+    press(&mut s, KeyCode::ArrowRight, now);
+    press(&mut s, KeyCode::Tab, now);
+    assert_eq!(title(&s), "Song 2");
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+
+    // The Back button, then the key.
+    s.click(hit::Hit::Key(KeyCode::ArrowLeft), None);
+    assert_eq!(title(&s), "Song 1");
+    press(&mut s, KeyCode::ArrowLeft, now);
+    assert_eq!(title(&s), "Song 0");
+    assert_eq!(s.journey.step, 0);
+    assert!(s.journey.history.is_empty());
+
+    // Forward again through the same maps.
+    press(&mut s, KeyCode::ArrowRight, now);
+    assert_eq!(title(&s), "Song 1");
+    assert_eq!(s.journey.history.len(), 1);
+    assert_eq!(s.journey.history[0].outcome, PastOutcome::Skipped);
 }
