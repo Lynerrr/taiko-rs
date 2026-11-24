@@ -11447,8 +11447,26 @@ impl State {
         }
     }
 
+    /// Whether a chart is currently open in the map editor (directly, or paused behind a test
+    /// play): social jumps (watching a friend, joining a lobby or another mapping session) must
+    /// not silently discard it.
+    pub(crate) fn has_open_editor(&self) -> bool {
+        self.scene.screen_is::<MapEditor>() || self.editor_back.is_some()
+    }
+
     /// Joins online lobby `room` (from a friend's row, or an admin's list).
     fn join_room(&mut self, room: u32, title: String) {
+        if self.has_open_editor() {
+            self.toast(
+                tr!(
+                    "leave the editor first",
+                    "先にエディタを閉じてください",
+                    "сначала закройте редактор"
+                )
+                .into(),
+            );
+            return;
+        }
         if self.mp.is_some() || self.mp_connecting.is_some() {
             self.toast("leave your lobby first".into());
             return;
@@ -11667,6 +11685,17 @@ impl State {
 
     /// Starts watching a friend's solo plays.
     fn watch(&mut self, name: String) {
+        if self.has_open_editor() {
+            self.toast(
+                tr!(
+                    "leave the editor first",
+                    "先にエディタを閉じてください",
+                    "сначала закройте редактор"
+                )
+                .into(),
+            );
+            return;
+        }
         if self.mp.is_some() {
             self.toast("leave your lobby first".into());
             return;
@@ -14306,6 +14335,48 @@ impl State {
         }
     }
 
+    /// The local folder holding website custom set `id`, if installed (in `custom_folder`, or on
+    /// disk in `custom_dir` even before the server lookup finishes).
+    fn custom_folder_of(&self, id: u32) -> Option<PathBuf> {
+        self.library
+            .iter()
+            .find_map(|e| {
+                let dir = e.path.parent()?;
+                (self.select.custom_folder.get(dir) == Some(&id)).then(|| dir.to_path_buf())
+            })
+            .or_else(|| {
+                self.select
+                    .custom_folder
+                    .iter()
+                    .find_map(|(dir, &sid)| (sid == id).then(|| dir.clone()))
+            })
+            .or_else(|| custom::store::folder_of(&self.custom_dir, id))
+    }
+
+    /// Starts downloading the set `lobby_lookup` found for a friend's play or a lobby.
+    ///
+    /// If the player already has that website custom set locally, it is only updated automatically
+    /// when it is an unmodified website install inside `custom_dir` (which keeps the previous
+    /// version in `CustomVersions`). Copies in osu!'s Songs folder or sets with local edits may be
+    /// unsent mapping work and are never overwritten behind the player's back.
+    fn finish_lobby_lookup(&mut self, set: download::SetInfo) {
+        if set.custom.is_some()
+            && let Some(folder) = self.custom_folder_of(set.id)
+        {
+            if folder.starts_with(&self.custom_dir) && !custom::store::has_local_edits(&folder) {
+                self.select.custom_folder.insert(folder.clone(), set.id);
+                self.start_custom_update(set, folder);
+            } else {
+                self.toast(format!(
+                    "{} - {}: keeping your local copy (update it from song select if you want the website's version)",
+                    set.artist, set.title
+                ));
+            }
+            return;
+        }
+        self.start_download(set);
+    }
+
     /// Where a lobby map's set folder must be for the host to send it: the Songs folders,
     /// taiko.rs's own custom maps folder or an opened .osz's, never the folder a loose map happens
     /// to be in (any player in the lobby can ask for it).
@@ -14897,17 +14968,7 @@ impl State {
             }
         }
         match self.lobby_lookup.poll() {
-            Some(Ok(set)) => {
-                // The lobby's version isn't the one here: the website's goes over it.
-                if set.custom.is_some()
-                    && self.select.custom_folder.values().any(|&id| id == set.id)
-                {
-                    self.select
-                        .custom_updates
-                        .insert(set.id, ui::SetUpdate::Available);
-                }
-                self.start_download(set)
-            }
+            Some(Ok(set)) => self.finish_lobby_lookup(set),
             Some(Err(e)) => self.toast(format!("download failed: {e}")),
             None => {}
         }

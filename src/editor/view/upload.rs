@@ -291,7 +291,7 @@ impl View {
         let folder = self.ed.path.parent().map(Path::to_path_buf);
         self.upload.checks = checks(&self.ed.path, !self.ed.modified(), self.account.is_some());
         self.upload.id = folder.as_deref().and_then(custom::sidecar_id);
-        if !self.upload.sending() && self.upload.done.as_ref().is_some_and(Result::is_err) {
+        if !self.upload.sending() {
             self.upload.done = None;
         }
         if let Some(folder) = &folder {
@@ -919,5 +919,30 @@ mod tests {
         g.groups[0].show.reveal = 0.5;
         assert_eq!(tko_checks(&g).len(), 2);
         assert!(tko_checks(&Gimmick::default()).is_empty());
+    }
+
+    #[test]
+    fn reopening_upload_after_a_previous_send_clears_stale_success_and_allows_updating() {
+        let dir = folder("reopen");
+        let path = dir.join("a [Oni].osu");
+        std::fs::write(&path, map(20, None)).unwrap();
+        std::fs::write(dir.join("audio.mp3"), [1u8; 8]).unwrap();
+        std::fs::write(dir.join("bg.png"), [1u8; 8]).unwrap();
+        let mut view = View::open(path, 0).unwrap();
+        view.account = Some("token".into());
+        view.upload.done = Some(Ok(custom::page_url(18)));
+        view.upload.version = 2;
+        assert!(!view.upload.can_send());
+
+        view.open_upload();
+        assert!(
+            view.upload.done.is_none(),
+            "stale success from an earlier upload must be cleared on reopen"
+        );
+        assert!(
+            view.upload.can_send(),
+            "mapper can send the updated version without closing the editor"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

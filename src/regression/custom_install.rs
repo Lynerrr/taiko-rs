@@ -260,3 +260,92 @@ fn the_websites_archive_opened_in_the_game_goes_into_the_custom_folder() {
     assert_eq!(m.id, Some(9103));
     assert_eq!(m.origin, Some(custom::Origin::Site));
 }
+
+#[test]
+fn lobby_lookup_never_overwrites_a_custom_set_in_osus_songs_folder() {
+    let c = Custom::new("watch-songs");
+    let osu_songs = c.root.join("osu-Songs");
+    let folder = osu_songs.join("c9104 Regression - Swap");
+    std::fs::create_dir_all(&folder).unwrap();
+    let local_chart = folder.join("Regression - Swap [Oni].osu");
+    let edited = format!("{}\n// unsent mapper work\n", chart("Oni"));
+    std::fs::write(&local_chart, &edited).unwrap();
+    std::fs::write(folder.join(custom::SIDECAR), "{\"id\": 9104}\n").unwrap();
+
+    let (mut s, mut now) = client(&c);
+    s.songs_dir = osu_songs;
+    let meta = crate::beatmap::read_meta_file(&local_chart).unwrap();
+    s.library.push(Entry::new(local_chart.clone(), meta));
+    s.select.custom_folder.insert(folder.clone(), 9104);
+
+    // Spectating a friend playing the published v1 resolves to custom set 9104.
+    let v1 = website_set(9104, 1);
+    previewed(&v1, &["Oni"]);
+    s.lobby_lookup = Job::spawn(move || Ok(v1));
+    assert!(wait_for(&mut s, &mut now, |s| !s.lobby_lookup.is_busy()));
+
+    assert!(
+        s.downloads.is_empty(),
+        "must not start an update over osu!'s Songs folder"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&local_chart).unwrap(),
+        edited,
+        "local edits in osu!'s Songs folder stay untouched"
+    );
+    assert!(
+        toast(&s).contains("keeping your local copy"),
+        "{}",
+        toast(&s)
+    );
+}
+
+#[test]
+fn lobby_lookup_protects_locally_edited_custom_sets_but_updates_clean_site_installs() {
+    let c = Custom::new("watch-custom");
+    let (mut s, mut now) = client(&c);
+
+    // 1. A website install in Custom whose chart the mapper edited locally must not be overwritten.
+    let v1 = website_set(9105, 1);
+    previewed(&v1, &["Oni"]);
+    s.start_download(v1);
+    finish(&mut s, &mut now);
+    let folder = c.dir.join("c9105 Regression - Swap");
+    let chart_path = folder.join("Regression - Swap [Oni].osu");
+    let edited = format!(
+        "{}\n// local edits\n",
+        std::fs::read_to_string(&chart_path).unwrap()
+    );
+    std::fs::write(&chart_path, &edited).unwrap();
+
+    let v2 = website_set(9105, 2);
+    previewed(&v2, &["Inner Oni"]);
+    s.lobby_lookup = Job::spawn(move || Ok(v2));
+    assert!(wait_for(&mut s, &mut now, |s| !s.lobby_lookup.is_busy()));
+    assert!(s.downloads.is_empty(), "edited copy is not overwritten");
+    assert_eq!(std::fs::read_to_string(&chart_path).unwrap(), edited);
+    assert!(
+        toast(&s).contains("keeping your local copy"),
+        "{}",
+        toast(&s)
+    );
+
+    // 2. An unmodified website install in Custom still updates cleanly when a friend plays v2.
+    let clean_v1 = website_set(9106, 1);
+    previewed(&clean_v1, &["Oni"]);
+    s.start_download(clean_v1);
+    finish(&mut s, &mut now);
+    let clean_folder = c.dir.join("c9106 Regression - Swap");
+    assert_eq!(listed(&s, &clean_folder), ["Oni"]);
+
+    let clean_v2 = website_set(9106, 2);
+    previewed(&clean_v2, &["Inner Oni"]);
+    s.lobby_lookup = Job::spawn(move || Ok(clean_v2));
+    assert!(wait_for(&mut s, &mut now, |s| !s.lobby_lookup.is_busy()));
+    finish(&mut s, &mut now);
+    assert_eq!(listed(&s, &clean_folder), ["Inner Oni"]);
+    assert_eq!(
+        custom::store::previous_version(&c.dir, &clean_folder).map(|(_, m)| m.version),
+        Some(Some(1))
+    );
+}

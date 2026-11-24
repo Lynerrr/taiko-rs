@@ -3229,6 +3229,8 @@ fn extract_adding(
     if dest.is_dir() {
         if tmp.join(crate::custom::SIDECAR).is_file() {
             set_aside_older_charts(&tmp, dest);
+        } else {
+            set_aside_overwritten_charts(&tmp, dest);
         }
         merge(&tmp, dest).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_dir_all(&tmp);
@@ -3238,34 +3240,71 @@ fn extract_adding(
     Ok(())
 }
 
-/// The suffix a chart put aside by [`set_aside_older_charts`] gets: song select no longer
-/// lists it, and renaming it back brings it back.
+/// The suffix a chart put aside by [`set_aside_older_charts`] or [`set_aside_overwritten_charts`]
+/// gets: song select no longer lists it, and renaming it back brings it back.
 pub const SET_ASIDE: &str = "replaced";
 
-/// The website's archive of a custom set (unpacked in `new`) is the whole set: the charts in
-/// its folder `folder` the archive doesn't have are an older version's (a difficulty renamed
-/// since, or dropped), and would be listed next to the new ones, wearing the set's marks. They
-/// are renamed to `<file>.replaced`, not deleted: a mapper's unsent difficulty can come back.
+fn is_chart_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("osu") || e.eq_ignore_ascii_case("tko"))
+}
+
+fn put_aside(path: &Path) {
+    let mut aside = path.as_os_str().to_owned();
+    aside.push(".");
+    aside.push(SET_ASIDE);
+    let aside = PathBuf::from(aside);
+    let _ = std::fs::remove_file(&aside);
+    if let Err(e) = std::fs::rename(path, &aside) {
+        eprintln!("{}: not put aside ({e})", path.display());
+    }
+}
+
+fn same_contents(a: &Path, b: &Path) -> bool {
+    match (std::fs::read(a), std::fs::read(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// The website's archive of a custom set (unpacked in `new`) is the whole set: charts in `folder`
+/// that the archive doesn't have (renamed or dropped difficulties), and charts whose contents
+/// differ from what the archive is about to write over them, are renamed to `<file>.replaced`
+/// instead of deleted or overwritten in place: a mapper's unsent work can always come back.
 fn set_aside_older_charts(new: &Path, folder: &Path) {
     let Ok(dir) = std::fs::read_dir(folder) else {
         return;
     };
     for entry in dir.flatten() {
         let path = entry.path();
-        let chart = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("osu") || e.eq_ignore_ascii_case("tko"));
-        if !chart || !path.is_file() || new.join(entry.file_name()).exists() {
+        if !is_chart_file(&path) {
             continue;
         }
-        let mut aside = path.clone().into_os_string();
-        aside.push(".");
-        aside.push(SET_ASIDE);
-        let aside = PathBuf::from(aside);
-        let _ = std::fs::remove_file(&aside);
-        if let Err(e) = std::fs::rename(&path, &aside) {
-            eprintln!("{}: not put aside ({e})", path.display());
+        let incoming = new.join(entry.file_name());
+        if !incoming.exists() || !same_contents(&path, &incoming) {
+            put_aside(&path);
+        }
+    }
+}
+
+/// Before merging a non-custom archive (`new`) into an existing folder `folder`, any chart file
+/// that would be overwritten with different contents is renamed to `<file>.replaced` first, so
+/// local edits are never silently lost. Charts not in `new` (a player's own difficulties) stay.
+fn set_aside_overwritten_charts(new: &Path, folder: &Path) {
+    let Ok(dir) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in dir.flatten() {
+        let path = entry.path();
+        if !is_chart_file(&path) {
+            continue;
+        }
+        let incoming = new.join(entry.file_name());
+        if incoming.is_file() && !same_contents(&path, &incoming) {
+            put_aside(&path);
         }
     }
 }
@@ -3927,8 +3966,46 @@ mod tests {
         extract(&archive, &dest).unwrap();
         assert_eq!(std::fs::read(dest.join("map [Oni].osu")).unwrap(), b"new");
         assert_eq!(
+            std::fs::read(dest.join(format!("map [Oni].osu.{SET_ASIDE}"))).unwrap(),
+            b"old",
+            "the overwritten chart is preserved as .replaced"
+        );
+        assert_eq!(
             std::fs::read(dest.join("map [My Inner Oni].osu")).unwrap(),
             b"mine"
+        );
+        assert!(
+            !dest
+                .join(format!("map [My Inner Oni].osu.{SET_ASIDE}"))
+                .exists()
+        );
+        // Re-extracting an identical file does not leave a spurious .replaced backup.
+        let _ = std::fs::remove_file(dest.join(format!("map [Oni].osu.{SET_ASIDE}")));
+        extract(&archive, &dest).unwrap();
+        assert!(!dest.join(format!("map [Oni].osu.{SET_ASIDE}")).exists());
+
+        // A custom archive (with SIDECAR) also preserves same-named charts whose bytes differ.
+        let custom_archive = root.join("custom-same-name.rsz");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&custom_archive).unwrap());
+            zip.start_file("map [Oni].osu", stored).unwrap();
+            zip.write_all(b"site-v1").unwrap();
+            zip.start_file(crate::custom::SIDECAR, stored).unwrap();
+            zip.write_all(b"{\"id\": 42}\n").unwrap();
+            zip.finish().unwrap();
+        }
+        let custom_dest = root.join("42 Artist - Title");
+        std::fs::create_dir_all(&custom_dest).unwrap();
+        std::fs::write(custom_dest.join("map [Oni].osu"), b"my-local-edits").unwrap();
+        extract(&custom_archive, &custom_dest).unwrap();
+        assert_eq!(
+            std::fs::read(custom_dest.join("map [Oni].osu")).unwrap(),
+            b"site-v1"
+        );
+        assert_eq!(
+            std::fs::read(custom_dest.join(format!("map [Oni].osu.{SET_ASIDE}"))).unwrap(),
+            b"my-local-edits",
+            "same-named local chart is kept as .replaced instead of destroyed"
         );
         assert!(!dest.with_extension("partial").exists());
         let maps = archive_maps(&archive).unwrap();
