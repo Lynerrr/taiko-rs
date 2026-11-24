@@ -1338,3 +1338,57 @@ fn journey_rate_keys_and_stepper_change_speed_without_resetting_queue() {
         "custom rate stepper must hide while DT overrides speed"
     );
 }
+
+/// The Discord status shows a Journey session: the Journey screen, and loading and the results
+/// of a map played from it, while a map played from song select stays as it was.
+#[test]
+fn discord_status_shows_journey_maps_as_journey() {
+    let songs = Songs::new("journey-presence", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let (details, state) = s.presence_text().unwrap();
+    assert_eq!(state, "On a Journey");
+    let cur = s.journey.current().unwrap();
+    assert!(details.contains(&cur.item.title), "{details}");
+
+    // Loading a map from Journey.
+    s.journey.in_play = true;
+    s.start_loading_from(0, None);
+    assert_eq!(scene_name(&s), "Loading");
+    assert!(
+        s.journey.active && s.journey.in_play,
+        "active={} in_play={}",
+        s.journey.active,
+        s.journey.in_play
+    );
+    let (details, state) = s.presence_text().unwrap();
+    assert_eq!(details, s.library[0].label());
+    assert_eq!(state, "Journey: Loading...");
+
+    // Its results.
+    let results = |s: &State| {
+        let mut r = ui::Results::new(
+            s.library[0].label(),
+            game::Stats::default(),
+            game::Windows::new(5.0),
+        );
+        r.shown = now;
+        crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None)
+    };
+    s.scene = results(&s);
+    assert_eq!(
+        s.presence_text().unwrap().1,
+        "Journey: Looking at the results"
+    );
+
+    // The same results outside Journey say nothing of it.
+    s.journey.in_play = false;
+    s.scene = results(&s);
+    assert_eq!(s.presence_text().unwrap().1, "Looking at the results");
+}

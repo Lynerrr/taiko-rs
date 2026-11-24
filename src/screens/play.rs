@@ -5,6 +5,16 @@ use super::results::{ResultsScreen, map_gives_pp, results_job, results_title, su
 use super::screen::{Frame, Key, Screen};
 use crate::*;
 
+/// The Discord status line for a map played from Journey says so: loading, playing and its
+/// results read "Journey: ..." so friends see the session, not a lone map.
+pub(crate) fn journey_presence(state: &State, doing: String) -> String {
+    if state.playing_journey() {
+        tr!("Journey: {doing}", "ジャーニー: {doing}", "Journey: {doing}"; [] [doing])
+    } else {
+        doing
+    }
+}
+
 /// A pause button's label, `held` or going.
 pub(crate) fn pause_label(held: bool) -> &'static str {
     if held {
@@ -295,6 +305,11 @@ impl Screen for PlayScreen {
                 String::new()
             };
             tr!("Playing{stars}{rate}", "プレイ中{stars}{rate}", "Играет{stars}{rate}"; [] [stars, rate])
+        };
+        let doing = if game.replay_of().is_none() {
+            journey_presence(state, doing)
+        } else {
+            doing
         };
         Some((label, doing))
     }

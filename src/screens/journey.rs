@@ -29,7 +29,14 @@ impl Screen for JourneyScreen {
             .journey
             .current()
             .map(|q| format!("{} - {} [{}]", q.item.artist, q.item.title, q.item.version))
-            .unwrap_or_else(|| "Choosing next map".into());
+            .unwrap_or_else(|| {
+                tr!(
+                    "Choosing the next map",
+                    "次の譜面を選んでいます",
+                    "Выбирает следующую карту"
+                )
+                .into()
+            });
         Some((
             map,
             tr!("On a Journey", "ジャーニー中", "В режиме Journey").into(),
