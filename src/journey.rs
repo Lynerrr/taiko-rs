@@ -125,6 +125,8 @@ pub struct Journey {
     pub needs_level: bool,
     pub level_cursor: usize,
     pub comfort_stars: f64,
+    /// Last server-estimated comfort stars (when running without a manual target override).
+    pub auto_comfort_stars: Option<f64>,
     pub comfort_scroll: Option<f64>,
     pub player_profile: Option<JourneyProfile>,
     pub target_stars: Option<f64>,
@@ -185,6 +187,7 @@ impl Journey {
             needs_level: false,
             level_cursor: 2,
             comfort_stars: 4.5,
+            auto_comfort_stars: None,
             comfort_scroll: None,
             player_profile: None,
             target_stars: None,
@@ -313,6 +316,23 @@ impl Journey {
         self.fetching = None;
         self.target_stars = Some(clamped);
         self.comfort_stars = clamped;
+        self.needs_level = false;
+        self.pool_exhausted = false;
+        self.retry_after = None;
+        self.error = None;
+        self.shown_at = Instant::now();
+    }
+
+    /// Switches the session back to server-estimated comfort stars and rebuilds the queue.
+    pub fn set_auto_level(&mut self) {
+        self.cancel_downloads();
+        self.queue.clear();
+        self.revisited.clear();
+        self.fetching = None;
+        self.target_stars = None;
+        if let Some(auto) = self.auto_comfort_stars {
+            self.comfort_stars = auto;
+        }
         self.needs_level = false;
         self.pool_exhausted = false;
         self.retry_after = None;
@@ -464,9 +484,14 @@ impl Journey {
                     self.pool_exhausted = false;
                     self.next_probe = None;
                 }
-                self.needs_level = batch.needs_level;
+                if batch.needs_level {
+                    self.needs_level = true;
+                }
                 if batch.comfort_stars > 0.2 {
                     self.comfort_stars = batch.comfort_stars;
+                    if !batch.needs_level && self.target_stars.is_none() {
+                        self.auto_comfort_stars = Some(batch.comfort_stars);
+                    }
                 }
                 if batch.comfort_scroll.is_some() {
                     self.comfort_scroll = batch.comfort_scroll;

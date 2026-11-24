@@ -7356,7 +7356,9 @@ impl State {
             }
             return CursorIcon::Pointer;
         }
-        if !self.on_menu() && self.in_song_select() {
+        if !self.on_menu()
+            && (self.in_song_select() || self.scene.screen_is::<screens::journey::JourneyScreen>())
+        {
             if let Some((last, at)) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
                 if last.elapsed() >= Duration::from_millis(33) {
@@ -10628,6 +10630,83 @@ impl State {
         })
     }
 
+    /// Whether a Journey map is marked EPIC on the online server.
+    pub(crate) fn journey_map_is_epic(
+        &self,
+        item: &online::JourneyItem,
+        entry: Option<&Entry>,
+    ) -> bool {
+        if let Some(id) = item.custom_id {
+            return self.select.server_epic.custom.contains(&id);
+        }
+        if let Some(e) = entry {
+            return self.select.is_epic(e);
+        }
+        item.set_id
+            .and_then(|set| self.select.server_epic.sets.get(&set))
+            .is_some_and(|v| ui::covers(v, &item.version))
+    }
+
+    /// The status badge `(label, colour)` for a Journey map, matching Song Select's status rules
+    /// (`RANKED`, `LOVED`, `GRAVEYARD`, `CUSTOM APPROVED`, etc.) even before download completes.
+    pub(crate) fn journey_map_status(
+        &self,
+        item: &online::JourneyItem,
+        entry: Option<&Entry>,
+    ) -> Option<(&'static str, u32)> {
+        if let Some(e) = entry {
+            if e.is_tja() {
+                return Some(("TJA", ui::TJA_COLOUR));
+            }
+            if let Some(i) = self.library.iter().position(|x| x.path == e.path) {
+                return self.map_status(i);
+            }
+        }
+        if let Some(id) = item.custom_id {
+            return Some(if self.select.custom_approved.contains(&id) {
+                ("CUSTOM APPROVED", 0x4fd1b0)
+            } else {
+                ("CUSTOM", 0x9b6cff)
+            });
+        }
+        let Some(set) = item.set_id.or_else(|| entry.and_then(Entry::set_id)) else {
+            return Some(("NOT SUBMITTED", 0x8a8aa0));
+        };
+        if self
+            .select
+            .server_loved
+            .get(&set)
+            .is_some_and(|v| ui::covers(v, &item.version))
+        {
+            return Some(("LOVED HERE", 0xff66aa));
+        }
+        if let Some(Some(s)) = self.set_status.get(&set) {
+            let known = match s.as_str() {
+                "ranked" => Some(("RANKED", 0xb3ff66)),
+                "approved" => Some(("APPROVED", 0xb3ff66)),
+                "qualified" => Some(("QUALIFIED", 0x66ccff)),
+                "loved" => Some(("LOVED", 0xff66aa)),
+                "pending" => Some(("PENDING", 0xffd966)),
+                "wip" => Some(("WIP", 0xffd966)),
+                "graveyard" => Some(("GRAVEYARD", 0x8a8aa0)),
+                _ => None,
+            };
+            if known.is_some() {
+                return known;
+            }
+        }
+        let path = &entry?.path;
+        Some(match self.db_status.get(path)? {
+            4 => ("RANKED", 0xb3ff66),
+            5 => ("APPROVED", 0xb3ff66),
+            6 => ("QUALIFIED", 0x66ccff),
+            7 => ("LOVED", 0xff66aa),
+            2 => ("PENDING", 0xffd966),
+            1 => ("NOT SUBMITTED", 0x8a8aa0),
+            _ => return None,
+        })
+    }
+
     fn status_cache_due(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.status_saved) >= Duration::from_secs(15)
     }
@@ -10800,9 +10879,27 @@ impl State {
             self.status_resorted = now;
             self.select.refilter(&self.library);
         }
-        let selected = self.select.selected().and_then(|i| self.library.get(i));
-        let map = selected.and_then(|e| e.meta.beatmap_id);
-        let set = selected.and_then(Entry::set_id);
+        let (set, map) = if self.scene.screen_is::<screens::journey::JourneyScreen>() {
+            let cur = self.journey.current();
+            let entry = cur.and_then(|q| match &q.source {
+                crate::journey::MapSource::Local(p) | crate::journey::MapSource::Saved(p) => {
+                    self.library.iter().find(|e| &e.path == p)
+                }
+                crate::journey::MapSource::Cached { entry, .. } => Some(entry.as_ref()),
+                _ => None,
+            });
+            let set = cur
+                .and_then(|q| q.item.set_id)
+                .or_else(|| entry.and_then(Entry::set_id));
+            let map = entry.and_then(|e| e.meta.beatmap_id);
+            (set, map)
+        } else {
+            let selected = self.select.selected().and_then(|i| self.library.get(i));
+            (
+                selected.and_then(Entry::set_id),
+                selected.and_then(|e| e.meta.beatmap_id),
+            )
+        };
         let wants_verdict = |s: &u32| {
             map.is_some()
                 && !self.pp_verdict.contains_key(s)
@@ -13274,6 +13371,8 @@ impl State {
                 self.select
                     .sort_selected_set(&self.library, &|i| stars.get(i, rate));
                 self.select.remember_selection(&self.library);
+            } else if in_journey {
+                self.poll_set_status(now);
             }
             let has_bg = self.preview.has_background;
             self.bg_brightness = match self.scene {
@@ -15790,6 +15889,7 @@ impl State {
             Hit::ModsButton => self.open_mod_select(),
             Hit::JourneyButton => self.open_journey(),
             Hit::JourneyLevel(i) => self.journey_pick_level(i),
+            Hit::JourneyLevelAuto => self.journey_pick_auto(),
             Hit::JourneyLevelStep(d) => self.journey_step_level(d),
             Hit::JourneyLevelOpen => self.journey_open_level_picker(),
             Hit::JourneySave => self.journey_save_current(),

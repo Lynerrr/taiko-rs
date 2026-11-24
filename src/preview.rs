@@ -115,7 +115,6 @@ pub(crate) struct LoadedStats {
     pub kats: u32,
     pub rolls: u32,
     pub swells: u32,
-    pub potential: Option<[f64; 3]>,
 }
 
 /// Decoded music for the selected set: all of it, or (until the full decode arrives) the part
@@ -1228,7 +1227,6 @@ impl Preview {
             kats: d.kats as u32,
             rolls: d.rolls as u32,
             swells: d.swells as u32,
-            potential: self.potential,
         })
     }
 
@@ -1243,17 +1241,14 @@ impl Preview {
         scroll_speed: f64,
     ) -> bool {
         let [lx, ly, lw, lh] = lane_rect;
-        c.round_rect(
-            [lx, ly],
-            [lw, lh],
-            crate::style::radius::CONTROL,
-            rgba(0x0b0d15, 0.92),
-            rgba(crate::style::tone::EDGE, 0.55),
-            1.0,
-        );
+        // Modern style.rs tile matching song select's split preview.
+        let r = crate::style::radius::SMALL;
+        crate::style::tile(c, lane_rect, r, crate::style::Surface::Raised);
         let ready = self.map.is_some();
         if ready {
-            self.draw_timeline(c, e, graph_rect, None);
+            // Always use the modern bare pixel timeline with no overflow hint below the card,
+            // regardless of what `self.bare` was left at from another screen.
+            self.draw_timeline_styled(c, e, graph_rect, None, false, false);
             self.drawn_in(c);
         } else {
             self.graph_rect = None;
@@ -1262,25 +1257,33 @@ impl Preview {
             return false;
         };
         let (band_top, band_h) = game::lane_only();
-        let k = ((lh * 0.64) / band_h.max(1.0)).clamp(0.25, 0.72);
+        let k = ((lh * SPLIT_LANE_FILL) / band_h.max(1.0)).clamp(0.25, 0.72);
+        // Corridor across the tile so the notes run along a framed track rather than empty room.
+        let corr_h = band_h * k;
+        let corr_y = crate::render::snap_to_grid(ly + (lh - corr_h) / 2.0);
+        let fill = crate::style::surface_fill(crate::style::Surface::Lifted);
+        c.rect(lx, corr_y, lw, corr_h, fill);
+        let edge = rgba(crate::style::tone::EDGE, 1.0);
+        let line = crate::style::tone::LINE;
+        c.rect(lx, corr_y, lw, line, edge);
+        c.rect(lx, corr_y + corr_h - line, lw, line, edge);
+
         let full_w = c.width;
         let start = c.shapes.len();
-        let notes_end = bare_notes_end(lx + lw);
-        c.width = ((notes_end - lx) / k).max(200.0);
+        let drum_w = crate::game::PANEL_W * k;
+        let bx = lx - if self.hide_drum { drum_w } else { 0.0 };
+        let notes_end = lx + lw;
+        c.width = ((notes_end - bx) / k).max(200.0);
         game.view.kiai_effects = self.kiai_effects;
         crate::game::with_look(preview_look(crate::game::playfield_look()), || {
             game.draw_playfield(c, scroll_speed)
         });
-        let centre = (lh - band_h * k) / 2.0;
+        let centre = (lh - corr_h) / 2.0;
         let oy = ly - band_top * k + centre;
-        c.transform_since(start, [0.0, 0.0], k, lx, oy);
+        c.transform_since(start, [0.0, 0.0], k, bx, oy);
         c.width = full_w;
-        bare_lane_end(&mut c.shapes, start, lx, lx, notes_end, lh);
-        let end = c.shapes.len();
-        if end > start {
-            c.clips
-                .push((start..end, [lx + 1.0, ly + 1.0, lw - 2.0, lh - 2.0]));
-        }
+        bare_lane_end(&mut c.shapes, start, bx, lx, notes_end, corr_h);
+        c.clip_since(start, lx + 1.0, ly + 1.0, lw - 2.0, lh - 2.0);
         true
     }
 
@@ -1290,6 +1293,18 @@ impl Preview {
         e: &Entry,
         rect: [f32; 4],
         button: Option<(&str, &str)>,
+    ) {
+        self.draw_timeline_styled(c, e, rect, button, !self.bare, !self.bare);
+    }
+
+    fn draw_timeline_styled(
+        &mut self,
+        c: &mut Canvas,
+        e: &Entry,
+        rect: [f32; 4],
+        button: Option<(&str, &str)>,
+        boxed: bool,
+        hint: bool,
     ) {
         self.graph_rect = None;
         self.play_rect = None;
@@ -1306,20 +1321,22 @@ impl Preview {
             self.pending_seek.unwrap_or(game.time()),
             e.meta.preview_time,
             marker,
-            !self.bare,
+            boxed,
         );
         self.graph_rect = Some(rect);
         self.drawn_in(c);
-        // Bare, there's no hint: the timeline is plain enough.
-        let hint = !self.bare;
-        self.play_rect = draw_play_button(
-            c,
-            rect[0] + rect[2] / 2.0,
-            rect[1] + rect[3] + 17.0,
-            marker,
-            button,
-            hint,
-        );
+        self.play_rect = if button.is_some() || hint {
+            draw_play_button(
+                c,
+                rect[0] + rect[2] / 2.0,
+                rect[1] + rect[3] + 17.0,
+                marker,
+                button,
+                hint,
+            )
+        } else {
+            None
+        };
         // The same slack as `time_at`.
         c.hit(
             rect[0] - 2.0,
