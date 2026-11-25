@@ -9,6 +9,8 @@
 Linux (Wayland) · Windows · macOS · Android
 
 [![Download](https://img.shields.io/badge/download-latest-EB452C?style=flat-square)](https://github.com/Lynerrr/taiko-rs/releases/tag/latest)
+[![Website](https://img.shields.io/badge/website-rstaiko.auneu.space-2B2D42?style=flat-square)](https://rstaiko.auneu.space)
+[![Discord](https://img.shields.io/badge/discord-join-5865F2?style=flat-square)](https://discord.gg/6JUm46p9Zz)
 [![Build](https://img.shields.io/github/actions/workflow/status/Lynerrr/taiko-rs/release.yml?branch=worktree-taiko-client&style=flat-square&label=build)](https://github.com/Lynerrr/taiko-rs/actions/workflows/release.yml)
 [![Downloads](https://img.shields.io/github/downloads/Lynerrr/taiko-rs/total?style=flat-square&color=438EAD)](https://github.com/Lynerrr/taiko-rs/releases)
 ![Rust](https://img.shields.io/badge/made%20with-Rust-FCB806?style=flat-square)
@@ -35,9 +37,14 @@ Settings → Updates.
 - **Smooth and accurate.** The game clock is steered by the audio device, keys are timestamped on
   their own thread, and everything is drawn in one GPU call. Audio goes out through PipeWire,
   WASAPI or AAudio with low latency.
-- **Your osu! library.** Taiko maps and osu!standard converts, lazer's conversion and hit windows,
-  osu!'s star ratings, and collections and play history from osu!stable.
-- **74 mods.** osu!'s and lazer's mods, plus taiko.rs's own: scroll and SV experiments, visual
+- **Your osu! & `.tja` library.** Taiko maps, osu!standard converts, and `.tja` charts, with
+  lazer's conversion and hit windows, osu!'s star ratings, and collections and play history from
+  osu!stable.
+- **Journey mode.** An endless map feed tailored to your skill — from warm-up charts up to
+  high-BPM challenges, without mashing F2.
+- **Collaborative map editor.** Map one set together in real time with live cursors, collab parts,
+  guest difficulties and modding notes right in the editor.
+- **78 mods.** osu!'s and lazer's mods, plus taiko.rs's own: scroll and SV experiments, visual
   tricks, lanes bent into rails, a moving playfield, and Multiverse's eight playfields, each with
   its own note colours, shapes, speed and mods. **C** in the mod select customizes the mods that have
   settings (Multiverse, Shapeshift) while they are on. Press **R**
