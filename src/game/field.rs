@@ -50,6 +50,8 @@ pub struct View {
     pub banner: Option<String>,
     /// A test play from the map editor: leaving goes back to it.
     pub test_play: bool,
+    /// A play in a Journey marathon: its pause menu skips the map or ends the marathon.
+    pub marathon: bool,
     /// Roulette: where each 4-bar section starts (map ms), its speed, and the velocity its
     /// marker scrolls at.
     pub(super) sections: Vec<(f64, f64, f64)>,
@@ -99,6 +101,7 @@ impl View {
             watched: false,
             banner: None,
             test_play: false,
+            marathon: false,
             sections,
             decoys,
             decoy_flows,

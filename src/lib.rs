@@ -1820,6 +1820,19 @@ impl State {
     }
 
     fn start_loading_from(&mut self, entry: usize, from: Option<f64>) {
+        let (rx, label) = self.begin_load(entry, from, false);
+        self.scene = Loading::scene(rx, label, entry, from);
+    }
+
+    /// Starts loading `entry` to play it (from map time `from`): the job, and the label to show
+    /// meanwhile. `keep_audio`: what plays now plays on until the map starts (a marathon's
+    /// last map under its wheel).
+    pub(crate) fn begin_load(
+        &mut self,
+        entry: usize,
+        from: Option<f64>,
+        keep_audio: bool,
+    ) -> (Job<Loaded>, String) {
         self.pending_replay = None;
         // A test play from the editor plays the editor's map and isn't counted.
         let test = self.editor_back.as_ref().map(|v| v.ed.chart.to_text());
@@ -1829,7 +1842,11 @@ impl State {
                 ura::report(&self.cfg, ura::Event::Again);
             }
         }
-        self.stop_audio();
+        if keep_audio {
+            self.preview.invalidate_audio();
+        } else {
+            self.stop_audio();
+        }
         self.preview.show_background_for(&self.library[entry]);
         let mut label = self.library[entry].label();
         audiolog::line(&format!(
@@ -1852,7 +1869,7 @@ impl State {
             }
             None => self.load_with(entry, self.cfg.rate, self.cfg.mods),
         };
-        self.scene = Loading::scene(rx, label, entry, from);
+        (rx, label)
     }
 
     /// Plays the map again, like starting it except that the intro is skipped.
@@ -2149,6 +2166,10 @@ impl State {
         }
         // Leaving a map played from Journey (Pause -> Quit, Esc, fail, load error) returns
         // to the Journey screen instead of kicking the player back to Song Select / Main Menu.
+        if self.journey.active && self.journey.marathon.is_some() {
+            self.marathon_end();
+            return;
+        }
         if self.journey.active && self.journey.in_play {
             self.journey.in_play = false;
             self.journey.playing_cached = None;
@@ -6346,6 +6367,7 @@ impl State {
             self.restart_map();
             return;
         }
+        let marathon = self.journey.marathon.is_some() && self.journey.in_play;
         let (Some((entry, from)), Some(game)) = (self.scene.song_play(), self.play.as_deref_mut())
         else {
             return;
@@ -6366,6 +6388,10 @@ impl State {
             KeyCode::Escape => game.resume_after(delay, sound(&self.audio)),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
                 0 => game.resume_after(delay, sound(&self.audio)),
+                // A marathon's pause: skip this map, retry, settings, end the marathon.
+                1 if marathon => self.marathon_skip_map(),
+                2 if marathon => self.retry_now(entry, from),
+                4 if marathon => self.marathon_end(),
                 1 => {
                     let (e, f) = (entry, from);
                     self.retry_now(e, f);
@@ -15963,6 +15989,8 @@ impl State {
             Hit::JourneyLogin(register) => self.journey_login(register),
             Hit::JourneyOffline => self.journey_go_offline(),
             Hit::JourneyRetry => self.journey_retry(),
+            Hit::JourneySettings => self.journey_toggle_settings(),
+            Hit::JourneySetting(row, dir) => self.journey_change_setting(row, dir),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
                 self.toggle_mod(mods::ALL[i]);

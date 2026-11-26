@@ -121,6 +121,10 @@ pub enum Hit {
     JourneyOffline,
     /// Journey asks the server again now.
     JourneyRetry,
+    /// Journey's gear: opens or closes its settings panel.
+    JourneySettings,
+    /// A row of Journey's settings panel (`journey::SETTINGS_ROWS`) stepped back (-1) or on (+1).
+    JourneySetting(usize, i32),
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
     SettingStep(usize, i32),

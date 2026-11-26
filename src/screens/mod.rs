@@ -11,6 +11,7 @@ pub(crate) mod layout_edit;
 pub(crate) mod loading;
 pub(crate) mod lobby;
 pub(crate) mod map_editor;
+pub(crate) mod marathon;
 pub(crate) mod menu;
 pub(crate) mod mp_menu;
 pub(crate) mod mp_play;

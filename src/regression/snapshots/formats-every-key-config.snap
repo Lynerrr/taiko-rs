@@ -238,6 +238,16 @@ songs_folder = /games/osu/Songs
 journey_save_to = osu
 # automatically save a Journey map to the library when you like it
 journey_save_on_like = false
+# the kind of maps Journey picks: any, streams, long-streams, tech or sv
+journey_focus = long-streams
+# Journey plays it easy: maps below your level, no stretch maps
+journey_chill = true
+# how Journey goes from map to map: off, nonstop (results count down) or marathon (no results)
+journey_flow = marathon
+# a Journey marathon ends on the first failed map
+journey_hardcore = true
+# maps Journey starts by itself start just before their first note
+journey_skip_intro = false
 # folder of TJA charts (empty = Tja beside Custom)
 tja_folder = /games/tja
 # extra song folders / .osz files, one per line

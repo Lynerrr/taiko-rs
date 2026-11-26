@@ -259,6 +259,9 @@ pub(crate) struct Out {
 }
 
 /// A song played on its own (by the player, a replay or autoplay); its game is `State::play`.
+/// How long a marathon lets a song go on past its last note.
+const MARATHON_OUTRO_MS: f64 = 1000.0;
+
 pub(crate) struct PlayScreen {
     pub(crate) entry: usize,
     /// Where the play started (map time), None: from the start.
@@ -421,13 +424,37 @@ impl Screen for PlayScreen {
             }
             KeyCode::Backquote => state.hold_retry(),
             KeyCode::KeyR if state.modifiers_ctrl => state.restart_map(),
+            // Journey's Non-stop: no to the map up next.
+            KeyCode::KeyN
+                if state.playing_journey()
+                    && state.cfg.journey_flow != crate::config::JourneyFlow::Off =>
+            {
+                state.journey_skip_upcoming()
+            }
             _ => {}
         }
     }
 
     fn draw(&mut self, state: &mut State, canvas: &mut Canvas, frame: &Frame) -> Option<Scene> {
         let area_backdrop = state.area_backdrop(state.bg_brightness > 0.0);
+        let marathon = state.journey.marathon.is_some() && state.journey.in_play;
+        if marathon {
+            // The maps after this one keep coming in (and downloading) meanwhile.
+            state.journey_tick_quiet();
+        }
         let game = state.play.as_deref_mut()?;
+        // A marathon doesn't wait out a song past its last note.
+        if marathon
+            && game.replay().is_none()
+            && game.can_skip_outro()
+            && game
+                .map()
+                .notes
+                .last()
+                .is_some_and(|n| game.time() >= n.end_time.max(n.time) + MARATHON_OUTRO_MS)
+        {
+            game.skip_outro();
+        }
         let done = game.update(frame.now, sound(&state.audio), state.play_offset);
         if (state.auto || game.mods().has(mods::Mod::Autoplay)) && game.replay().is_none() {
             game.set_autoplay_style(state.cfg.autoplay);
@@ -480,6 +507,16 @@ impl Screen for PlayScreen {
             },
         );
         game.draw_hud_with_intro(canvas, state.touch_used || mobile::active());
+        if state.journey.active
+            && state.journey.in_play
+            && state.cfg.journey_flow != crate::config::JourneyFlow::Off
+            && game.replay().is_none()
+            && game.paused().is_none()
+            && crate::screens::journey::up_next_due(&game.map().notes, game.time())
+        {
+            let next = state.journey.queue.get(1).map(|q| &q.item);
+            crate::screens::journey::draw_up_next(canvas, next);
+        }
         if game.replay().is_none()
             && game.paused().is_none()
             && !frame.hidden.has(hud::Part::Spectators)
@@ -512,7 +549,7 @@ impl Screen for PlayScreen {
         if done && state.editor_back.is_some() {
             // A test play has no results: back to the editor.
             self.out.test_over = true;
-        } else if done && fail_restarts(&state.cfg, game) {
+        } else if done && !marathon && fail_restarts(&state.cfg, game) {
             // Failed plays aren't kept anyway: straight into the next try.
             self.out.fail_restart = true;
         } else if done {
@@ -726,6 +763,27 @@ impl Screen for PlayScreen {
                     }
                     Err(e) => eprintln!("couldn't save the replay: {e}"),
                 }
+            }
+            // A marathon has no results: on to the next map.
+            if marathon {
+                let st = game.stats();
+                let item = state.journey.current().map(|q| q.item.clone());
+                let play = item.map(|item| crate::journey::MarathonPlay {
+                    item,
+                    outcome: if failed {
+                        crate::journey::MarathonOutcome::Failed
+                    } else {
+                        crate::journey::MarathonOutcome::Passed
+                    },
+                    accuracy: st.accuracy(),
+                    max_combo: st.max_combo,
+                    misses: st.miss,
+                    pp: results.pp,
+                    vote_on: results.vote_on.clone(),
+                    vote: None,
+                    cached: state.journey.playing_cached.clone(),
+                });
+                return Some(state.marathon_after_play(play, failed));
             }
             return Some(ResultsScreen::scene(
                 Box::new(results),

@@ -233,6 +233,12 @@ pub enum Request {
         step: u32,
         #[serde(default)]
         count: u8,
+        /// The kind of maps asked for: `streams`, `long-streams`, `tech` or `sv` (none: any).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        focus: Option<String>,
+        /// An easy session: maps below the player's level and no stretch maps.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        chill: bool,
     },
     /// Records that the player skipped a map in the Journey feed (`Reply::Counted`).
     JourneySkip {
