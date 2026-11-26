@@ -1695,6 +1695,56 @@ fn nonstop_journey_goes_from_results_straight_into_the_next_map() {
     assert_eq!(scene_name(&s), "Results");
 }
 
+/// Non-stop: a medal earned on the results holds the countdown until it has gone, so the next
+/// map doesn't start under it.
+#[test]
+fn nonstop_waits_for_a_medal_on_the_results() {
+    let songs = Songs::new("journey-nonstop-medal", &maps::all());
+    let mut cfg = harness::config();
+    cfg.journey_flow = JourneyFlow::Nonstop;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let step = s.journey.step;
+
+    s.journey.in_play = true;
+    let mut r = ui::Results::new(
+        s.library[0].label(),
+        game::Stats::default(),
+        game::Windows::new(5.0),
+    );
+    r.shown = now - Duration::from_secs(1);
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
+    s.unlock.add(vec![online::MedalNote::default()]);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert!(s.unlock.showing(), "the medal is up on the results");
+
+    // Long past the countdown: still the results while the medal is up.
+    now += Duration::from_secs(10);
+    frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Results");
+    assert_eq!(s.journey.step, step);
+
+    // The medal gone, the countdown starts over from its whole length.
+    s.unlock = Default::default();
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Results");
+    assert!(c.texts.iter().any(|(_, t)| t.starts_with("Next map in 5")));
+    now += Duration::from_secs(4);
+    frame(&mut s, now);
+    assert_eq!(s.journey.step, step, "not a moment early");
+    now += Duration::from_secs(1);
+    frame(&mut s, now);
+    assert_eq!(s.journey.step, step + 1);
+}
+
 /// Non-stop shows what's up next near a map's end and in its breaks, and N in a play says no
 /// to it: it leaves the queue and the server hears of it as a skip.
 #[test]
