@@ -2445,3 +2445,44 @@ fn a_journey_load_failure_clears_skip_intro_and_returns_to_journey() {
     s.journey.stop();
     assert!(!s.journey.skip_intro_next);
 }
+
+#[test]
+fn marathon_outage_continue_offline_keeps_server_probe_and_fills_queue_on_map_one() {
+    let songs = Songs::new("marathon-outage-offline", &maps::all());
+    let mut cfg = harness::config();
+    cfg.online_token = "tok".into();
+    cfg.journey_flow = JourneyFlow::Marathon;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    // Simulate an online Marathon whose first fetch failed past OUTAGE_GRACE (step == 0, Auto).
+    s.journey.reset();
+    s.journey.fetching = None;
+    s.journey.outage_since = Some(now - crate::journey::OUTAGE_GRACE - Duration::from_secs(1));
+    s.journey.error = Some("server unreachable".into());
+    s.journey.retry_after = Some(now + Duration::from_secs(30));
+    s.marathon_start();
+
+    let _ = frame(&mut s, now);
+    assert!(
+        s.hits.iter().any(|h| h.hit == hit::Hit::JourneyOffline),
+        "outage card offers Continue offline"
+    );
+
+    s.click(hit::Hit::JourneyOffline, None);
+    assert_eq!(
+        s.journey.offline,
+        Some(crate::journey::Gate::ServerDown),
+        "must record ServerDown so recovery probing stays enabled"
+    );
+    assert!(s.journey.next_probe.is_some());
+    assert!(
+        !s.journey.needs_level,
+        "Marathon must not stall on needs_level when going offline on map 1"
+    );
+    assert!(
+        !s.journey.queue.is_empty(),
+        "local library maps should fill the Marathon queue immediately"
+    );
+}

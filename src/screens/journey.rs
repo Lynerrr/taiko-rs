@@ -2563,7 +2563,15 @@ impl State {
     pub(crate) fn journey_tick_quiet(&mut self) {
         self.journey.poll_fetch(&self.library);
         self.journey.poll_downloads();
-        if self.journey.can_refill(Instant::now()) {
+        let now = Instant::now();
+        if !self.cfg.online_token.is_empty() && self.journey.probe_due(now) {
+            self.journey.probe(
+                self.cfg.online_server.clone(),
+                self.cfg.online_token.clone(),
+                self.cfg.scroll_speed,
+            );
+        }
+        if self.journey.can_refill(now) {
             self.journey_refill();
         }
     }
@@ -2585,7 +2593,10 @@ impl State {
             );
         } else {
             self.journey.local_mode = true;
-            if self.journey.target_stars.is_none() && self.journey.step == 0 {
+            if self.journey.target_stars.is_none()
+                && self.journey.step == 0
+                && self.journey.marathon.is_none()
+            {
                 self.journey.needs_level = true;
                 return;
             }
@@ -2829,10 +2840,18 @@ impl State {
 
     /// Goes on with the library only, for the reason Journey asked.
     pub(crate) fn journey_go_offline(&mut self) {
-        let reason = self.journey.gate.unwrap_or(Gate::SignedOut);
+        let reason = self.journey.gate.unwrap_or_else(|| {
+            if !self.cfg.online_token.is_empty() && self.journey.outage_since.is_some() {
+                Gate::ServerDown
+            } else {
+                Gate::SignedOut
+            }
+        });
         self.journey.go_offline(reason);
         self.journey_refill();
-        self.journey_preview_current();
+        if self.journey.marathon.is_none() {
+            self.journey_preview_current();
+        }
     }
 
     /// Asks the server again now instead of after the backoff.
