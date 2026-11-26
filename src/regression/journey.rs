@@ -2486,3 +2486,72 @@ fn marathon_outage_continue_offline_keeps_server_probe_and_fills_queue_on_map_on
         "local library maps should fill the Marathon queue immediately"
     );
 }
+
+#[test]
+fn background_journey_save_updates_library_and_marathon_last_when_polled() {
+    let songs = Songs::new("journey-bg-save", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    let cache_dir = config::journey_cache_dir().join(format!(
+        "9901 Bg Artist - Bg Title ({})",
+        std::process::id()
+    ));
+    let dest_dir = std::env::temp_dir().join(format!("taiko-bg-save-dest-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let _ = std::fs::remove_dir_all(&dest_dir);
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::create_dir_all(&dest_dir).unwrap();
+    let src_osu = s.library[0].path.clone();
+    std::fs::copy(&src_osu, cache_dir.join("chart.osu")).unwrap();
+    std::fs::copy(&src_osu, dest_dir.join("chart.osu")).unwrap();
+    let cached_entry = crate::journey::scan_single_folder(&cache_dir)
+        .into_iter()
+        .next()
+        .unwrap();
+    let dest_entries = crate::journey::scan_single_folder(&dest_dir);
+
+    s.append_maps(vec![cached_entry]);
+    let mut m = crate::journey::Marathon::new(now);
+    m.record(crate::journey::MarathonPlay {
+        item: item("Bg Title", "Oni", 9901),
+        outcome: crate::journey::MarathonOutcome::Passed,
+        accuracy: 1.0,
+        max_combo: 10,
+        misses: 0,
+        pp: None,
+        vote_on: None,
+        vote: None,
+        cached: Some((cache_dir.clone(), item("Bg Title", "Oni", 9901))),
+        saved: false,
+    });
+    s.journey.marathon = Some(m);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    s.journey.saving.push(crate::journey::SaveJob {
+        folder: cache_dir.clone(),
+        toast_on_success: false,
+        rx,
+    });
+    assert!(
+        s.journey.protected_cache_folders().contains(&cache_dir),
+        "in-flight save folder must be protected from cache pruning"
+    );
+
+    tx.send(Ok((dest_dir.clone(), dest_entries))).unwrap();
+    s.journey_poll_saves();
+
+    assert!(s.journey.saving.is_empty());
+    assert!(
+        s.library
+            .iter()
+            .any(|e| e.path == dest_dir.join("chart.osu"))
+    );
+    let last = s.journey.marathon.as_ref().unwrap().last.as_ref().unwrap();
+    assert!(last.cached.is_none());
+    assert!(last.saved);
+
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let _ = std::fs::remove_dir_all(&dest_dir);
+}
