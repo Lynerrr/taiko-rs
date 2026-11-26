@@ -62,6 +62,9 @@ fn words(item: Item) -> &'static str {
         Item::SelectInfo => {
             "songs maps count device gpu status info песни карты число видеокарта инфо"
         }
+        Item::OriginalNames => {
+            "unicode romanised romaji original language title artist names metadata cyrillic japanese оригинал язык названия исполнитель латиница кириллица японский"
+        }
         Item::HalfResolution => "performance weak gpu lag производительность слабый лаги",
         Item::Renderer => {
             "renderer graphics api vulkan directx dx12 opengl metal crash gpu рендер графика вулкан директ вылет краш видеокарта"

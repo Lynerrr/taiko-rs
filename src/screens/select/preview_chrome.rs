@@ -91,7 +91,7 @@ pub(crate) fn draw_preview_chrome(
         };
         settings::back_button(c, 0.0, back, hit::Hit::Key(KeyCode::Escape));
         let pill = crate::style::map_pill(c, c.width, 14.0, 12.0, e.meta.level, stars);
-        let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
+        let title = e.shown_label();
         let room = c.width - 112.0 - pill - 12.0;
         c.text(
             112.0,
@@ -173,7 +173,7 @@ pub(crate) fn draw_preview_chrome(
         c.text_right(title_end, 24.0, 7.0, rgba(0x8a8aa0, 1.0), hints);
         title_end -= Canvas::text_width(7.0, hints) + 12.0;
     }
-    let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
+    let title = e.shown_label();
     c.text(
         title_x,
         22.0,

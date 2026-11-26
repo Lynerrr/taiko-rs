@@ -43,9 +43,9 @@ impl State {
             .iter()
             .any(|p| !maps.iter().any(|&i| self.library[i].file() == p));
         let name = if set {
-            format!("{} - {}", e.meta.artist, e.meta.title)
+            format!("{} - {}", e.artist(), e.title())
         } else {
-            format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version)
+            e.shown_label()
         };
         self.select.deleting = Some(DeleteAsk {
             // An osu! set is its folder; a TJA song may share its folder with others.

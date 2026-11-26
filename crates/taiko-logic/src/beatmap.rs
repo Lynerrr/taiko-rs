@@ -140,8 +140,16 @@ impl ControlPoint {
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Meta {
+    /// The title and artist in plain Latin letters (`Title`, `Artist`): what lists, sorts and
+    /// names the map, whatever the setting for names in their own script.
     pub title: String,
     pub artist: String,
+    /// The title and artist in their own script (`TitleUnicode`, `ArtistUnicode`), shown
+    /// instead with Settings > Original names. None when the map has none apart from the
+    /// romanised ones (most maps), and in a cache from before they were kept: boxed, so a big
+    /// library's entries stay as small as they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original: Option<Box<OriginalNames>>,
     pub creator: String,
     pub version: String,
     pub audio_file: String,
@@ -212,7 +220,26 @@ pub struct Beatmap {
     pub branching: Option<std::sync::Arc<crate::branch::Branching>>,
 }
 
+/// A map's title and artist in their own script (`Meta::original`); either may be empty.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OriginalNames {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artist: String,
+}
+
 impl Meta {
+    /// The title in its own script, empty when the map has none.
+    pub fn original_title(&self) -> &str {
+        self.original.as_ref().map_or("", |o| &o.title)
+    }
+
+    /// The artist in its own script, empty when the map has none.
+    pub fn original_artist(&self) -> &str {
+        self.original.as_ref().map_or("", |o| &o.artist)
+    }
+
     pub fn is_playable(&self) -> bool {
         self.mode == 0 || self.mode == 1
     }
@@ -304,11 +331,6 @@ pub fn map_hash(bytes: &[u8]) -> u64 {
 fn kv(line: &str) -> Option<(&str, &str)> {
     let (k, v) = line.split_once(':')?;
     Some((k.trim(), v.trim()))
-}
-
-/// Has Cyrillic and nothing the font can't draw.
-fn cyrillic(s: &str) -> bool {
-    s.chars().any(|c| matches!(c, 'А'..='я' | 'Ё' | 'ё')) && s.chars().all(crate::font::drawable)
 }
 
 fn num<T: std::str::FromStr>(s: Option<&str>) -> Option<T> {
@@ -563,9 +585,13 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
             "Metadata" => match kv(trimmed) {
                 Some(("Title", v)) => meta.title = v.to_owned(),
                 Some(("Artist", v)) => meta.artist = v.to_owned(),
-                // Russian titles in Cyrillic (the font draws it); other scripts stay romanised.
-                Some(("TitleUnicode", v)) if cyrillic(v) => meta.title = v.to_owned(),
-                Some(("ArtistUnicode", v)) if cyrillic(v) => meta.artist = v.to_owned(),
+                // Kept only when it differs from the romanised one (`Title` comes first).
+                Some(("TitleUnicode", v)) if !v.is_empty() && v != meta.title => {
+                    meta.original.get_or_insert_default().title = v.to_owned();
+                }
+                Some(("ArtistUnicode", v)) if !v.is_empty() && v != meta.artist => {
+                    meta.original.get_or_insert_default().artist = v.to_owned();
+                }
                 Some(("Creator", v)) => meta.creator = v.to_owned(),
                 Some(("Version", v)) => meta.version = v.to_owned(),
                 Some(("Tags", v)) => {
@@ -636,17 +662,21 @@ fn build_control_points(raw: &mut [RawTimingPoint]) -> Vec<ControlPoint> {
     raw.sort_by(|a, b| a.time.total_cmp(&b.time));
     let mut out: Vec<ControlPoint> = Vec::with_capacity(raw.len());
     let first_red = raw.iter().find(|p| p.uninherited);
-    let mut beat_length = first_red.map(|p| p.beat_length).unwrap_or(500.0);
+    let mut beat_length = first_red
+        .map(|p| p.beat_length)
+        .filter(|b| b.is_finite() && *b > 0.0)
+        .map(|b| b.clamp(6.0, 60000.0))
+        .unwrap_or(500.0);
     let mut beat_origin = first_red.map(|p| p.time).unwrap_or(0.0);
     let mut sv;
     for p in raw.iter() {
         if p.uninherited {
-            if p.beat_length > 0.0 {
+            if p.beat_length.is_finite() && p.beat_length > 0.0 {
                 beat_length = p.beat_length.clamp(6.0, 60000.0);
             }
             beat_origin = p.time;
             sv = 1.0;
-        } else if p.beat_length < 0.0 {
+        } else if p.beat_length.is_finite() && p.beat_length < 0.0 {
             sv = (-100.0 / p.beat_length).clamp(0.1, 10.0);
         } else {
             sv = 1.0;
@@ -943,20 +973,20 @@ fn hit(time: f64, sound: u32, velocity: f64) -> Note {
 fn scroll_table(raw: &[RawTimingPoint], sm: f64) -> Vec<(f64, f64)> {
     let mut beat = raw
         .iter()
-        .find(|p| p.uninherited && p.beat_length > 0.0)
+        .find(|p| p.uninherited && p.beat_length.is_finite() && p.beat_length > 0.0)
         .map_or(500.0, |p| p.beat_length);
     let mut out = Vec::new();
     for group in raw.chunk_by(|a, b| a.time.floor() == b.time.floor()) {
         let mut sv = 1.0;
         for p in group {
-            if p.uninherited && p.beat_length > 0.0 {
+            if p.uninherited && p.beat_length.is_finite() && p.beat_length > 0.0 {
                 beat = p.beat_length;
             }
         }
         if let Some(p) = group
             .iter()
             .rev()
-            .find(|p| !p.uninherited && p.beat_length < 0.0)
+            .find(|p| !p.uninherited && p.beat_length.is_finite() && p.beat_length < 0.0)
         {
             sv = -100.0 / p.beat_length;
         }
@@ -1045,6 +1075,24 @@ SliderTickRate:1
 
     pub(crate) fn parse(text: &str) -> Beatmap {
         parse_raw(text)
+    }
+
+    /// The romanised names and the ones in their own script are kept apart, whatever the script.
+    #[test]
+    fn names_in_their_own_script_are_kept_apart() {
+        let text = "osu file format v14\n\n[Metadata]\nTitle:Tolko zvyozdy\nTitleUnicode:только звёзды\nArtist:Kameria\nArtistUnicode:かめりあ\n";
+        let m = read_meta(text);
+        assert_eq!(
+            (m.title.as_str(), m.artist.as_str()),
+            ("Tolko zvyozdy", "Kameria")
+        );
+        assert_eq!(m.original_title(), "только звёзды");
+        assert_eq!(m.original_artist(), "かめりあ");
+        // The same as the romanised ones: nothing kept.
+        let plain = read_meta(
+            "[Metadata]\nTitle:Ghost\nTitleUnicode:Ghost\nArtist:Camellia\nArtistUnicode:Camellia\n",
+        );
+        assert!(plain.original.is_none());
     }
 
     #[test]
@@ -1448,5 +1496,22 @@ SliderTickRate:1
         let map = parse(MAP);
         assert_eq!(map.barlines[0].time, 0.0);
         assert_eq!(map.barlines[1].time, 2000.0);
+    }
+
+    #[test]
+    fn invalid_first_red_timing_point_falls_back_and_clamps() {
+        for bad in ["0", "-500", "NaN", "inf"] {
+            let text = format!(
+                "osu file format v14\n[General]\nMode: 1\n[TimingPoints]\n0,{bad},4,1,0,100,1,0\n[HitObjects]\n256,192,1000,1,0\n"
+            );
+            let map = parse(&text);
+            let cp = control_point_at(&map.control_points, 1000.0);
+            assert_eq!(cp.beat_length, 500.0, "bad={bad}");
+            assert!(map.notes[0].velocity.is_finite() && map.notes[0].velocity > 0.0);
+        }
+        // An inherited point before an extreme-BPM first red point still gets the clamped beat length.
+        let text = "osu file format v14\n[General]\nMode: 1\n[TimingPoints]\n0,-100,4,1,0,100,0,0\n1000,1,4,1,0,100,1,0\n[HitObjects]\n256,192,500,1,0\n";
+        let map = parse(text);
+        assert_eq!(control_point_at(&map.control_points, 0.0).beat_length, 6.0);
     }
 }

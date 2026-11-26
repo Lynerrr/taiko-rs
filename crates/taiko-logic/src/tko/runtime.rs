@@ -908,6 +908,15 @@ impl Runtime {
         self.dirty = true;
     }
 
+    /// Clears recorded play events so rewinding or seeking a replay does not retain or duplicate
+    /// earlier judgements.
+    pub fn reset(&mut self) {
+        if !self.events.is_empty() {
+            self.events.clear();
+            self.dirty = true;
+        }
+    }
+
     // ---- values ----
 
     fn last_event(&self, t: f64) -> Option<&PlayEvent> {

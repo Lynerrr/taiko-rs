@@ -10,8 +10,15 @@ pub(crate) struct ResultsScreen {
     pub(crate) results: Box<Results>,
     /// The map played.
     pub(crate) entry: usize,
+    /// The map is no longer in the library (e.g. Songs folder changed in Settings).
+    pub(crate) gone: bool,
     /// The map time the play started from (played again from there).
     pub(crate) from: Option<f64>,
+    /// Journey's Non-stop holds on these results: the player is reading them.
+    pub(crate) held: bool,
+    /// When Non-stop's countdown last started over: a medal being shown holds it, and it
+    /// counts from the medal's going (else from when the results came up).
+    pub(crate) count_from: Option<Instant>,
 }
 
 impl ResultsScreen {
@@ -19,7 +26,10 @@ impl ResultsScreen {
         Scene::Other(Box::new(ResultsScreen {
             results,
             entry,
+            gone: false,
             from,
+            held: false,
+            count_from: None,
         }))
     }
 }
@@ -35,6 +45,9 @@ impl Screen for ResultsScreen {
     }
 
     fn presence(&self, state: &State) -> Option<(String, String)> {
+        if self.gone {
+            return None;
+        }
         Some((
             state.library.get(self.entry)?.label(),
             super::play::journey_presence(
@@ -78,7 +91,7 @@ impl Screen for ResultsScreen {
     }
 
     fn map_entry(&self) -> Option<usize> {
-        Some(self.entry)
+        (!self.gone).then_some(self.entry)
     }
 
     fn key_place(&self) -> Option<keys::Place> {
@@ -116,6 +129,18 @@ impl Screen for ResultsScreen {
             return;
         }
         let results = &mut self.results;
+        // Non-stop: looking through the results holds them up; Esc stops the run of maps.
+        if !matches!(
+            code,
+            KeyCode::Enter
+                | KeyCode::NumpadEnter
+                | KeyCode::Escape
+                | KeyCode::KeyL
+                | KeyCode::KeyN
+                | KeyCode::KeyS
+        ) {
+            self.held = true;
+        }
         match code {
             KeyCode::ArrowDown
             | KeyCode::ArrowUp
@@ -128,7 +153,11 @@ impl Screen for ResultsScreen {
                     KeyCode::ArrowDown | KeyCode::PageDown | KeyCode::End
                 ));
             }
-            KeyCode::KeyR if state.modifiers_ctrl => state.retry_from(self.entry, self.from),
+            KeyCode::KeyR if state.modifiers_ctrl => {
+                if !self.gone && self.entry < state.library.len() {
+                    state.retry_from(self.entry, self.from);
+                }
+            }
             KeyCode::KeyL | KeyCode::KeyN if results.vote_on.is_some() => {
                 let vote = if code == KeyCode::KeyL {
                     online::MapVote::Like
@@ -173,8 +202,12 @@ impl Screen for ResultsScreen {
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 if state.playing_journey() {
                     state.journey_next_from_results(results.failed);
-                } else {
+                    state.journey.autostart =
+                        state.cfg.journey_flow == crate::config::JourneyFlow::Nonstop;
+                } else if !self.gone && self.entry < state.library.len() {
                     state.retry_from(self.entry, self.from);
+                } else {
+                    state.show_select();
                 }
             }
             KeyCode::Escape => {
@@ -183,9 +216,13 @@ impl Screen for ResultsScreen {
                 if state.playing_journey() {
                     state.journey_next_from_results(results.failed);
                 } else {
-                    let path = state.library[self.entry].path.clone();
+                    let path = (!self.gone)
+                        .then(|| state.library.get(self.entry).map(|e| e.path.clone()))
+                        .flatten();
                     state.show_select();
-                    state.select.select_path(&state.library, &path);
+                    if let Some(path) = path {
+                        state.select.select_path(&state.library, &path);
+                    }
                 }
             }
             _ => {}
@@ -206,9 +243,45 @@ impl Screen for ResultsScreen {
         results.journey = state.playing_journey();
         results.journey_save = state.journey.playing_cached.is_some();
         results.draw(canvas);
+        if results.journey
+            && state.cfg.journey_flow == crate::config::JourneyFlow::Nonstop
+            && !self.held
+            && results.opened.is_none()
+        {
+            // A medal earned by the play is shown whole before the next map: started over it,
+            // the map had it hiding the notes and taking the drum keys.
+            if state.unlock.busy() {
+                self.count_from = Some(frame.now);
+            }
+            let from = self.count_from.unwrap_or(results.shown);
+            let left = NONSTOP_RESULTS.saturating_sub(frame.now.saturating_duration_since(from));
+            if left.is_zero() {
+                let failed = results.failed;
+                state.journey_next_from_results(failed);
+                state.journey.autostart = true;
+                return None;
+            }
+            let secs = left.as_secs_f32().ceil() as u32;
+            let line = tr!(
+                "Next map in {secs}...   Enter: now   Esc: stop",
+                "{secs}秒後に次の譜面...   Enter: 今すぐ   Esc: 止める",
+                "Следующая карта через {secs}...   Enter: сейчас   Esc: стоп";
+                [] [secs]
+            );
+            canvas.text_centered(
+                canvas.width / 2.0,
+                canvas.height - 16.0,
+                8.0,
+                crate::render::rgba(0x22d4c0, 1.0),
+                &line,
+            );
+        }
         None
     }
 }
+
+/// How long Journey's Non-stop shows a play's results before the next map.
+const NONSTOP_RESULTS: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A play sent to the online leaderboards: what the server answered, or, when it never did or
 /// said to try later (`online::try_later`), the play to send again (`score_outbox`).

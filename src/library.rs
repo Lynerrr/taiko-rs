@@ -34,6 +34,26 @@ pub struct Entry {
     tja: bool,
 }
 
+thread_local! {
+    static ORIGINAL_NAMES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Settings > Original names, for the frames this thread builds (set at the start of each).
+pub fn set_original_names(on: bool) {
+    ORIGINAL_NAMES.with(|c| c.set(on));
+}
+
+/// The name to show: the one in its own script if asked for, there and drawable, else the
+/// romanised one (or the other when it's missing).
+fn shown_name<'a>(romanised: &'a str, own: &'a str) -> &'a str {
+    let own_drawn = !own.trim().is_empty() && own.chars().all(crate::font::drawable);
+    if own_drawn && (ORIGINAL_NAMES.with(std::cell::Cell::get) || romanised.trim().is_empty()) {
+        own
+    } else {
+        romanised
+    }
+}
+
 impl Entry {
     pub fn new(path: PathBuf, meta: Meta) -> Entry {
         let (size, modified) = file_stats(&path);
@@ -74,6 +94,27 @@ impl Entry {
         format!(
             "{} - {} [{}]",
             self.meta.artist, self.meta.title, self.meta.version
+        )
+    }
+
+    /// The title as shown: in its own script with Settings > Original names (`set_original_names`),
+    /// else romanised. `meta.title` stays the romanised one, what the map is known by.
+    pub fn title(&self) -> &str {
+        shown_name(&self.meta.title, self.meta.original_title())
+    }
+
+    /// The artist as shown, as `title`.
+    pub fn artist(&self) -> &str {
+        shown_name(&self.meta.artist, self.meta.original_artist())
+    }
+
+    /// `label` with the names as shown, for a screen to show (not to know the map by).
+    pub fn shown_label(&self) -> String {
+        format!(
+            "{} - {} [{}]",
+            self.artist(),
+            self.title(),
+            self.meta.version
         )
     }
 
@@ -841,11 +882,13 @@ struct CachedFolder {
 /// `LEVEL` apart from its name. 2: its pictures (`BGIMAGE`, `PREIMAGE`).
 const TJA_READ: u32 = 2;
 
-/// Named for what its maps hold: a new field needs every map read again, once.
+/// Named for what its maps hold: a new field needs every map read again, once. v4: the names
+/// in their own script apart from the romanised ones (v3 had Cyrillic ones in their place).
 fn library_cache() -> PathBuf {
-    let _ = std::fs::remove_file(cache_dir().join("library.json"));
-    let _ = std::fs::remove_file(cache_dir().join("library-v2.json"));
-    cache_dir().join("library-v3.json")
+    for old in ["library.json", "library-v2.json", "library-v3.json"] {
+        let _ = std::fs::remove_file(cache_dir().join(old));
+    }
+    cache_dir().join("library-v4.json")
 }
 
 /// How the cache could be read, for the scan's log.
@@ -914,13 +957,17 @@ fn log_scan(cache_path: &Path, line: &str) {
 }
 
 fn save_cache(path: &Path, folders: Vec<CachedFolder>) {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let Ok(json) = serde_json::to_vec(&folders) else {
         return;
     };
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
-    let tmp = path.with_extension("partial");
-    if std::fs::write(&tmp, json).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(format!(".{}.{n}.partial", std::process::id()));
+    let tmp = path.with_file_name(tmp_name);
+    if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -2012,5 +2059,45 @@ mod tests {
         let log = std::fs::read_to_string(cache.with_file_name("library-scan.log")).unwrap();
         assert_eq!(log.lines().count(), SCAN_LOG_LINES);
         let _ = (songs, std::fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn concurrent_save_cache_writes_do_not_corrupt_or_leave_partials() {
+        let (root, _songs, cache) = songs_folder("concurrent-save");
+        let dir = cache.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::thread::scope(|s| {
+            for t in 0..8usize {
+                let cache = cache.clone();
+                let root = root.clone();
+                s.spawn(move || {
+                    for k in 0..15usize {
+                        let folder = CachedFolder {
+                            dir: root.join(format!("set-{t}-{k}")),
+                            modified: (t * 100 + k) as u128,
+                            maps: Vec::new(),
+                            tja: TJA_READ,
+                        };
+                        save_cache(&cache, vec![folder]);
+                    }
+                });
+            }
+        });
+        let (loaded, state) = load_cache(&cache);
+        assert!(
+            !matches!(state, CacheState::Missing | CacheState::Unreadable(_)),
+            "cache must remain valid JSON after concurrent saves: {state:?}"
+        );
+        assert_eq!(loaded.len(), 1);
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".partial"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no .partial temp files left behind: {leftovers:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

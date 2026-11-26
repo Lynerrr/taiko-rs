@@ -215,7 +215,9 @@ fn a_dropped_tja_is_copied_into_the_tja_folder_and_listed() {
     let file = put(&elsewhere, "pack", "Song.tja", CHART);
     std::fs::write(elsewhere.join("pack/song.ogg"), b"ogg").unwrap();
     s.file_drag(crate::app::run_loop::FileDrag::Drop(vec![file.clone()]));
-    assert!(wait_for(&mut s, &mut now, |s| s.scan.is_none()));
+    // Copied on a thread of its own, then the folders are looked through again.
+    assert!(wait_for(&mut s, &mut now, |s| s.tja_imports.is_empty()
+        && s.scan.is_none()));
     assert!(f.tja.join("Song/Song.tja").is_file() && f.tja.join("Song/song.ogg").is_file());
     assert!(file.is_file(), "the dropped file stays where it was");
     assert_eq!(tja_entries(&s).len(), 2, "listed with its two courses");

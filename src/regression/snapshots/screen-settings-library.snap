@@ -35,21 +35,20 @@ text   73,229  OFFSET
 text  235,240  Song list headings
 text   73,243  audio offset, calibra...
 text   73,269  AUDIO
-text  235,270  Library info
+text  235,270  Original names
 text   73,283  volume, latency
-text  235,300  Song select layout
-text  757,300  default
+text  235,300  Library info
 text   73,309  VIDEO
 text   73,323  frame pacing, display
-text  235,330  Card colour fade
-text  784,330  Off
+text  235,330  Song select layout
+text  757,330  default
 text   73,349  SKIN
-text  235,360  Game data folder
-text  695,360  the usual places
+text  235,360  Card colour fade
+text  784,360  Off
 text   73,363  notes, hit flash, colour
 text   73,389  ONLINE
-text  235,390  taiko.rs maps folder
-text  716,390  Enter to open
+text  235,390  Game data folder
+text  695,390  the usual places
 text  233,396  The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.
 text   73,403  chat, notifications,...
 text   73,429  SYSTEM

@@ -1394,31 +1394,12 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     let (d, t) = (done.clone(), total.clone());
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
-    let name = set.folder_name();
-    // A custom set the preview fetched already is unpacked from there.
-    let cached = set
-        .custom
-        .is_some()
-        .then(|| crate::custom::cached_archive(&set));
-    let sources = match &set.custom {
-        Some(_) => vec![("taiko.rs", crate::custom::download_url(set.id))],
-        None => mirror_sources(set.id),
-    };
-    // An osu! set is checked against osu!'s MD5s; a taiko.rs custom set has none.
-    let mut check = set.custom.is_none().then(|| Check::set(set.id));
     let old_version = Arc::new(AtomicBool::new(false));
     let old = old_version.clone();
+    let set_for_thread = set.clone();
     std::thread::spawn(move || {
-        let result = match cached.flatten() {
-            Some(archive) => std::fs::create_dir_all(&songs)
-                .map_err(|e| format!("{}: {e}", songs.display()))
-                .and_then(|()| {
-                    let dest = songs.join(&name);
-                    extract(&archive, &dest).map(|()| dest)
-                }),
-            None => fetch(&sources, &name, &songs, &d, &t, &stop, check.as_mut()),
-        };
-        old.store(check.is_some_and(|c| c.older), Ordering::Relaxed);
+        let (result, is_old) = fetch_set(&set_for_thread, &songs, &d, &t, &stop);
+        old.store(is_old, Ordering::Relaxed);
         let _ = tx.send(result);
     });
     Job {
@@ -1431,6 +1412,40 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
         cancel,
         old_version,
     }
+}
+
+/// Synchronously downloads/extracts `set` into `songs`, updating `done`/`total` and respecting
+/// `cancel`. Intended to be called from a background worker thread. Returns `(folder, old_version)`.
+pub(crate) fn fetch_set(
+    set: &SetInfo,
+    songs: &Path,
+    done: &Arc<AtomicU64>,
+    total: &Arc<AtomicU64>,
+    cancel: &Arc<AtomicBool>,
+) -> (Result<PathBuf, String>, bool) {
+    let name = set.folder_name();
+    // A custom set the preview fetched already is unpacked from there.
+    let cached = set
+        .custom
+        .is_some()
+        .then(|| crate::custom::cached_archive(set));
+    let sources = match &set.custom {
+        Some(_) => vec![("taiko.rs", crate::custom::download_url(set.id))],
+        None => mirror_sources(set.id),
+    };
+    // An osu! set is checked against osu!'s MD5s; a taiko.rs custom set has none.
+    let mut check = set.custom.is_none().then(|| Check::set(set.id));
+    let result = match cached.flatten() {
+        Some(archive) => std::fs::create_dir_all(songs)
+            .map_err(|e| format!("{}: {e}", songs.display()))
+            .and_then(|()| {
+                let dest = songs.join(&name);
+                extract(&archive, &dest).map(|()| dest)
+            }),
+        None => fetch(&sources, &name, songs, done, total, cancel, check.as_mut()),
+    };
+    let is_old = check.is_some_and(|c| c.older);
+    (result, is_old)
 }
 
 /// A difficulty in a set's folder, for an update: its beatmap ID, its [Version] and its file.
@@ -2883,11 +2898,13 @@ pub fn receive(
     let done = Arc::new(AtomicU64::new(0));
     let total_bytes = Arc::new(AtomicU64::new(total));
     let d = done.clone();
+    static RECEIVE_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = RECEIVE_SEQ.fetch_add(1, Ordering::Relaxed);
     std::thread::spawn(move || {
         let result = (|| {
             std::fs::create_dir_all(&songs).map_err(|e| e.to_string())?;
             let name = safe_folder_name(&name);
-            let archive = songs.join(format!("{name}.osz.part"));
+            let archive = songs.join(format!("{name}.{}.{seq}.osz.part", std::process::id()));
             let mut file = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
             let mut got = 0u64;
             while got < total {
@@ -4301,5 +4318,63 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    #[test]
+    fn aborting_an_earlier_host_receive_does_not_delete_a_newer_transfers_part_file() {
+        let map_bytes = b"osu file format v14\n[Metadata]\nTitle:T\nArtist:A\nVersion:Oni\n";
+        let (dir, zip_path) = a_zip("receive-unique", &[("map [Oni].osu", map_bytes)]);
+        let archive_bytes = std::fs::read(&zip_path).unwrap();
+        let hash = crate::net::map_hash(map_bytes);
+        let songs = dir.join("Songs");
+        let custom = dir.join("Custom");
+        let mid = archive_bytes.len() / 2;
+
+        let (job1, feed1) = receive(
+            SetInfo::default(),
+            "42 A - T".into(),
+            archive_bytes.len() as u64,
+            hash,
+            songs.clone(),
+            custom.clone(),
+            None,
+        );
+        feed1.send(Some(archive_bytes[..mid].to_vec())).unwrap();
+
+        let (job2, feed2) = receive(
+            SetInfo::default(),
+            "42 A - T".into(),
+            archive_bytes.len() as u64,
+            hash,
+            songs.clone(),
+            custom.clone(),
+            None,
+        );
+        feed2.send(Some(archive_bytes[..mid].to_vec())).unwrap();
+
+        // Wait until both threads have created their .part files, then abort transfer 1.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (job1.done.load(Ordering::Relaxed) == 0 || job2.done.load(Ordering::Relaxed) == 0)
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        drop(feed1);
+        assert!(
+            job1.rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .is_err()
+        );
+
+        // Transfer 2 finishes and unpacks cleanly even after transfer 1 cleaned up.
+        feed2.send(Some(archive_bytes[mid..].to_vec())).unwrap();
+        let dest = job2
+            .rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .expect("second transfer must survive first transfer cleanup");
+        assert!(dest.join("map [Oni].osu").is_file());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

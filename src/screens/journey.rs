@@ -3,6 +3,7 @@
 //! in the middle, and a Song-Select-style action bar along the bottom.
 
 use super::screen::{Frame, Key, Screen};
+use crate::config::{JourneyFlow, JourneyFocus, JourneyLength, MarathonGap};
 use crate::journey::{Gate, LEVEL_CHOICES, MapSource, PastOutcome};
 use crate::*;
 
@@ -78,6 +79,9 @@ impl Screen for JourneyScreen {
             return;
         }
 
+        // A key on the Journey screen takes over from Non-stop's own start.
+        state.journey.autostart = false;
+
         if let Some(gate) = state.journey.gate {
             match (code, gate) {
                 (KeyCode::Escape, _) => state.exit_journey(),
@@ -89,6 +93,29 @@ impl Screen for JourneyScreen {
                     state.journey_retry();
                 }
                 (KeyCode::KeyO, _) => state.journey_go_offline(),
+                _ => {}
+            }
+            return;
+        }
+
+        if let Some(row) = state.journey.settings {
+            let visible = visible_settings(state.cfg.journey_flow);
+            let max_row = visible.len().saturating_sub(1);
+            let cur = row.min(max_row);
+            match code {
+                KeyCode::ArrowUp | KeyCode::KeyW => {
+                    state.journey.settings = Some(cur.saturating_sub(1));
+                }
+                KeyCode::ArrowDown | KeyCode::KeyS => {
+                    state.journey.settings = Some((cur + 1).min(max_row));
+                }
+                KeyCode::ArrowLeft | KeyCode::KeyA => state.journey_change_setting(cur, -1),
+                KeyCode::ArrowRight
+                | KeyCode::KeyD
+                | KeyCode::Enter
+                | KeyCode::NumpadEnter
+                | KeyCode::Space => state.journey_change_setting(cur, 1),
+                KeyCode::Escape | KeyCode::KeyO => state.journey_toggle_settings(),
                 _ => {}
             }
             return;
@@ -132,6 +159,7 @@ impl Screen for JourneyScreen {
             KeyCode::ArrowLeft => state.journey_back(),
             KeyCode::KeyS => state.journey_save_current(),
             KeyCode::F1 => state.open_mods(),
+            KeyCode::KeyO => state.journey_toggle_settings(),
             KeyCode::BracketLeft | KeyCode::BracketRight => {
                 state.step_rate(code == KeyCode::BracketRight);
             }
@@ -165,10 +193,1004 @@ impl Screen for JourneyScreen {
             state.journey.lane_slide = 0.0;
         }
 
+        // Non-stop: the map after a play starts by itself once it's ready.
+        if state.journey_autostart_due() {
+            state.journey_play_current_with(true);
+            return None;
+        }
+
+        let hits_before = canvas.hits.len();
         draw_top_lane(state, canvas, w);
         draw_center_card(state, canvas, w, h);
+        if state.journey.settings.is_some() {
+            // Clear underlying hit areas while the settings modal is open so clicks outside
+            // close the modal instead of activating buttons underneath.
+            canvas.hits.truncate(hits_before);
+            draw_settings(state, canvas, w, h);
+        }
         None
     }
+}
+
+/// Logical settings in Journey's settings panel. Only settings relevant to the active
+/// `JourneyFlow` are shown and navigable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SettingId {
+    Focus,
+    Length,
+    Chill,
+    Flow,
+    Gap,
+    SkipIntro,
+    UpNext,
+    Hardcore,
+    MarathonSave,
+}
+
+fn visible_settings(flow: JourneyFlow) -> &'static [SettingId] {
+    match flow {
+        JourneyFlow::Off => &[
+            SettingId::Focus,
+            SettingId::Length,
+            SettingId::Chill,
+            SettingId::Flow,
+        ],
+        JourneyFlow::Nonstop => &[
+            SettingId::Focus,
+            SettingId::Length,
+            SettingId::Chill,
+            SettingId::Flow,
+            SettingId::SkipIntro,
+            SettingId::UpNext,
+        ],
+        JourneyFlow::Marathon => &[
+            SettingId::Focus,
+            SettingId::Length,
+            SettingId::Chill,
+            SettingId::Flow,
+            SettingId::Gap,
+            SettingId::SkipIntro,
+            SettingId::UpNext,
+            SettingId::Hardcore,
+            SettingId::MarathonSave,
+        ],
+    }
+}
+
+fn setting_help(state: &State, id: SettingId) -> &'static str {
+    match id {
+        SettingId::Focus if state.journey.local_mode => tr!(
+            "Focus picks maps rich in streams, tech or SV. Requires online mode (using library offline).",
+            "フォーカスは連打・テクニカル・SVの濃い譜面を選びます（オンライン専用）。",
+            "Фокус подбирает карты со стримами, техникой или SV. Работает только онлайн."
+        ),
+        SettingId::Focus => tr!(
+            "Prefer maps rich in streams, long deathstreams, rhythm/tech or SV for their star rating.",
+            "その難易度の中で連打・長い連打・テクニカル・SVが多い譜面を優先して選びます。",
+            "Подбирает карты, насыщенные стримами, дэтстримами, техникой или SV для своих звёзд."
+        ),
+        SettingId::Length => {
+            if state.cfg.journey_flow == JourneyFlow::Marathon
+                && state.cfg.journey_length == JourneyLength::Any
+            {
+                tr!(
+                    "Filter chart duration. In Marathon, Any caps maps at 5:00 so hour-long marathons don't ambush you.",
+                    "譜面の長さを制限します。マラソンでは「おまかせ」でも5分以下に制限されます。",
+                    "Лимит длины карты. В марафоне «Любые» ограничены 5:00, чтобы не кидало часовые карты."
+                )
+            } else {
+                tr!(
+                    "Filter recommended charts by duration (applied both online and in your local library).",
+                    "おすすめの譜面を長さで絞り込みます（オンライン・ローカル共通）。",
+                    "Ограничивает длину подбираемых карт (работает и онлайн, и в локальной библиотеке)."
+                )
+            }
+        }
+        SettingId::Chill => tr!(
+            "Easier pace: maps half a star below your comfort level and no stretch maps. Your level stays unchanged.",
+            "レベルより0.5☆やさしい譜面のみ、ストレッチなし。推定レベルは変わりません。",
+            "Спокойный темп: карты на 0.5* ниже твоего уровня и без челлендж-карт. Уровень не падает."
+        ),
+        SettingId::Flow => match state.cfg.journey_flow {
+            JourneyFlow::Off => tr!(
+                "Manual: see results after each map and start the next one yourself.",
+                "手動: 毎回リザルトを表示し、次の譜面は自分で始めます。",
+                "Вручную: результаты после каждой карты, следующую запускаешь сам."
+            ),
+            JourneyFlow::Nonstop => tr!(
+                "Non-stop: results count down 5s, then the next map starts automatically. Press N on the up-next card to swap.",
+                "ノンストップ: リザルト5秒後に次の譜面が自動開始。次の譜面表示中にNで変更できます。",
+                "Без перерывов: 5с на результаты, затем автостарт следующей. N при показе следующей — заменить."
+            ),
+            JourneyFlow::Marathon => tr!(
+                "Marathon: maps play back-to-back with no results screen and a carried combo until you stop.",
+                "マラソン: リザルトなしで譜面が連続し、コンボを引き継ぎます。止めるまで続きます。",
+                "Марафон: карты идут подряд без результатов и со сквозным комбо, пока не остановишь."
+            ),
+        },
+        SettingId::Gap => match state.cfg.journey_gap {
+            MarathonGap::Wheel => tr!(
+                "Wheel: a short intermission card between maps (~2.2s) where you can hold, swap, vote or save.",
+                "ホイール: 譜面間に約2.2秒のカード画面を挟み、一時停止・変更・評価・保存ができます。",
+                "Колесо: ~2.2с между картами с карточкой следующей карты, паузой, заменой, оценкой и сохранением."
+            ),
+            MarathonGap::Short => tr!(
+                "Short: a brief transition (~0.8s) showing the next map before starting.",
+                "短め: 約0.8秒だけ次の譜面を表示してから開始します。",
+                "Короткое: быстрая пауза (~0.8с) с показом следующей карты перед стартом."
+            ),
+            MarathonGap::Seamless => tr!(
+                "Seamless: no wheel. The next map preloads during play and crossfades straight in.",
+                "シームレス: ホイールなし。プレイ中に次の譜面を先読みし、クロスフェードで連続開始します。",
+                "Бесшовно: без экрана между картами. Следующая грузится заранее и стартует с кроссфейдом."
+            ),
+        },
+        SettingId::SkipIntro => tr!(
+            "Auto-started maps jump straight to just before the first note, skipping long intros.",
+            "自動で始まる譜面は長いイントロを飛ばして最初のノーツ直前から始まります。",
+            "Карты с автостартом начинаются прямо перед первой нотой, пропуская длинные вступления."
+        ),
+        SettingId::UpNext => tr!(
+            "Show the map up next towards the end of a map and in its breaks, where N swaps it. Off: no card, and N does nothing.",
+            "譜面の終わり際と休憩中に次の譜面を表示し、Nで変更できます。オフ: 表示せず、Nも無効です。",
+            "Показывать следующую карту в конце карты и в перерывах, N — заменить. Выкл.: без карточки, N не работает."
+        ),
+        SettingId::Hardcore => tr!(
+            "Hardcore marathon: the first failed map ends the run immediately. Pause Skip and Retry are disabled.",
+            "ハードコア: 1度でも失敗すると即終了。プレイ中のスキップとリトライは無効になります。",
+            "Хардкор: первый же фейл сразу заканчивает марафон. Скип и ретрай в паузе отключены."
+        ),
+        SettingId::MarathonSave => tr!(
+            "Automatically save maps played in Marathon to your library (folder in Settings > Library). Off keeps them in temporary cache.",
+            "マラソンでプレイした譜面を自動でライブラリに保存します（保存先は設定 > ライブラリ）。オフ時は一時キャッシュのみ。",
+            "Автоматически сохраняет сыгранные в марафоне карты в библиотеку (папка в Настройки > Библиотека). Выкл — только в кэше."
+        ),
+    }
+}
+
+fn focus_chip_label(f: JourneyFocus) -> &'static str {
+    match f {
+        JourneyFocus::Any => tr!("Any", "おまかせ", "Любые"),
+        JourneyFocus::Streams => tr!("Streams", "連打", "Стримы"),
+        JourneyFocus::LongStreams => tr!("Long", "長連打", "Дэтстрим"),
+        JourneyFocus::Tech => tr!("Tech", "技術", "Техника"),
+        JourneyFocus::Sv => "SV",
+    }
+}
+
+/// Journey's settings modal: opaque over a dark backdrop scrim, split into Map Pool (always active)
+/// and Session Flow (showing only controls relevant to the selected flow mode).
+fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
+    // Full-screen dark scrim: dims the bright Journey card underneath and catches outside clicks.
+    c.rect(0.0, 0.0, w, h, rgba(0x080a12, 0.80));
+    c.hit(0.0, 0.0, w, h, hit::Hit::JourneySettings);
+
+    let flow = state.cfg.journey_flow;
+    let visible = visible_settings(flow);
+    let cursor = state
+        .journey
+        .settings
+        .unwrap_or(0)
+        .min(visible.len().saturating_sub(1));
+    let mut active_id = visible[cursor];
+
+    let pw = 472.0_f32.min(w - 28.0);
+    let pad = 16.0;
+    let inner_w = pw - pad * 2.0;
+
+    // Height adapts cleanly to the active flow mode so there's never dead space or hidden rows.
+    let sub_h = match flow {
+        JourneyFlow::Off => 30.0,
+        JourneyFlow::Nonstop => 64.0,
+        JourneyFlow::Marathon => 156.0,
+    };
+    let ph = 288.0 + sub_h;
+    let x = (w - pw) / 2.0;
+    let y = ((h - ph) / 2.0).max(16.0);
+
+    // Solid modal surface (0.99 alpha over 0.80 scrim: zero bleed-through).
+    c.round_rect(
+        [x, y],
+        [pw, ph],
+        10.0,
+        rgba(style::PANEL_COLD, 0.99),
+        rgba(style::tone::EDGE, 1.0),
+        1.5,
+    );
+    // Swallow clicks on empty panel space so they don't dismiss the modal.
+    c.hit(x, y, pw, ph, hit::Hit::JourneySettingsBody);
+
+    // Header + close button.
+    let heading = tr!("JOURNEY SETTINGS", "ジャーニー設定", "НАСТРОЙКИ JOURNEY");
+    let tw = Canvas::text_width(12.0, heading);
+    style::title(c, x + (pw - tw) / 2.0, y + 14.0, 12.0, 0xffffff, heading);
+    let close_x = x + pw - 32.0;
+    let close_y = y + 10.0;
+    let close_h = c.hovered(close_x, close_y, 22.0, 22.0);
+    c.round_rect(
+        [close_x, close_y],
+        [22.0, 22.0],
+        style::radius::SMALL,
+        rgba(if close_h { 0x34344a } else { 0x1b1e2c }, 1.0),
+        rgba(if close_h { 0x8a8aa8 } else { style::tone::EDGE }, 0.8),
+        1.0,
+    );
+    c.text_centered(
+        close_x + 11.0,
+        close_y + 6.5,
+        9.0,
+        rgba(if close_h { 0xffffff } else { 0xa8a8bc }, 1.0),
+        "x",
+    );
+    c.hit(close_x, close_y, 22.0, 22.0, hit::Hit::JourneySettings);
+    style::rule(c, x + pad, y + 38.0, inner_w);
+
+    let row_index_of = |id: SettingId| visible.iter().position(|&v| v == id);
+
+    // Helper for row highlight + keyboard selector brackets.
+    let draw_row_bg = |c: &mut Canvas,
+                       rx: f32,
+                       ry: f32,
+                       rw: f32,
+                       rh: f32,
+                       id: SettingId,
+                       accent_col: u32,
+                       active_id: &mut SettingId| {
+        let selected = row_index_of(id) == Some(cursor);
+        let hovered = c.hovered(rx, ry, rw, rh);
+        if hovered {
+            *active_id = id;
+        }
+        if selected {
+            c.round_rect(
+                [rx, ry],
+                [rw, rh],
+                6.0,
+                rgba(accent_col, 0.14),
+                rgba(0, 0.0),
+                0.0,
+            );
+            style::selector(c, "journey-set", [rx - 2.0, ry - 2.0, rw + 4.0, rh + 4.0]);
+        } else if hovered {
+            c.round_rect(
+                [rx, ry],
+                [rw, rh],
+                6.0,
+                rgba(0x262634, 0.72),
+                rgba(0, 0.0),
+                0.0,
+            );
+        }
+    };
+
+    // The "Up next" card's row, in Non-stop's options and Marathon's alike.
+    let up_next_row = |c: &mut Canvas, [rx, ry, rw, rh]: [f32; 4], active_id: &mut SettingId| {
+        draw_row_bg(c, rx, ry, rw, rh, SettingId::UpNext, 0x22c8b8, active_id);
+        if let Some(idx) = row_index_of(SettingId::UpNext) {
+            c.hit(rx, ry, rw, rh, hit::Hit::JourneySetting(idx, 1));
+        }
+        c.text(
+            rx + 6.0,
+            ry + (rh - 8.5) / 2.0,
+            8.5,
+            rgba(0xffffff, 1.0),
+            tr!("Up next card", "次の譜面カード", "Карточка «Дальше»"),
+        );
+        style::switch(
+            c,
+            [
+                rx + rw - style::SWITCH[0] - 6.0,
+                ry + (rh - style::SWITCH[1]) / 2.0,
+            ],
+            state.cfg.journey_up_next,
+        );
+    };
+
+    let mut cy = y + 48.0;
+    let rx = x + pad;
+
+    // --- SECTION 1: MAP POOL (always active) ---
+    c.text(
+        rx + 4.0,
+        cy,
+        6.5,
+        rgba(0x22d4c0, 0.95),
+        tr!("MAP POOL", "選曲フィルター", "ПОДБОР КАРТ"),
+    );
+    cy += 14.0;
+
+    // 1. Focus (segmented chips)
+    let row_h = 28.0;
+    draw_row_bg(
+        c,
+        rx,
+        cy,
+        inner_w,
+        row_h,
+        SettingId::Focus,
+        0x22c8b8,
+        &mut active_id,
+    );
+    let offline_focus = state.journey.local_mode;
+    let label_col = if offline_focus { 0x74728a } else { 0xffffff };
+    c.text(
+        rx + 8.0,
+        cy + 9.5,
+        9.0,
+        rgba(label_col, 1.0),
+        tr!("Focus", "フォーカス", "Фокус"),
+    );
+    let seg_left = rx + 96.0;
+    let seg_w = inner_w - 102.0;
+    let chip_gap = 4.0;
+    let chip_w =
+        (seg_w - chip_gap * (JourneyFocus::ALL.len() - 1) as f32) / JourneyFocus::ALL.len() as f32;
+    for (k, &f) in JourneyFocus::ALL.iter().enumerate() {
+        let bx = seg_left + k as f32 * (chip_w + chip_gap);
+        let by = cy + 4.0;
+        let bh = row_h - 8.0;
+        let on = state.cfg.journey_focus == f;
+        let hov = c.hovered(bx, by, chip_w, bh);
+        let fill = if on {
+            rgba(if offline_focus { 0x4a4a62 } else { 0x22d4c0 }, 0.24)
+        } else if hov {
+            rgba(0x2d3042, 0.95)
+        } else {
+            rgba(0x161926, 0.95)
+        };
+        let edge = if on {
+            rgba(if offline_focus { 0x6a6a84 } else { 0x22d4c0 }, 0.9)
+        } else if hov {
+            rgba(style::tone::EDGE_HOVER, 0.9)
+        } else {
+            rgba(style::tone::EDGE, 0.65)
+        };
+        c.round_rect(
+            [bx, by],
+            [chip_w, bh],
+            style::radius::SMALL,
+            fill,
+            edge,
+            1.0,
+        );
+        let lbl = focus_chip_label(f);
+        c.text_centered(
+            bx + chip_w / 2.0,
+            by + (bh - 7.5) / 2.0,
+            7.5,
+            rgba(
+                if on {
+                    if offline_focus { 0xb4b4c8 } else { 0x62f2df }
+                } else if offline_focus {
+                    0x6e6e84
+                } else {
+                    0xc4c4d8
+                },
+                1.0,
+            ),
+            &Canvas::fit(7.5, chip_w - 6.0, lbl),
+        );
+        c.hit(bx, by, chip_w, bh, hit::Hit::JourneyFocus(f));
+    }
+    cy += 32.0;
+
+    // 2. Length (segmented chips)
+    draw_row_bg(
+        c,
+        rx,
+        cy,
+        inner_w,
+        row_h,
+        SettingId::Length,
+        0x22c8b8,
+        &mut active_id,
+    );
+    c.text(
+        rx + 8.0,
+        cy + 9.5,
+        9.0,
+        rgba(0xffffff, 1.0),
+        tr!("Length", "長さ", "Длина"),
+    );
+    let marathon_flow = flow == JourneyFlow::Marathon;
+    let lchip_w = (seg_w - chip_gap * (JourneyLength::ALL.len() - 1) as f32)
+        / JourneyLength::ALL.len() as f32;
+    for (k, &len) in JourneyLength::ALL.iter().enumerate() {
+        let bx = seg_left + k as f32 * (lchip_w + chip_gap);
+        let by = cy + 4.0;
+        let bh = row_h - 8.0;
+        let on = state.cfg.journey_length == len;
+        let hov = c.hovered(bx, by, lchip_w, bh);
+        let fill = if on {
+            rgba(0x22d4c0, 0.24)
+        } else if hov {
+            rgba(0x2d3042, 0.95)
+        } else {
+            rgba(0x161926, 0.95)
+        };
+        let edge = if on {
+            rgba(0x22d4c0, 0.9)
+        } else if hov {
+            rgba(style::tone::EDGE_HOVER, 0.9)
+        } else {
+            rgba(style::tone::EDGE, 0.65)
+        };
+        c.round_rect(
+            [bx, by],
+            [lchip_w, bh],
+            style::radius::SMALL,
+            fill,
+            edge,
+            1.0,
+        );
+        let lbl = len.chip(marathon_flow);
+        c.text_centered(
+            bx + lchip_w / 2.0,
+            by + (bh - 7.5) / 2.0,
+            7.5,
+            rgba(if on { 0x62f2df } else { 0xc4c4d8 }, 1.0),
+            &Canvas::fit(7.5, lchip_w - 6.0, lbl),
+        );
+        c.hit(bx, by, lchip_w, bh, hit::Hit::JourneyLength(len));
+    }
+    cy += 32.0;
+
+    // 3. Chill (switch)
+    let sw_row_h = 26.0;
+    draw_row_bg(
+        c,
+        rx,
+        cy,
+        inner_w,
+        sw_row_h,
+        SettingId::Chill,
+        0x22c8b8,
+        &mut active_id,
+    );
+    if let Some(idx) = row_index_of(SettingId::Chill) {
+        c.hit(rx, cy, inner_w, sw_row_h, hit::Hit::JourneySetting(idx, 1));
+    }
+    c.text(
+        rx + 8.0,
+        cy + 8.5,
+        9.0,
+        rgba(0xffffff, 1.0),
+        tr!("Chill mode", "チルモード", "Чилл-режим"),
+    );
+    let chill_note = tr!(
+        "-0.5* easier, no stretch maps",
+        "-0.5* やさしめ、ストレッチなし",
+        "-0.5* легче, без челлендж-карт"
+    );
+    c.text(
+        rx + 102.0,
+        cy + 9.5,
+        7.5,
+        rgba(0x8888a4, 1.0),
+        &Canvas::fit(7.5, inner_w - 140.0, chill_note),
+    );
+    style::switch(
+        c,
+        [
+            rx + inner_w - style::SWITCH[0] - 8.0,
+            cy + (sw_row_h - style::SWITCH[1]) / 2.0,
+        ],
+        state.cfg.journey_chill,
+    );
+    cy += 30.0;
+
+    style::rule(c, rx, cy, inner_w);
+    cy += 10.0;
+
+    // --- SECTION 2: SESSION FLOW ---
+    c.text(
+        rx + 4.0,
+        cy,
+        6.5,
+        rgba(0x22d4c0, 0.95),
+        tr!("SESSION FLOW", "進行モード", "РЕЖИМ СЕССИИ"),
+    );
+    cy += 14.0;
+
+    // 4. Flow mode cards (Manual | Non-stop | Marathon)
+    let flow_h = 30.0;
+    draw_row_bg(
+        c,
+        rx,
+        cy,
+        inner_w,
+        flow_h,
+        SettingId::Flow,
+        0x22c8b8,
+        &mut active_id,
+    );
+    let fgap = 6.0;
+    let fw = (inner_w - 12.0 - fgap * 2.0) / 3.0;
+    for (k, &f) in JourneyFlow::ALL.iter().enumerate() {
+        let bx = rx + 6.0 + k as f32 * (fw + fgap);
+        let by = cy + 3.0;
+        let bh = flow_h - 6.0;
+        let on = flow == f;
+        let hov = c.hovered(bx, by, fw, bh);
+        let col = if f == JourneyFlow::Marathon {
+            0xffd24a
+        } else {
+            0x22d4c0
+        };
+        let fill = if on {
+            rgba(col, 0.22)
+        } else if hov {
+            rgba(0x2d3042, 0.95)
+        } else {
+            rgba(0x161926, 0.95)
+        };
+        let edge = if on {
+            rgba(col, 0.92)
+        } else if hov {
+            rgba(style::tone::EDGE_HOVER, 0.9)
+        } else {
+            rgba(style::tone::EDGE, 0.65)
+        };
+        c.round_rect([bx, by], [fw, bh], style::radius::CONTROL, fill, edge, 1.0);
+        c.text_centered(
+            bx + fw / 2.0,
+            by + (bh - 8.5) / 2.0,
+            8.5,
+            rgba(if on { 0xffffff } else { 0xb4b4c8 }, 1.0),
+            &Canvas::fit(8.5, fw - 10.0, f.name()),
+        );
+        c.hit(bx, by, fw, bh, hit::Hit::JourneyFlow(f));
+    }
+    cy += flow_h + 8.0;
+
+    // Contextual sub-card directly tied to the chosen Flow mode.
+    let sub_accent = match flow {
+        JourneyFlow::Off => style::tone::EDGE,
+        JourneyFlow::Nonstop => 0x22d4c0,
+        JourneyFlow::Marathon => 0xffd24a,
+    };
+    c.round_rect(
+        [rx, cy],
+        [inner_w, sub_h],
+        style::radius::CARD,
+        rgba(0x141724, 0.98),
+        rgba(sub_accent, 0.35),
+        1.0,
+    );
+    c.rect(rx + 1.0, cy + 5.0, 2.5, sub_h - 10.0, rgba(sub_accent, 0.9));
+
+    let sub_rx = rx + 10.0;
+    let sub_rw = inner_w - 16.0;
+    match flow {
+        JourneyFlow::Off => {
+            let note = tr!(
+                "Manual mode: results after each map, no auto-advance options.",
+                "手動モード: 毎回リザルトを表示します（自動進行オプションなし）。",
+                "Ручной режим: результаты после каждой карты, без автоперехода."
+            );
+            c.text(
+                sub_rx + 4.0,
+                cy + 11.0,
+                7.5,
+                rgba(0x8888a4, 1.0),
+                &Canvas::fit(7.5, sub_rw - 8.0, note),
+            );
+        }
+        JourneyFlow::Nonstop => {
+            let sy = cy + 5.0;
+            draw_row_bg(
+                c,
+                sub_rx,
+                sy,
+                sub_rw,
+                26.0,
+                SettingId::SkipIntro,
+                0x22c8b8,
+                &mut active_id,
+            );
+            if let Some(idx) = row_index_of(SettingId::SkipIntro) {
+                c.hit(sub_rx, sy, sub_rw, 26.0, hit::Hit::JourneySetting(idx, 1));
+            }
+            c.text(
+                sub_rx + 6.0,
+                sy + 8.5,
+                9.0,
+                rgba(0xffffff, 1.0),
+                tr!("Skip intros", "イントロをスキップ", "Скип интро"),
+            );
+            c.text(
+                sub_rx + 100.0,
+                sy + 9.5,
+                7.5,
+                rgba(0x8888a4, 1.0),
+                &Canvas::fit(
+                    7.5,
+                    sub_rw - 138.0,
+                    tr!(
+                        "Jump to the first note",
+                        "最初のノーツ直前から",
+                        "Сразу к первой ноте"
+                    ),
+                ),
+            );
+            style::switch(
+                c,
+                [
+                    sub_rx + sub_rw - style::SWITCH[0] - 6.0,
+                    sy + (26.0 - style::SWITCH[1]) / 2.0,
+                ],
+                state.cfg.journey_skip_intro,
+            );
+            up_next_row(c, [sub_rx, sy + 28.0, sub_rw, 26.0], &mut active_id);
+        }
+        JourneyFlow::Marathon => {
+            c.text(
+                sub_rx + 6.0,
+                cy + 6.0,
+                6.5,
+                rgba(0xffd24a, 0.95),
+                tr!("MARATHON OPTIONS", "マラソン設定", "НАСТРОЙКИ МАРАФОНА"),
+            );
+            let mut my = cy + 19.0;
+
+            // Between maps (Wheel | Short | Seamless)
+            draw_row_bg(
+                c,
+                sub_rx,
+                my,
+                sub_rw,
+                26.0,
+                SettingId::Gap,
+                0xffd24a,
+                &mut active_id,
+            );
+            c.text(
+                sub_rx + 6.0,
+                my + 8.5,
+                8.5,
+                rgba(0xffffff, 1.0),
+                tr!("Between maps", "譜面の間", "Между картами"),
+            );
+            let g_left = sub_rx + 114.0;
+            let g_w = (sub_rw - 120.0 - 8.0) / 3.0;
+            for (k, &g) in MarathonGap::ALL.iter().enumerate() {
+                let bx = g_left + k as f32 * (g_w + 4.0);
+                let by = my + 3.0;
+                let bh = 20.0;
+                let on = state.cfg.journey_gap == g;
+                let hov = c.hovered(bx, by, g_w, bh);
+                let fill = if on {
+                    rgba(0xffd24a, 0.22)
+                } else if hov {
+                    rgba(0x2d3042, 0.95)
+                } else {
+                    rgba(0x161926, 0.95)
+                };
+                let edge = if on {
+                    rgba(0xffd24a, 0.9)
+                } else if hov {
+                    rgba(style::tone::EDGE_HOVER, 0.9)
+                } else {
+                    rgba(style::tone::EDGE, 0.65)
+                };
+                c.round_rect([bx, by], [g_w, bh], style::radius::SMALL, fill, edge, 1.0);
+                c.text_centered(
+                    bx + g_w / 2.0,
+                    by + (bh - 7.5) / 2.0,
+                    7.5,
+                    rgba(if on { 0xffd24a } else { 0xc4c4d8 }, 1.0),
+                    &Canvas::fit(7.5, g_w - 6.0, g.name()),
+                );
+                c.hit(bx, by, g_w, bh, hit::Hit::MarathonGap(g));
+            }
+            my += 28.0;
+
+            // Skip intros
+            let mrow_h = 24.0;
+            draw_row_bg(
+                c,
+                sub_rx,
+                my,
+                sub_rw,
+                mrow_h,
+                SettingId::SkipIntro,
+                0x22c8b8,
+                &mut active_id,
+            );
+            if let Some(idx) = row_index_of(SettingId::SkipIntro) {
+                c.hit(sub_rx, my, sub_rw, mrow_h, hit::Hit::JourneySetting(idx, 1));
+            }
+            c.text(
+                sub_rx + 6.0,
+                my + 7.5,
+                8.5,
+                rgba(0xffffff, 1.0),
+                tr!("Skip intros", "イントロをスキップ", "Скип интро"),
+            );
+            style::switch(
+                c,
+                [
+                    sub_rx + sub_rw - style::SWITCH[0] - 6.0,
+                    my + (mrow_h - style::SWITCH[1]) / 2.0,
+                ],
+                state.cfg.journey_skip_intro,
+            );
+            my += 26.0;
+
+            up_next_row(c, [sub_rx, my, sub_rw, mrow_h], &mut active_id);
+            my += 26.0;
+
+            // Hardcore
+            let hc_col = if state.cfg.journey_hardcore {
+                style::DANGER
+            } else {
+                0x22c8b8
+            };
+            draw_row_bg(
+                c,
+                sub_rx,
+                my,
+                sub_rw,
+                mrow_h,
+                SettingId::Hardcore,
+                hc_col,
+                &mut active_id,
+            );
+            if let Some(idx) = row_index_of(SettingId::Hardcore) {
+                c.hit(sub_rx, my, sub_rw, mrow_h, hit::Hit::JourneySetting(idx, 1));
+            }
+            c.text(
+                sub_rx + 6.0,
+                my + 7.5,
+                8.5,
+                rgba(
+                    if state.cfg.journey_hardcore {
+                        style::DANGER
+                    } else {
+                        0xffffff
+                    },
+                    1.0,
+                ),
+                tr!("Hardcore", "ハードコア", "Хардкор"),
+            );
+            let hc_note = tr!(
+                "First fail ends run (no Skip/Retry)",
+                "最初の失敗で終了（スキップ/リトライ不可）",
+                "Первый фейл = конец (без скипа/ретрая)"
+            );
+            c.text(
+                sub_rx + 86.0,
+                my + 8.5,
+                7.0,
+                rgba(0x8888a4, 1.0),
+                &Canvas::fit(7.0, sub_rw - 122.0, hc_note),
+            );
+            style::switch(
+                c,
+                [
+                    sub_rx + sub_rw - style::SWITCH[0] - 6.0,
+                    my + (mrow_h - style::SWITCH[1]) / 2.0,
+                ],
+                state.cfg.journey_hardcore,
+            );
+            my += 26.0;
+
+            // Save played maps
+            draw_row_bg(
+                c,
+                sub_rx,
+                my,
+                sub_rw,
+                mrow_h,
+                SettingId::MarathonSave,
+                0x22c8b8,
+                &mut active_id,
+            );
+            if let Some(idx) = row_index_of(SettingId::MarathonSave) {
+                c.hit(sub_rx, my, sub_rw, mrow_h, hit::Hit::JourneySetting(idx, 1));
+            }
+            c.text(
+                sub_rx + 6.0,
+                my + 7.5,
+                8.5,
+                rgba(0xffffff, 1.0),
+                tr!("Save maps", "譜面を保存", "Сохранять карты"),
+            );
+            let save_note = tr!(
+                "Keep played maps in your library",
+                "プレイした譜面をライブラリに保存",
+                "Оставлять сыгранные в библиотеке"
+            );
+            let save_lbl_w =
+                Canvas::text_width(8.5, tr!("Save maps", "譜面を保存", "Сохранять карты"));
+            let note_x = sub_rx + 14.0 + save_lbl_w;
+            c.text(
+                note_x,
+                my + 8.5,
+                7.0,
+                rgba(0x8888a4, 1.0),
+                &Canvas::fit(
+                    7.0,
+                    (sub_rx + sub_rw - style::SWITCH[0] - 14.0 - note_x).max(40.0),
+                    save_note,
+                ),
+            );
+            style::switch(
+                c,
+                [
+                    sub_rx + sub_rw - style::SWITCH[0] - 6.0,
+                    my + (mrow_h - style::SWITCH[1]) / 2.0,
+                ],
+                state.cfg.journey_marathon_save,
+            );
+        }
+    }
+    cy += sub_h + 10.0;
+
+    // Footer help strip: full wrapped description (never truncated with '...').
+    c.round_rect(
+        [rx, cy],
+        [inner_w, 36.0],
+        style::radius::SMALL,
+        rgba(0x0a0c15, 0.96),
+        rgba(style::tone::EDGE, 0.45),
+        1.0,
+    );
+    let help = setting_help(state, active_id);
+    for (k, line) in crate::mobile::wrap(7.0, inner_w - 16.0, help, 2)
+        .into_iter()
+        .enumerate()
+    {
+        c.text(
+            rx + 8.0,
+            cy + 7.0 + k as f32 * 12.0,
+            7.0,
+            rgba(0xb4b4cc, 1.0),
+            &line,
+        );
+    }
+
+    let hint = tr!(
+        "Up/Down select   Left/Right change   Esc close",
+        "上下で選択   左右で変更   Esc 閉じる",
+        "Вверх/Вниз выбор   Влево/Вправо менять   Esc закрыть"
+    );
+    c.text_centered(
+        x + pw / 2.0,
+        y + ph - 16.0,
+        7.0,
+        rgba(0x787890, 1.0),
+        &Canvas::fit(7.0, inner_w, hint),
+    );
+}
+
+/// How long before the last note, and from how long into a break, Non-stop/Marathon shows up-next.
+const UP_NEXT_LEAD_MS: f64 = 12_000.0;
+/// A gap between notes at least this long is a break.
+const BREAK_MS: f64 = 5_000.0;
+
+/// Whether Non-stop/Marathon shows what's up next at map time `t`: towards the end of the map,
+/// after it, and in its breaks (not right at their edges).
+pub(crate) fn up_next_due(notes: &[beatmap::Note], t: f64) -> bool {
+    let Some(last) = notes.last() else {
+        return false;
+    };
+    if t >= last.time - UP_NEXT_LEAD_MS {
+        return true;
+    }
+    let i = notes.partition_point(|n| n.time <= t);
+    let (Some(prev), Some(next)) = (i.checked_sub(1).map(|p| &notes[p]), notes.get(i)) else {
+        return false;
+    };
+    let prev_end = prev.end_time.max(prev.time);
+    next.time - prev_end >= BREAK_MS && t - prev_end >= 500.0 && next.time - t >= 1_500.0
+}
+
+fn format_length_short(ms: u64) -> Option<String> {
+    if ms == 0 {
+        return None;
+    }
+    let s = ms / 1000;
+    Some(format!("{}:{:02}", s / 60, s % 60))
+}
+
+/// In-play "Up next" card in the bottom-right corner with smooth entrance (`alpha` 0..=1),
+/// difficulty-colored accent bar, map duration, and `[N] Swap` keycap.
+pub(crate) fn draw_up_next(c: &mut Canvas, next: Option<&online::JourneyItem>, alpha: f32) {
+    let alpha = alpha.clamp(0.0, 1.0);
+    if alpha <= 0.01 {
+        return;
+    }
+    let start = c.shapes.len();
+    let pw = 252.0;
+    let ph = 54.0;
+    let slide_x = (1.0 - alpha) * 14.0;
+    let x = c.width - pw - 12.0 + slide_x;
+    let y = c.height - ph - 12.0;
+    let stripe_col = next.filter(|i| i.stars > 0.1).map_or(0x22d4c0, |i| {
+        style::role::rating(None, Some(i.stars as f32))
+    });
+
+    style::cold_panel(c, [x, y, pw, ph]);
+    c.round_rect(
+        [x, y],
+        [pw, ph],
+        style::radius::CARD,
+        rgba(0, 0.0),
+        rgba(stripe_col, 0.35),
+        1.0,
+    );
+    c.rect(x + 1.0, y + 6.0, 2.5, ph - 12.0, rgba(stripe_col, 0.95));
+
+    c.text(
+        x + 10.0,
+        y + 7.0,
+        6.5,
+        rgba(0x22d4c0, 1.0),
+        tr!("UP NEXT", "次の譜面", "ДАЛЬШЕ"),
+    );
+    match next {
+        Some(item) => {
+            let mut right_meta = format!("{:.2}*", item.stars);
+            if let Some(len) = format_length_short(item.length_ms) {
+                right_meta.push_str(&format!("  {len}"));
+            }
+            let mw = Canvas::text_width(7.0, &right_meta);
+            c.text(
+                x + pw - 10.0 - mw,
+                y + 7.0,
+                7.0,
+                rgba(0xffd24a, 0.95),
+                &right_meta,
+            );
+
+            let title = format!("{} - {}", item.artist, item.title);
+            c.text(
+                x + 10.0,
+                y + 20.0,
+                8.5,
+                rgba(0xffffff, 1.0),
+                &Canvas::fit(8.5, pw - 20.0, &title),
+            );
+
+            let swap = tr!("N: swap", "N: 変更", "N: заменить");
+            let sw = Canvas::text_width(6.5, swap) + 10.0;
+            let sx = x + pw - 10.0 - sw;
+            let sy = y + 34.0;
+            c.round_rect(
+                [sx, sy],
+                [sw, 13.0],
+                3.0,
+                rgba(0x1c2030, 0.95),
+                rgba(style::tone::EDGE, 0.7),
+                1.0,
+            );
+            c.text_centered(sx + sw / 2.0, sy + 3.5, 6.5, rgba(0xb4b4cc, 1.0), swap);
+
+            let ver = format!("[{}]", item.version);
+            c.text(
+                x + 10.0,
+                y + 36.0,
+                7.0,
+                rgba(0x9a9ab0, 1.0),
+                &Canvas::fit(7.0, (sx - (x + 10.0) - 8.0).max(20.0), &ver),
+            );
+        }
+        None => {
+            c.text(
+                x + 10.0,
+                y + 23.0,
+                8.0,
+                rgba(0x9a9ab0, 1.0),
+                tr!(
+                    "Picking the next map...",
+                    "次の譜面を選んでいます...",
+                    "Подбираем следующую карту..."
+                ),
+            );
+        }
+    }
+    c.fade_since(start, alpha, 1.0);
 }
 
 /// What Journey asks before it goes on: log in or go offline (signed out), or wait for the
@@ -414,7 +1436,7 @@ const PREV_ICON: [&str; 16] = [
     "................",
 ];
 
-const SKIP_ICON: [&str; 16] = [
+pub(crate) const SKIP_ICON: style::Icon = [
     "................",
     "................",
     "..##......##....",
@@ -876,19 +1898,67 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         &Canvas::fit(7.5, reason_room, &item.reason),
     );
 
-    // Bottom of banner: title, artist, difficulty + mapper.
+    // Bottom of banner: title, artist, difficulty + mapper, plus active Journey filter chips on
+    // the right so players can see active Focus/Length/Chill/Flow without opening Settings.
+    let mut active_tags: Vec<(&str, u32)> = Vec::new();
+    if state.cfg.journey_flow == JourneyFlow::Marathon {
+        active_tags.push((tr!("MARATHON", "マラソン", "МАРАФОН"), 0xffd24a));
+        if state.cfg.journey_hardcore {
+            active_tags.push((tr!("HARDCORE", "ハードコア", "ХАРДКОР"), style::DANGER));
+        }
+    } else if state.cfg.journey_flow == JourneyFlow::Nonstop {
+        active_tags.push((tr!("NON-STOP", "ノンストップ", "НОН-СТОП"), 0x22d4c0));
+    }
+    if state.cfg.journey_focus != JourneyFocus::Any && !state.journey.local_mode {
+        active_tags.push((focus_chip_label(state.cfg.journey_focus), 0xa66cff));
+    }
+    if state.cfg.journey_length != JourneyLength::Any {
+        active_tags.push((state.cfg.journey_length.chip(false), 0x4ea8ff));
+    }
+    if state.cfg.journey_chill {
+        active_tags.push((tr!("CHILL", "チル", "ЧИЛЛ"), 0x4ee07a));
+    }
+    let mut tags_w = 0.0f32;
+    if !active_tags.is_empty() {
+        let tag_y = cy + banner_h - 22.0;
+        let mut rx_tag = cx + cw - pad;
+        for (lbl, col) in active_tags.iter().rev() {
+            let tw_tag = Canvas::text_width(6.5, lbl) + 10.0;
+            rx_tag -= tw_tag;
+            c.round_rect(
+                [rx_tag, tag_y],
+                [tw_tag, 14.0],
+                style::radius::SMALL,
+                rgba(*col, 0.16),
+                rgba(*col, 0.72),
+                1.0,
+            );
+            c.text_centered(
+                rx_tag + tw_tag / 2.0,
+                tag_y + 3.5,
+                6.5,
+                rgba(*col, 1.0),
+                lbl,
+            );
+            c.hit(rx_tag, tag_y, tw_tag, 14.0, hit::Hit::JourneySettings);
+            rx_tag -= 5.0;
+        }
+        tags_w = (cx + cw - pad - rx_tag).max(0.0);
+    }
+
     let title_y = cy + banner_h - 54.0;
     let title = Canvas::fit(15.0, inner_w, &item.title);
     style::title(c, cx + pad, title_y, 15.0, 0xffffff, &title);
     let artist = Canvas::fit(9.5, inner_w, &item.artist);
     c.text(cx + pad, title_y + 21.0, 9.5, rgba(0xd0d0e4, 1.0), &artist);
     let diff_text = format!("[{}]  by {}", item.version, item.creator);
+    let diff_room = (inner_w - tags_w - 8.0).max(80.0);
     c.text(
         cx + pad,
         title_y + 36.0,
         8.5,
         rgba(role_col, 0.95),
-        &Canvas::fit(8.5, inner_w, &diff_text),
+        &Canvas::fit(8.5, diff_room, &diff_text),
     );
 
     // Divider under banner.
@@ -1315,6 +2385,22 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         hit::Hit::ModsButton,
         bh,
     );
+    let gear_lit = state.cfg.journey_focus != JourneyFocus::Any
+        || state.cfg.journey_length != JourneyLength::Any
+        || state.cfg.journey_chill
+        || state.cfg.journey_flow != JourneyFlow::Off;
+    let gear_w = style::block_button(
+        c,
+        [cx + 6.0 + mods_w + 8.0, mid],
+        &style::GEAR,
+        tr!("Journey", "ジャーニー", "Journey"),
+        None,
+        8.0,
+        gear_lit,
+        hit::Hit::JourneySettings,
+        bh,
+    );
+    let mods_w = mods_w + 8.0 + gear_w;
 
     let play_w = 148.0;
     let play_x = cx + cw - play_w;
@@ -1380,7 +2466,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     );
 }
 
-fn role_badge(role: &str) -> (&'static str, u32) {
+pub(crate) fn role_badge(role: &str) -> (&'static str, u32) {
     match role {
         "warmup" => ("WARM-UP", 0x4ee07a),
         "stretch" => ("STRETCH", 0xff4d5a),
@@ -1397,6 +2483,10 @@ impl State {
         self.main_menu = None;
         self.picking_lobby_map = false;
         self.journey.reset();
+        self.journey.focus = self.cfg.journey_focus;
+        self.journey.length = self.cfg.journey_length;
+        self.journey.marathon_cap = self.cfg.journey_flow == JourneyFlow::Marathon;
+        self.journey.chill = self.cfg.journey_chill;
         self.journey.screen_entered = Instant::now();
         if self.cfg.online_token.is_empty() {
             self.journey.gate = Some(Gate::SignedOut);
@@ -1464,6 +2554,7 @@ impl State {
     }
 
     pub(crate) fn journey_tick(&mut self) {
+        self.journey_poll_saves();
         let was_offline = self.journey.offline == Some(Gate::ServerDown);
         let fetched = self.journey.poll_fetch(&self.library);
         let dl_done = self.journey.poll_downloads();
@@ -1503,7 +2594,26 @@ impl State {
         }
     }
 
-    fn journey_refill(&mut self) {
+    /// Journey's upkeep away from its screen (a marathon): answers and downloads come in and the
+    /// queue is kept filled, with no preview played.
+    pub(crate) fn journey_tick_quiet(&mut self) {
+        self.journey_poll_saves();
+        self.journey.poll_fetch(&self.library);
+        self.journey.poll_downloads();
+        let now = Instant::now();
+        if !self.cfg.online_token.is_empty() && self.journey.probe_due(now) {
+            self.journey.probe(
+                self.cfg.online_server.clone(),
+                self.cfg.online_token.clone(),
+                self.cfg.scroll_speed,
+            );
+        }
+        if self.journey.can_refill(now) {
+            self.journey_refill();
+        }
+    }
+
+    pub(crate) fn journey_refill(&mut self) {
         if self.journey.gate == Some(Gate::SignedOut) || !self.journey.can_refill(Instant::now()) {
             return;
         }
@@ -1520,7 +2630,10 @@ impl State {
             );
         } else {
             self.journey.local_mode = true;
-            if self.journey.target_stars.is_none() && self.journey.step == 0 {
+            if self.journey.target_stars.is_none()
+                && self.journey.step == 0
+                && self.journey.marathon.is_none()
+            {
                 self.journey.needs_level = true;
                 return;
             }
@@ -1562,16 +2675,30 @@ impl State {
 
     /// Drops a failed download without sending a negative `JourneySkip` taste signal.
     fn journey_drop_failed(&mut self) {
+        self.journey_drop_unplayable();
+        self.journey_preview_current();
+    }
+
+    /// Goes past a map that can't be played (its download failed, its file is gone), telling
+    /// the server nothing: it isn't the player's verdict.
+    pub(crate) fn journey_drop_unplayable(&mut self) {
         self.journey.advance(PastOutcome::Skipped);
         self.journey.pool_exhausted = false;
         self.journey_refill();
-        self.journey_preview_current();
     }
 
     pub(crate) fn journey_skip_current(&mut self) {
         let preview_secs = self.journey.shown_at.elapsed().as_secs_f64();
+        if self.journey_skip_quiet(preview_secs) {
+            self.journey_preview_current();
+        }
+    }
+
+    /// Skips the current map (after `seen_secs` of it), telling the server, with no preview of
+    /// the next one; false when there was none.
+    pub(crate) fn journey_skip_quiet(&mut self, seen_secs: f64) -> bool {
         let Some(skipped) = self.journey.advance(PastOutcome::Skipped) else {
-            return;
+            return false;
         };
         // A map gone back to had its verdict sent when it was first left; a library pick made
         // offline is no server map.
@@ -1585,14 +2712,14 @@ impl State {
                 token: self.cfg.online_token.clone(),
                 md5: skipped.item.md5,
                 map_hash: skipped.item.map_hash,
-                preview_secs,
+                preview_secs: seen_secs,
             };
             std::thread::spawn(move || {
                 let _ = online::call(&server, req);
             });
         }
         self.journey_refill();
-        self.journey_preview_current();
+        true
     }
 
     /// Back to the map shown before the current one.
@@ -1600,6 +2727,142 @@ impl State {
         if self.journey.go_back() {
             self.journey_preview_current();
         }
+    }
+
+    /// Journey's gear: its settings panel comes up, or goes.
+    pub(crate) fn journey_toggle_settings(&mut self) {
+        self.journey.settings = match self.journey.settings {
+            Some(_) => None,
+            None => Some(0),
+        };
+    }
+
+    /// Steps a visible row of Journey's settings panel: kept in config, rebuilding the queue
+    /// whenever the effective map filter changed.
+    pub(crate) fn journey_change_setting(&mut self, row: usize, dir: i32) {
+        let visible = visible_settings(self.cfg.journey_flow);
+        let Some(&id) = visible.get(row) else {
+            return;
+        };
+        self.journey.settings = Some(row);
+        match id {
+            SettingId::Focus => self.cfg.journey_focus = self.cfg.journey_focus.step(dir),
+            SettingId::Length => self.cfg.journey_length = self.cfg.journey_length.step(dir),
+            SettingId::Chill => self.cfg.journey_chill = !self.cfg.journey_chill,
+            SettingId::Flow => self.cfg.journey_flow = self.cfg.journey_flow.step(dir),
+            SettingId::Gap => self.cfg.journey_gap = self.cfg.journey_gap.step(dir),
+            SettingId::SkipIntro => self.cfg.journey_skip_intro = !self.cfg.journey_skip_intro,
+            SettingId::UpNext => self.cfg.journey_up_next = !self.cfg.journey_up_next,
+            SettingId::Hardcore => self.cfg.journey_hardcore = !self.cfg.journey_hardcore,
+            SettingId::MarathonSave => {
+                self.cfg.journey_marathon_save = !self.cfg.journey_marathon_save;
+            }
+        }
+        self.journey_apply_settings();
+    }
+
+    pub(crate) fn journey_set_focus(&mut self, focus: JourneyFocus) {
+        self.journey.settings = visible_settings(self.cfg.journey_flow)
+            .iter()
+            .position(|&s| s == SettingId::Focus);
+        self.cfg.journey_focus = focus;
+        self.journey_apply_settings();
+    }
+
+    pub(crate) fn journey_set_length(&mut self, length: JourneyLength) {
+        self.journey.settings = visible_settings(self.cfg.journey_flow)
+            .iter()
+            .position(|&s| s == SettingId::Length);
+        self.cfg.journey_length = length;
+        self.journey_apply_settings();
+    }
+
+    pub(crate) fn journey_set_flow(&mut self, flow: JourneyFlow) {
+        self.journey.settings = visible_settings(flow)
+            .iter()
+            .position(|&s| s == SettingId::Flow);
+        self.cfg.journey_flow = flow;
+        self.journey_apply_settings();
+    }
+
+    pub(crate) fn journey_set_gap(&mut self, gap: MarathonGap) {
+        self.journey.settings = visible_settings(self.cfg.journey_flow)
+            .iter()
+            .position(|&s| s == SettingId::Gap);
+        self.cfg.journey_gap = gap;
+        self.journey_apply_settings();
+    }
+
+    fn journey_apply_settings(&mut self) {
+        if let Some(row) = self.journey.settings {
+            let max_row = visible_settings(self.cfg.journey_flow)
+                .len()
+                .saturating_sub(1);
+            self.journey.settings = Some(row.min(max_row));
+        }
+        self.cfg.save();
+        let marathon_cap = self.cfg.journey_flow == JourneyFlow::Marathon;
+        if self.journey.set_style(
+            self.cfg.journey_focus,
+            self.cfg.journey_chill,
+            self.cfg.journey_length,
+            marathon_cap,
+        ) {
+            self.journey_refill();
+            self.journey_preview_current();
+        }
+    }
+
+    /// Non-stop: the map up on the Journey screen is to start by itself now (it's ready, and
+    /// nothing is asked of the player first).
+    pub(crate) fn journey_autostart_due(&mut self) -> bool {
+        if !self.journey.autostart {
+            return false;
+        }
+        if self.cfg.journey_flow != JourneyFlow::Nonstop
+            || self.journey.gate.is_some()
+            || self.journey.needs_level
+            || self.journey.settings.is_some()
+        {
+            self.journey.autostart = false;
+            return false;
+        }
+        let due = self
+            .journey
+            .current()
+            .is_some_and(|q| q.source.is_ready() || matches!(q.source, MapSource::Failed(_)));
+        if due {
+            self.journey.autostart = false;
+        }
+        due
+    }
+
+    /// Non-stop / Marathon, in a play: no to the map up next. The server hears of it as a skip,
+    /// and any marathon preload of the discarded map is dropped so the replacement can preload.
+    pub(crate) fn journey_skip_upcoming(&mut self) {
+        let Some(skipped) = self.journey.skip_upcoming() else {
+            return;
+        };
+        if let Some(m) = &mut self.journey.marathon {
+            m.preload = None;
+        }
+        if !self.journey.local_mode
+            && !self.cfg.online_token.is_empty()
+            && !skipped.md5.starts_with("local:")
+        {
+            let server = self.cfg.online_server.clone();
+            let req = online::Request::JourneySkip {
+                token: self.cfg.online_token.clone(),
+                md5: skipped.md5,
+                map_hash: skipped.map_hash,
+                preview_secs: 0.0,
+            };
+            std::thread::spawn(move || {
+                let _ = online::call(&server, req);
+            });
+        }
+        // Downloads wait for the play to end; the refill only asks the server.
+        self.journey_refill();
     }
 
     /// Leaves Journey for the account form: logging in (`register` false) or making an account.
@@ -1615,10 +2878,18 @@ impl State {
 
     /// Goes on with the library only, for the reason Journey asked.
     pub(crate) fn journey_go_offline(&mut self) {
-        let reason = self.journey.gate.unwrap_or(Gate::SignedOut);
+        let reason = self.journey.gate.unwrap_or_else(|| {
+            if !self.cfg.online_token.is_empty() && self.journey.outage_since.is_some() {
+                Gate::ServerDown
+            } else {
+                Gate::SignedOut
+            }
+        });
         self.journey.go_offline(reason);
         self.journey_refill();
-        self.journey_preview_current();
+        if self.journey.marathon.is_none() {
+            self.journey_preview_current();
+        }
     }
 
     /// Asks the server again now instead of after the backoff.
@@ -1628,41 +2899,76 @@ impl State {
     }
 
     pub(crate) fn journey_play_current(&mut self) {
-        let entry_idx = match self.journey.current() {
-            Some(q) => match &q.source {
-                MapSource::Local(path) | MapSource::Saved(path) => {
-                    let path = path.clone();
-                    self.journey.playing_cached = None;
-                    let Some(idx) = self.library.iter().position(|e| e.path == path) else {
-                        self.journey_drop_failed();
-                        return;
-                    };
-                    idx
+        self.journey_play_current_with(false);
+    }
+
+    /// Plays the map up in Journey; `by_itself`: Non-stop started it (its intro may be skipped).
+    /// A marathon starts on its own screen instead.
+    pub(crate) fn journey_play_current_with(&mut self, by_itself: bool) {
+        if self.cfg.journey_flow == JourneyFlow::Marathon {
+            if self.journey.current().is_some() {
+                self.marathon_start();
+            }
+            return;
+        }
+        let Some(entry_idx) = self.journey_current_entry(false) else {
+            return;
+        };
+        // Cancel any background prefetch downloads/extractions before gameplay starts
+        // so weak CPUs never stutter during play.
+        self.journey.pause_background_downloads();
+        self.journey.in_play = true;
+        self.journey.skip_intro_next = by_itself && self.cfg.journey_skip_intro;
+        self.start_loading_from(entry_idx, None);
+    }
+
+    /// The library index of the map up in Journey, made ready to play (a cached one joins the
+    /// library): None while it's still on its way (said with a toast unless `quiet`) or when it
+    /// can't be played (then it's gone past, with no preview of the next when `quiet`).
+    pub(crate) fn journey_current_entry(&mut self, quiet: bool) -> Option<usize> {
+        let give_up = |s: &mut State| {
+            if quiet {
+                s.journey_drop_unplayable();
+            } else {
+                s.journey_drop_failed();
+            }
+        };
+        let q = self.journey.current()?;
+        let entry_idx = match &q.source {
+            MapSource::Local(path) | MapSource::Saved(path) => {
+                let path = path.clone();
+                self.journey.playing_cached = None;
+                let Some(idx) = self.library.iter().position(|e| e.path == path) else {
+                    give_up(self);
+                    return None;
+                };
+                idx
+            }
+            MapSource::Cached { folder, entry } => {
+                // The difficulty picked when it was unpacked; gone from the cache since
+                // (pruned, deleted by hand), it can't be played.
+                if !entry.path.is_file() {
+                    give_up(self);
+                    return None;
                 }
-                MapSource::Cached { folder, entry } => {
-                    // The difficulty picked when it was unpacked; gone from the cache since
-                    // (pruned, deleted by hand), it can't be played.
-                    if !entry.path.is_file() {
-                        self.journey_drop_failed();
-                        return;
-                    }
-                    let entry = library::Entry::from_parts(
-                        entry.path.clone(),
-                        entry.meta.clone(),
-                        entry.size,
-                        entry.modified,
-                    );
-                    self.journey.playing_cached = Some((folder.clone(), q.item.clone()));
-                    match self.library.iter().position(|e| e.path == entry.path) {
-                        Some(existing) => existing,
-                        None => {
-                            // Joins the end of the list: the indices handed out stay good.
-                            self.append_maps(vec![entry]);
-                            self.library.len() - 1
-                        }
+                let entry = library::Entry::from_parts(
+                    entry.path.clone(),
+                    entry.meta.clone(),
+                    entry.size,
+                    entry.modified,
+                );
+                self.journey.playing_cached = Some((folder.clone(), q.item.clone()));
+                match self.library.iter().position(|e| e.path == entry.path) {
+                    Some(existing) => existing,
+                    None => {
+                        // Joins the end of the list: the indices handed out stay good.
+                        self.append_maps(vec![entry]);
+                        self.library.len() - 1
                     }
                 }
-                MapSource::Pending | MapSource::Downloading(_) => {
+            }
+            MapSource::Pending | MapSource::Downloading(_) => {
+                if !quiet {
                     self.toast(
                         tr!(
                             "Still downloading this map...",
@@ -1671,21 +2977,16 @@ impl State {
                         )
                         .into(),
                     );
-                    return;
                 }
-                MapSource::Failed(_) => {
-                    // Never send a negative JourneySkip signal for a failed download.
-                    self.journey_drop_failed();
-                    return;
-                }
-            },
-            None => return,
+                return None;
+            }
+            MapSource::Failed(_) => {
+                // Never send a negative JourneySkip signal for a failed download.
+                give_up(self);
+                return None;
+            }
         };
-        // Cancel any background prefetch downloads/extractions before gameplay starts
-        // so weak CPUs never stutter during play.
-        self.journey.pause_background_downloads();
-        self.journey.in_play = true;
-        self.start_loading_from(entry_idx, None);
+        Some(entry_idx)
     }
 
     pub(crate) fn journey_next_from_results(&mut self, failed: bool) {
@@ -1703,6 +3004,10 @@ impl State {
     }
 
     pub(crate) fn journey_save_current(&mut self) {
+        self.journey_save_current_with(true);
+    }
+
+    pub(crate) fn journey_save_current_with(&mut self, toast_on_success: bool) {
         // The map just played (from its results), else the one up on the Journey screen.
         let cached_info = if let Some((folder, item)) = self.journey.playing_cached.clone() {
             Some((folder, item))
@@ -1717,17 +3022,22 @@ impl State {
         };
 
         let Some((folder, item)) = cached_info else {
-            self.toast(
-                tr!(
-                    "Already in your library",
-                    "すでにライブラリにあります",
-                    "Карта уже в библиотеке"
-                )
-                .into(),
-            );
+            if toast_on_success {
+                self.toast(
+                    tr!(
+                        "Already in your library",
+                        "すでにライブラリにあります",
+                        "Карта уже в библиотеке"
+                    )
+                    .into(),
+                );
+            }
             return;
         };
 
+        if self.journey.saving.iter().any(|j| j.folder == folder) {
+            return;
+        }
         // osu!'s Songs folder: the one picked in Settings, else an osu! install found (never
         // taiko.rs's own, which the other choice is).
         let own = [
@@ -1737,54 +3047,129 @@ impl State {
         let osu_songs = library::song_dirs()
             .into_iter()
             .find(|d| d.is_dir() && !own.iter().flatten().any(|o| o == d));
-        match crate::journey::save_cached_folder(
+        match crate::journey::try_rename_cached_folder(
             &folder,
             item.custom_id.is_some(),
             self.cfg.journey_save_to,
             osu_songs.as_deref(),
         ) {
-            Ok(dest) => {
-                // The maps the list has from the cache are where they were moved to now: the same
-                // entries at the same indices (a play's results, Ctrl+R, still find theirs).
-                let mut moved = Vec::new();
-                for (i, e) in self.library.iter_mut().enumerate() {
-                    if e.path.starts_with(&folder) {
-                        e.path = crate::journey::moved_path(&e.path, &folder, &dest);
-                        moved.push((i, e.path.clone(), e.modified, e.size));
-                    }
-                }
-                if !moved.is_empty() {
-                    self.invalidate_library_indices();
-                    if let Some(info) = &self.mapinfo {
-                        info.extend(moved);
-                        self.mapinfo_sorted = false;
-                    }
-                }
-                // The set's other difficulties join the list too.
+            Ok(crate::journey::SaveOutcome::Moved(dest)) => {
+                self.journey_finish_move(&folder, &dest, toast_on_success);
                 let fresh: Vec<_> = crate::journey::scan_single_folder(&dest)
                     .into_iter()
                     .filter(|e| !self.library.iter().any(|x| x.path == e.path))
                     .collect();
-                if fresh.is_empty() {
-                    self.select.refilter(&self.library);
-                } else {
+                if !fresh.is_empty() {
                     self.append_maps(fresh);
                 }
-                // Every queued map of the set is in the library now, and the play of it has
-                // nothing left to save.
-                self.journey.saved(&folder, &dest);
-                let where_saved = self.cfg.journey_save_to.name();
-                self.toast(tr!(
-                    "Saved to {where_saved}",
-                    "{where_saved}に保存しました",
-                    "Сохранено в: {where_saved}";
-                    [] [where_saved]
-                ));
+            }
+            Ok(crate::journey::SaveOutcome::NeedsCopy { dest_root, dest }) => {
+                self.spawn_journey_copy(folder, dest_root, dest, toast_on_success);
             }
             Err(e) => {
                 self.toast(
                     tr!("Save failed: {e}", "保存失敗: {e}", "Ошибка сохранения: {e}"; [] [e]),
                 );
+            }
+        }
+    }
+
+    /// Runs a cross-drive Journey folder copy and sibling difficulty scan on a background thread
+    /// so UI and audio never stall.
+    pub(crate) fn spawn_journey_copy(
+        &mut self,
+        folder: PathBuf,
+        dest_root: PathBuf,
+        dest: PathBuf,
+        toast_on_success: bool,
+    ) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let folder_bg = folder.clone();
+        std::thread::spawn(move || {
+            let res = crate::journey::copy_cached_folder(&folder_bg, &dest_root, &dest).map(|d| {
+                let fresh = crate::journey::scan_single_folder(&d);
+                (d, fresh)
+            });
+            let _ = tx.send(res);
+        });
+        self.journey.saving.push(crate::journey::SaveJob {
+            folder,
+            toast_on_success,
+            rx,
+        });
+    }
+
+    fn journey_finish_move(&mut self, folder: &Path, dest: &Path, toast_on_success: bool) {
+        // The maps the list has from the cache are where they were moved to now: the same
+        // entries at the same indices (a play's results, Ctrl+R, still find theirs).
+        let mut moved = Vec::new();
+        for (i, e) in self.library.iter_mut().enumerate() {
+            if e.path.starts_with(folder) {
+                e.path = crate::journey::moved_path(&e.path, folder, dest);
+                moved.push((i, e.path.clone(), e.modified, e.size));
+            }
+        }
+        if !moved.is_empty() {
+            self.invalidate_library_indices();
+            if let Some(info) = &self.mapinfo {
+                info.extend(moved);
+                self.mapinfo_sorted = false;
+            }
+        }
+        self.select.refilter(&self.library);
+        // Every queued map of the set is in the library now, and the play of it has
+        // nothing left to save.
+        self.journey.saved(folder, dest);
+        if let Some(p) = self.journey.marathon.as_mut().and_then(|m| m.last.as_mut())
+            && p.cached.as_ref().is_some_and(|(f, _)| f == folder)
+        {
+            p.cached = None;
+            p.saved = true;
+        }
+        if toast_on_success {
+            let where_saved = self.cfg.journey_save_to.name();
+            self.toast(tr!(
+                "Saved to {where_saved}",
+                "{where_saved}に保存しました",
+                "Сохранено в: {where_saved}";
+                [] [where_saved]
+            ));
+        }
+    }
+
+    /// Polls background cross-drive Journey save jobs.
+    pub(crate) fn journey_poll_saves(&mut self) {
+        let mut done = Vec::new();
+        let mut i = 0;
+        while i < self.journey.saving.len() {
+            match self.journey.saving[i].rx.try_recv() {
+                Ok(res) => {
+                    let job = self.journey.saving.remove(i);
+                    done.push((job.folder, job.toast_on_success, res));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => i += 1,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.journey.saving.remove(i);
+                }
+            }
+        }
+        for (folder, toast_on_success, res) in done {
+            match res {
+                Ok((dest, scanned)) => {
+                    self.journey_finish_move(&folder, &dest, toast_on_success);
+                    let fresh: Vec<_> = scanned
+                        .into_iter()
+                        .filter(|e| !self.library.iter().any(|x| x.path == e.path))
+                        .collect();
+                    if !fresh.is_empty() {
+                        self.append_maps(fresh);
+                    }
+                }
+                Err(e) => {
+                    self.toast(
+                        tr!("Save failed: {e}", "保存失敗: {e}", "Ошибка сохранения: {e}"; [] [e]),
+                    );
+                }
             }
         }
     }

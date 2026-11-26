@@ -141,7 +141,10 @@ impl Play {
             let row_h: f32 = if phone { 62.0 } else { 36.0 };
             let label: f32 = if phone { 18.0 } else { 11.0 };
             let pw = (w - 40.0).min(if phone { 480.0 } else { 340.0 });
-            let ph = 92.0 + PAUSE_ITEMS as f32 * row_h + 26.0;
+            let marathon = self.view.marathon;
+            let hardcore = marathon && self.view.hardcore;
+            let item_count = if hardcore { 3 } else { PAUSE_ITEMS };
+            let ph = 92.0 + item_count as f32 * row_h + 26.0;
             let (px, py) = (w / 2.0 - pw / 2.0, (480.0 - ph) / 2.0 - 6.0 - rise);
             let start = c.shapes.len();
             crate::style::panel(c, px, py, pw, ph);
@@ -193,8 +196,14 @@ impl Play {
             let colours = crate::game::note_colours();
             let (rx, rw) = (px + 12.0, pw - 24.0);
             let test = self.view.test_play;
-            let items = (0..PAUSE_ITEMS).map(|i| match i {
+            let items = (0..item_count).map(|i| match i {
+                0 if hardcore => pause_item(0),
+                1 if hardcore => pause_item(3),
+                2 if hardcore => tr!("End the marathon", "マラソンを終える", "Закончить марафон"),
                 4 if test => tr!("Back to the editor", "エディターに戻る", "Назад в редактор"),
+                1 if marathon => tr!("Skip this map", "この譜面をスキップ", "Пропустить карту"),
+                2 if marathon => tr!("Retry", "やり直す", "Заново"),
+                4 if marathon => tr!("End the marathon", "マラソンを終える", "Закончить марафон"),
                 _ => pause_item(i),
             });
             for (i, item) in items.enumerate() {

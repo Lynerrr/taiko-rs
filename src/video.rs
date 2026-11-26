@@ -1017,8 +1017,14 @@ pub struct Blend {
 }
 
 impl Blend {
+    pub fn reset(&mut self) {
+        self.views = 0;
+        self.sum.clear();
+    }
+
     pub fn add(&mut self, px: &[u8]) {
-        if self.views == 0 {
+        if self.views == 0 || self.sum.len() != px.len() {
+            self.views = 0;
             self.sum.clear();
             self.sum.resize(px.len(), 0);
         }
@@ -1209,6 +1215,21 @@ mod tests {
         assert_eq!(b.take(), vec![128, 255, 15]);
         b.add(&[7, 7, 7]);
         assert_eq!(b.take(), vec![7, 7, 7]);
+    }
+
+    #[test]
+    fn blend_reset_and_size_change_drop_stale_views() {
+        // Cancelled mid-frame at one resolution, then reset before a same-resolution export.
+        let mut b = Blend::default();
+        b.add(&[200, 100, 50]);
+        b.reset();
+        b.add(&[10, 20, 30]);
+        assert_eq!(b.take(), vec![10, 20, 30]);
+
+        // Even without an explicit reset, a resolution change restarts accumulation cleanly.
+        b.add(&[200, 100, 50]);
+        b.add(&[10, 20, 30, 40, 50, 60]);
+        assert_eq!(b.take(), vec![10, 20, 30, 40, 50, 60]);
     }
 
     #[test]

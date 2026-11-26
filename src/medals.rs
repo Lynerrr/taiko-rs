@@ -745,14 +745,28 @@ impl Unlock {
         self.current.is_some()
     }
 
+    /// Something is on screen or about to be: what Journey's Non-stop waits for before the next
+    /// map, so a medal isn't left over the play.
+    pub fn busy(&self) -> bool {
+        self.current.is_some() || !self.queue.is_empty()
+    }
+
     /// All of `medals`, in this order: for looking at them with `TAIKO_UNLOCK`.
     pub fn preview(&mut self, medals: Vec<MedalNote>) {
         self.queue.extend(medals);
     }
 
     /// Moves on as time passes: `allowed` is false while a song is playing. The tier and whether
-    /// it's secret of a medal that has just started, for its sound.
+    /// it's secret of a medal that has just started, for its sound. A medal still up when a
+    /// song starts (a map that starts by itself) goes back to the front of the queue, to be
+    /// shown whole after it: over the play it hid the notes and took the drum keys.
     pub fn tick(&mut self, allowed: bool) -> Option<(u8, bool)> {
+        if !allowed && let Some(s) = self.current.take() {
+            if s.leaving.is_none() {
+                self.queue.push_front(s.medal);
+            }
+            return None;
+        }
         if let Some(s) = &self.current {
             let ms = s.since.elapsed().as_secs_f32() * 1000.0;
             let gone = s
@@ -1420,6 +1434,25 @@ mod tests {
         let rows = of_section(&view, 2);
         assert_eq!(rows.len(), 2);
         assert!(rows[0].at.is_some());
+    }
+
+    /// A song starting under a medal puts it back, whole, for after the song.
+    #[test]
+    fn a_medal_up_when_a_song_starts_waits_for_its_end() {
+        let mut u = Unlock::default();
+        u.add(vec![note("a", 1, false), note("b", 2, false)]);
+        assert!(u.busy() && !u.showing());
+        assert_eq!(u.tick(false), None, "nothing starts in a song");
+        assert_eq!(u.tick(true), Some((2, false)));
+        assert!(u.showing());
+        // The song starts: off the screen, back in the queue in front of the other one.
+        assert_eq!(u.tick(false), None);
+        assert!(!u.showing() && u.busy());
+        assert_eq!(u.tick(true), Some((2, false)), "shown again from its start");
+        u.current = None;
+        assert_eq!(u.tick(true), Some((1, false)));
+        u.current = None;
+        assert!(!u.busy());
     }
 
     fn shapes_at(m: &MedalNote, ms: f32) -> usize {

@@ -132,9 +132,14 @@ impl Screen for MpWait {
                 game.set_defense(team, me, d);
             }
             game.set_scroll_speed(state.cfg.scroll_speed);
-            if let Some(i) = state.mp.as_ref().and_then(|s| s.map_entry) {
+            if let Some(entry) = state
+                .mp
+                .as_ref()
+                .and_then(|s| s.map_entry)
+                .and_then(|i| state.library.get(i))
+            {
                 let live_pp = pp::Live::start(
-                    state.library[i].path.clone(),
+                    entry.path.clone(),
                     stars::read,
                     game.rate(),
                     state.pending_mods,

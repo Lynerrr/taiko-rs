@@ -188,6 +188,259 @@ impl JourneySaveTo {
     }
 }
 
+/// The kind of maps a Journey asks for (its settings panel).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum JourneyFocus {
+    /// Whatever fits the player.
+    #[default]
+    Any,
+    Streams,
+    /// Long streams (deathstreams), not bursts.
+    LongStreams,
+    /// Rhythm changes, triplets and ultra-fast gaps.
+    Tech,
+    /// Scroll speed changes.
+    Sv,
+}
+
+impl JourneyFocus {
+    pub const ALL: [JourneyFocus; 5] = [
+        JourneyFocus::Any,
+        JourneyFocus::Streams,
+        JourneyFocus::LongStreams,
+        JourneyFocus::Tech,
+        JourneyFocus::Sv,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            JourneyFocus::Any => tr!("Anything", "おまかせ", "Любые"),
+            JourneyFocus::Streams => tr!("Streams", "連打", "Стримы"),
+            JourneyFocus::LongStreams => tr!("Long streams", "長い連打", "Длинные стримы"),
+            JourneyFocus::Tech => tr!("Tech", "テクニカル", "Техника"),
+            JourneyFocus::Sv => tr!("SV", "SV", "SV"),
+        }
+    }
+
+    /// Its name in the config file and on the wire (`Request::JourneyNext::focus`).
+    pub fn key(self) -> &'static str {
+        match self {
+            JourneyFocus::Any => "any",
+            JourneyFocus::Streams => "streams",
+            JourneyFocus::LongStreams => "long-streams",
+            JourneyFocus::Tech => "tech",
+            JourneyFocus::Sv => "sv",
+        }
+    }
+
+    /// What the server is asked for: nothing for Any.
+    pub fn wire(self) -> Option<String> {
+        (self != JourneyFocus::Any).then(|| self.key().to_string())
+    }
+
+    pub fn parse(s: &str) -> Option<JourneyFocus> {
+        JourneyFocus::ALL
+            .into_iter()
+            .find(|v| v.key().eq_ignore_ascii_case(s))
+    }
+
+    pub fn step(self, dir: i32) -> JourneyFocus {
+        let i = JourneyFocus::ALL
+            .iter()
+            .position(|&v| v == self)
+            .unwrap_or(0) as i32;
+        JourneyFocus::ALL[(i + dir).rem_euclid(JourneyFocus::ALL.len() as i32) as usize]
+    }
+}
+
+/// Chart length filter for Journey recommendations (its settings panel).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum JourneyLength {
+    /// Any length in normal Journey; Marathon caps at 5 minutes by default.
+    #[default]
+    Any,
+    /// Short maps up to 2 minutes.
+    Short,
+    /// Standard maps from 1 to 4 minutes.
+    Standard,
+    /// Maps up to 6 minutes.
+    Extended,
+    /// Long maps 4 minutes and over.
+    Long,
+}
+
+/// Default upper bound (5 minutes) applied in Marathon when `JourneyLength::Any` is selected,
+/// so hour-long compilation charts never ambush a marathon run.
+pub const MARATHON_DEFAULT_MAX_LENGTH_MS: u64 = 300_000;
+
+impl JourneyLength {
+    pub const ALL: [JourneyLength; 5] = [
+        JourneyLength::Any,
+        JourneyLength::Short,
+        JourneyLength::Standard,
+        JourneyLength::Extended,
+        JourneyLength::Long,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            JourneyLength::Any => tr!("Any", "おまかせ", "Любые"),
+            JourneyLength::Short => tr!("Short (<=2m)", "短め (<=2分)", "Короткие (<=2м)"),
+            JourneyLength::Standard => tr!("Normal (1-4m)", "標準 (1-4分)", "Обычные (1-4м)"),
+            JourneyLength::Extended => tr!("Up to 6m", "6分まで", "До 6м"),
+            JourneyLength::Long => tr!("Long (4m+)", "長め (4分+)", "Длинные (4м+)"),
+        }
+    }
+
+    /// Compact label for segmented chips in Journey settings and active-filter badges.
+    pub fn chip(self, marathon: bool) -> &'static str {
+        match self {
+            JourneyLength::Any if marathon => tr!("Any <=5m", "標準 <=5分", "Все <=5м"),
+            JourneyLength::Any => tr!("Any", "おまかせ", "Любые"),
+            JourneyLength::Short => tr!("<=2m", "<=2分", "<=2м"),
+            JourneyLength::Standard => tr!("1-4m", "1-4分", "1-4м"),
+            JourneyLength::Extended => tr!("<=6m", "<=6分", "<=6м"),
+            JourneyLength::Long => tr!("4m+", "4分+", "4м+"),
+        }
+    }
+
+    /// Inclusive `(min_length_ms, max_length_ms)` bounds sent to the server and local picker.
+    pub fn bounds(self, marathon: bool) -> (Option<u64>, Option<u64>) {
+        match self {
+            JourneyLength::Any => (None, marathon.then_some(MARATHON_DEFAULT_MAX_LENGTH_MS)),
+            JourneyLength::Short => (None, Some(120_000)),
+            JourneyLength::Standard => (Some(60_000), Some(240_000)),
+            JourneyLength::Extended => (None, Some(360_000)),
+            JourneyLength::Long => (Some(240_000), None),
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            JourneyLength::Any => "any",
+            JourneyLength::Short => "short",
+            JourneyLength::Standard => "standard",
+            JourneyLength::Extended => "extended",
+            JourneyLength::Long => "long",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<JourneyLength> {
+        JourneyLength::ALL
+            .into_iter()
+            .find(|v| v.key().eq_ignore_ascii_case(s))
+    }
+
+    pub fn step(self, dir: i32) -> JourneyLength {
+        let i = JourneyLength::ALL
+            .iter()
+            .position(|&v| v == self)
+            .unwrap_or(0) as i32;
+        JourneyLength::ALL[(i + dir).rem_euclid(JourneyLength::ALL.len() as i32) as usize]
+    }
+}
+
+/// How Journey goes from one map to the next.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum JourneyFlow {
+    /// Each play ends on its results; the next map starts with a key.
+    #[default]
+    Off,
+    /// Results count down a few seconds, then the next map starts by itself.
+    Nonstop,
+    /// No results: a wheel turns from map to map until the player stops.
+    Marathon,
+}
+
+/// What a Journey marathon shows between two maps.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MarathonGap {
+    /// The wheel of maps turns for a couple of seconds.
+    #[default]
+    Wheel,
+    /// The wheel, for under a second.
+    Short,
+    /// Nothing: the next map (loaded during this one) starts on this one's last note, its song
+    /// fading in over this one's.
+    Seamless,
+}
+
+impl MarathonGap {
+    pub const ALL: [MarathonGap; 3] = [
+        MarathonGap::Wheel,
+        MarathonGap::Short,
+        MarathonGap::Seamless,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            MarathonGap::Wheel => tr!("Wheel", "ホイール", "Колесо"),
+            MarathonGap::Short => tr!("Short", "短め", "Короткое"),
+            MarathonGap::Seamless => tr!("Seamless", "シームレス", "Бесшовно"),
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            MarathonGap::Wheel => "wheel",
+            MarathonGap::Short => "short",
+            MarathonGap::Seamless => "seamless",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<MarathonGap> {
+        MarathonGap::ALL
+            .into_iter()
+            .find(|v| v.key().eq_ignore_ascii_case(s))
+    }
+
+    pub fn step(self, dir: i32) -> MarathonGap {
+        let i = MarathonGap::ALL
+            .iter()
+            .position(|&v| v == self)
+            .unwrap_or(0) as i32;
+        MarathonGap::ALL[(i + dir).rem_euclid(MarathonGap::ALL.len() as i32) as usize]
+    }
+}
+
+impl JourneyFlow {
+    pub const ALL: [JourneyFlow; 3] = [
+        JourneyFlow::Off,
+        JourneyFlow::Nonstop,
+        JourneyFlow::Marathon,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            JourneyFlow::Off => tr!("Manual", "手動", "Вручную"),
+            JourneyFlow::Nonstop => tr!("Non-stop", "ノンストップ", "Нон-стоп"),
+            JourneyFlow::Marathon => tr!("Marathon", "マラソン", "Марафон"),
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            JourneyFlow::Off => "off",
+            JourneyFlow::Nonstop => "nonstop",
+            JourneyFlow::Marathon => "marathon",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<JourneyFlow> {
+        JourneyFlow::ALL
+            .into_iter()
+            .find(|v| v.key().eq_ignore_ascii_case(s))
+    }
+
+    pub fn step(self, dir: i32) -> JourneyFlow {
+        let i = JourneyFlow::ALL
+            .iter()
+            .position(|&v| v == self)
+            .unwrap_or(0) as i32;
+        JourneyFlow::ALL[(i + dir).rem_euclid(JourneyFlow::ALL.len() as i32) as usize]
+    }
+}
+
 /// Where an F12 screenshot goes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScreenshotTo {
@@ -288,6 +541,26 @@ pub struct Config {
     pub journey_save_to: JourneySaveTo,
     /// Liking a map in Journey automatically saves it from the temporary cache to the library.
     pub journey_save_on_like: bool,
+    /// The kind of maps Journey asks for.
+    pub journey_focus: JourneyFocus,
+    /// Map duration filter for Journey and Marathon sessions.
+    pub journey_length: JourneyLength,
+    /// Journey plays it easy: maps below the player's level, no stretch maps.
+    pub journey_chill: bool,
+    /// How Journey goes from one map to the next (results, a countdown, or a marathon), showing
+    /// what's up next towards the end of a map and in its breaks unless Off.
+    pub journey_flow: JourneyFlow,
+    /// A marathon ends on the first failed map.
+    pub journey_hardcore: bool,
+    /// A map Journey starts by itself (non-stop, marathon) starts just before its first note.
+    pub journey_skip_intro: bool,
+    /// Non-stop and Marathon show the "Up next" card in a play (towards a map's end and in its
+    /// breaks), where N says no to that map.
+    pub journey_up_next: bool,
+    /// What a marathon shows between two maps: its wheel, briefly, or nothing at all.
+    pub journey_gap: MarathonGap,
+    /// Automatically save cached maps played in a Journey marathon to the player's library.
+    pub journey_marathon_save: bool,
     /// The interface's language.
     pub language: crate::lang::Lang,
     /// Empty selects the original pixel font; otherwise an installed family name.
@@ -337,6 +610,8 @@ pub struct Config {
     pub show_converts: bool,
     /// Song select lists songs under headings (`ui::Select::headings`).
     pub song_headings: bool,
+    /// Songs' titles and artists in their own script (`TitleUnicode`), else romanised.
+    pub original_names: bool,
     /// Song select in the main menu's look shows the library's counts by the search row and the
     /// device line at the bottom (as the classic look always does).
     pub select_info: bool,
@@ -611,6 +886,15 @@ impl Default for Config {
             },
             journey_save_to: JourneySaveTo::Own,
             journey_save_on_like: true,
+            journey_focus: JourneyFocus::Any,
+            journey_length: JourneyLength::Any,
+            journey_chill: false,
+            journey_flow: JourneyFlow::Off,
+            journey_hardcore: false,
+            journey_skip_intro: true,
+            journey_up_next: true,
+            journey_gap: MarathonGap::Wheel,
+            journey_marathon_save: false,
             language: crate::lang::Lang::En,
             ui_font: String::new(),
             // osu!'s default: a new player starts where an osu! player does.
@@ -634,6 +918,7 @@ impl Default for Config {
             wheel_resizes_playfield: false,
             show_converts: false,
             song_headings: false,
+            original_names: false,
             select_info: false,
             card_fade: CardFade::Off,
             custom_move_asked: false,
@@ -1536,6 +1821,21 @@ impl Config {
                     cfg.journey_save_to = JourneySaveTo::parse(v).unwrap_or(cfg.journey_save_to)
                 }
                 "journey_save_on_like" => cfg.journey_save_on_like = v != "false",
+                "journey_focus" => {
+                    cfg.journey_focus = JourneyFocus::parse(v).unwrap_or(cfg.journey_focus)
+                }
+                "journey_length" => {
+                    cfg.journey_length = JourneyLength::parse(v).unwrap_or(cfg.journey_length)
+                }
+                "journey_chill" => cfg.journey_chill = v == "true",
+                "journey_flow" => {
+                    cfg.journey_flow = JourneyFlow::parse(v).unwrap_or(cfg.journey_flow)
+                }
+                "journey_hardcore" => cfg.journey_hardcore = v == "true",
+                "journey_skip_intro" => cfg.journey_skip_intro = v != "false",
+                "journey_up_next" => cfg.journey_up_next = v != "false",
+                "journey_gap" => cfg.journey_gap = MarathonGap::parse(v).unwrap_or(cfg.journey_gap),
+                "journey_marathon_save" => cfg.journey_marathon_save = v == "true",
                 "ui_font" => cfg.ui_font = v.to_string(),
                 "language" => cfg.language = crate::lang::Lang::parse(v).unwrap_or(cfg.language),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
@@ -1543,6 +1843,7 @@ impl Config {
                 "custom_move_asked" => cfg.custom_move_asked = v == "true",
                 "show_converts" => cfg.show_converts = v == "true",
                 "song_headings" => cfg.song_headings = v == "true",
+                "original_names" => cfg.original_names = v == "true",
                 "select_info" => cfg.select_info = v == "true",
                 "card_fade" => cfg.card_fade = CardFade::parse(v).unwrap_or(cfg.card_fade),
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
@@ -2090,6 +2391,10 @@ impl Config {
             self.show_converts
         ));
         out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
+        out.push_str(&format!(
+            "# songs' titles and artists in their own script (false: romanised)\noriginal_names = {}\n",
+            self.original_names
+        ));
         out.push_str(&format!("# song select (main menu look) shows the library's counts and the device line\nselect_info = {}\n", self.select_info));
         out.push_str(&format!(
             "# song select's cards: their picture's colour fades to grey: off, right (towards the right) or left\ncard_fade = {}\n",
@@ -2179,6 +2484,42 @@ impl Config {
         out.push_str(&format!(
             "# automatically save a Journey map to the library when you like it\njourney_save_on_like = {}\n",
             self.journey_save_on_like
+        ));
+        out.push_str(&format!(
+            "# the kind of maps Journey picks: any, streams, long-streams, tech or sv\njourney_focus = {}\n",
+            self.journey_focus.key()
+        ));
+        out.push_str(&format!(
+            "# map length filter for Journey: any, short (<=2m), standard (1-4m), extended (<=6m) or long (4m+)\njourney_length = {}\n",
+            self.journey_length.key()
+        ));
+        out.push_str(&format!(
+            "# Journey plays it easy: maps below your level, no stretch maps\njourney_chill = {}\n",
+            self.journey_chill
+        ));
+        out.push_str(&format!(
+            "# how Journey goes from map to map: off, nonstop (results count down) or marathon (no results)\njourney_flow = {}\n",
+            self.journey_flow.key()
+        ));
+        out.push_str(&format!(
+            "# a Journey marathon ends on the first failed map\njourney_hardcore = {}\n",
+            self.journey_hardcore
+        ));
+        out.push_str(&format!(
+            "# maps Journey starts by itself start just before their first note\njourney_skip_intro = {}\n",
+            self.journey_skip_intro
+        ));
+        out.push_str(&format!(
+            "# Non-stop and Marathon show the map up next in a play (N says no to it)\njourney_up_next = {}\n",
+            self.journey_up_next
+        ));
+        out.push_str(&format!(
+            "# between a marathon's maps: wheel, short (a brief wheel) or seamless (none)\njourney_gap = {}\n",
+            self.journey_gap.key()
+        ));
+        out.push_str(&format!(
+            "# automatically save maps played in a Journey marathon to the library\njourney_marathon_save = {}\n",
+            self.journey_marathon_save
         ));
         let tja = self
             .tja_folder
@@ -2315,6 +2656,8 @@ fn keep_unknown(out: &mut String, old: &str) {
                 k,
                 "songs"
                     | "multiverse_preset"
+                    | "hud_preset"
+                    | "editor_recent"
                     | "mod_preset"
                     | "skin_part"
                     | "editor_snap_preset"
@@ -2390,6 +2733,31 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(left, ["config.txt"], "no temporary file is left behind");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_the_last_hud_preset_or_recent_map_is_not_undone_by_a_save() {
+        let dir = std::env::temp_dir().join(format!("taiko-config-lists-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.txt");
+        std::fs::write(
+            &path,
+            "hud_preset = mine: x\neditor_recent = /maps/a.osu\nfuture_option = keep\n",
+        )
+        .unwrap();
+        // This build's text, from a config with neither list (the last one just deleted).
+        let text = Config::default().to_text();
+        assert!(!text.contains("hud_preset ="));
+        assert!(!text.contains("editor_recent ="));
+        write_pending(&mut std::collections::HashMap::from([(path.clone(), text)]));
+        let new = std::fs::read_to_string(&path).unwrap();
+        assert!(!new.contains("hud_preset ="), "{new}");
+        assert!(!new.contains("editor_recent ="), "{new}");
+        assert!(
+            new.contains("future_option = keep"),
+            "unknown keys still kept"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

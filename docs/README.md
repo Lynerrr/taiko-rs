@@ -213,8 +213,9 @@ Ctrl+←/→ to seek the music and autoplay to any part of the map. Wherever you
 remembered (a blue flag): **Play from 1:23** under the timeline (or Shift+Enter) starts the map there,
 with the music two seconds earlier and only the notes from that point on counting; retry keeps the
 start point. F2 picks a random song; the game also starts on a random one. Text is drawn with a
-built-in pixel font covering ASCII and Cyrillic, so Russian song titles (from `TitleUnicode` /
-`ArtistUnicode`), names, search and chat show as they are.
+built-in pixel font covering ASCII, Cyrillic, Japanese and Chinese. Song titles and artists show
+romanised, as osu! lists them; **Settings > Library > Original names** shows them in their own
+script (`TitleUnicode` / `ArtistUnicode`) instead. Search finds a song by either.
 
 **Local scores and replays:** every finished play (not autoplay or a play from a start point) is
 saved as a replay in `replays/` in the config folder. The results screen tells you where it

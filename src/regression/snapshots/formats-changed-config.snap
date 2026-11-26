@@ -168,6 +168,8 @@ custom_move_asked = false
 show_converts = false
 # song select groups songs under headings (false: one list, by difficulty each difficulty on its own)
 song_headings = true
+# songs' titles and artists in their own script (false: romanised)
+original_names = false
 # song select (main menu look) shows the library's counts and the device line
 select_info = true
 # song select's cards: their picture's colour fades to grey: off, right (towards the right) or left
@@ -224,6 +226,24 @@ songs_folder =
 journey_save_to = own
 # automatically save a Journey map to the library when you like it
 journey_save_on_like = true
+# the kind of maps Journey picks: any, streams, long-streams, tech or sv
+journey_focus = any
+# map length filter for Journey: any, short (<=2m), standard (1-4m), extended (<=6m) or long (4m+)
+journey_length = any
+# Journey plays it easy: maps below your level, no stretch maps
+journey_chill = false
+# how Journey goes from map to map: off, nonstop (results count down) or marathon (no results)
+journey_flow = off
+# a Journey marathon ends on the first failed map
+journey_hardcore = false
+# maps Journey starts by itself start just before their first note
+journey_skip_intro = true
+# Non-stop and Marathon show the map up next in a play (N says no to it)
+journey_up_next = true
+# between a marathon's maps: wheel, short (a brief wheel) or seamless (none)
+journey_gap = wheel
+# automatically save maps played in a Journey marathon to the library
+journey_marathon_save = false
 # folder of TJA charts (empty = Tja beside Custom)
 tja_folder =
 # extra song folders / .osz files, one per line

@@ -97,6 +97,8 @@ pub enum Item {
     ShowFps,
     /// Song select's library counts and device line in the main menu's look.
     SelectInfo,
+    /// Songs' names in their own script.
+    OriginalNames,
     CardFade,
     Animations,
     Splash,
@@ -142,13 +144,14 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 148] = [
+pub const ITEMS: [(&str, Item); 149] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::JourneySaveTo),
     ("LIBRARY", Item::JourneySaveOnLike),
     ("LIBRARY", Item::TjaFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
+    ("LIBRARY", Item::OriginalNames),
     ("LIBRARY", Item::SelectInfo),
     ("LIBRARY", Item::SongSelectLayout),
     ("LIBRARY", Item::CardFade),
@@ -701,6 +704,7 @@ impl Item {
             Item::FpsCap => tr!("FPS cap", "FPSの上限", "Ограничение FPS"),
             Item::ShowFps => tr!("FPS overlay", "FPSの表示", "Счётчик FPS"),
             Item::SelectInfo => tr!("Library info", "ライブラリ情報", "Инфо о библиотеке"),
+            Item::OriginalNames => tr!("Original names", "原語の曲名", "Названия в оригинале"),
             Item::Animations => tr!("UI animations", "UIのアニメーション", "Анимации интерфейса"),
             Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
             Item::EpilepsyWarning => tr!(
@@ -868,6 +872,7 @@ impl Item {
             | Item::HalfResolution
             | Item::ShowFps
             | Item::SelectInfo
+            | Item::OriginalNames
             | Item::Animations
             | Item::Splash
             | Item::EpilepsyWarning
@@ -1238,6 +1243,11 @@ impl Item {
                 "mailbox/immediate only. A few times your refresh rate is plenty.",
                 "mailbox/immediateのみ。リフレッシュレートの数倍で十分です。",
                 "Только mailbox/immediate. Хватит нескольких частот обновления экрана."
+            ),
+            Item::OriginalNames => tr!(
+                "Show songs' titles and artists in their own script (Russian, Japanese...) where the map has them. Off: romanised, as osu! lists them.",
+                "譜面にあれば、曲名とアーティストを原語の文字 (日本語、ロシア語など) で表示します。オフ: osu!と同じくローマ字で。",
+                "Показывать названия и исполнителей на языке оригинала (русском, японском...), если они есть в карте. Выкл.: латиницей, как в списках osu!."
             ),
             Item::SelectInfo => tr!(
                 "Song select shows how many songs and maps there are, and the graphics and audio devices at the bottom.",

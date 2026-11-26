@@ -5,7 +5,7 @@ MenuItem(2) @350,202 -> EditorHome +"Choose a song file...   [Enter]" +"Drop a s
 MenuItem(3) @438,202 -> MpMenu +"127.0.0.1:9   no connection" +"< BACK" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +5 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"JOURNEY" -13 more
 MenuItem(4) @527,202 -> Download +"< BACK" +"Has leaderboard" +"Relevance" +"SORT" +"STATUS" +"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" +7 more -"." -"1 maps in your library" -"EDITOR" -"EXIT" -"JOURNEY" -"MEDALS" -13 more
 MenuItem(5) @616,202 -> Select +"Back" +"MEDALS" +"Running 1s   In songs 0s" +"What you've earned, and what's next" +"can't reach the server: it's restarting or down. Try again in a minute" -"1 maps in your library" -"PLAY" -"Running 0s   In songs 0s"
-MenuItem(6) @704,202 -> Settings +"<  none found, Enter to pick  >" +"< BACK" +"AUDIO" +"Also list standard maps, converted to taiko like osu! does." +"Card colour fade" +"Enter to open" +36 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"JOURNEY" -13 more
+MenuItem(6) @704,202 -> Settings +"<  none found, Enter to pick  >" +"< BACK" +"AUDIO" +"Also list standard maps, converted to taiko like osu! does." +"Card colour fade" +"GAMEPLAY" +35 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"JOURNEY" -13 more
 MenuItem(7) @793,202 -> Select [quit] +"1 / Enter" +"2 / Esc" +"Close taiko.rs" +"EXIT" +"Exit" +"Exit taiko.rs?" +2 more -"1 maps in your library" -"PLAY" -"Running 0s   In songs 0s"
 DiscordServer @821,454 -> Select [toast "https://discord.gg/6JUm46p9Zz"] +"Discord"
 Music(Prev) @273,449 -> Select

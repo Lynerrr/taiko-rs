@@ -120,78 +120,100 @@ impl Screen for Loading {
         );
         match self.rx.poll_ended() {
             Some(Some(Ok((map, track)))) => {
-                let mods = std::mem::take(&mut state.pending_mods);
-                // Random: the replay's colouring, otherwise the configured repeatable seed.
-                let seed = match &state.pending_replay {
-                    Some(r) => r.seed,
-                    None if mods.has(mods::Mod::Random) => state.cfg.random_seed,
-                    None => 0,
-                };
-                let half = state
-                    .pending_replay
-                    .as_ref()
-                    .map_or(Default::default(), |r| r.half_rule());
-                let mut game = Play::new(
-                    Game::with_half(map, track, sound(&state.audio), mods, seed, half)
-                        .with_settings(&crate::game::settings()),
-                );
-                game.set_scroll_speed(state.cfg.scroll_speed);
-                let live_pp = pp::Live::start(
-                    state.library[self.entry].path.clone(),
-                    stars::read,
-                    game.rate(),
-                    mods,
-                    game.scroll_speed(),
-                    game.seed(),
-                    half,
-                );
-                game.set_live_pp(live_pp);
-                if let Some(t) = self.from {
-                    game.start_from(t, sound(&state.audio), state.play_offset);
-                } else if self.retry {
-                    game.skip(sound(&state.audio), state.play_offset);
-                }
-                match state.pending_replay.take() {
-                    Some(r) => {
-                        game.set_mash(r.mash());
-                        game.set_window_rule(r.window_rule());
-                        game.set_scroll_speed(r.scroll_speed);
-                        game.set_replay_of(Some(r.player.clone()));
-                        game.view.banner = Some(format!("REPLAY  -  {}", r.player));
-                        game.set_replay(Some((r.inputs, 0)));
-                    }
-                    // A test play from the editor keeps nothing.
-                    None if state.editor_back.is_some() => {
-                        game.set_record(false);
-                        game.view.test_play = true;
-                        game.view.banner = Some(State::test_banner(state.test_auto));
-                    }
-                    // Full plays (not autoplay, not from a start point) are kept.
-                    None => {
-                        game.set_record(
-                            (!state.auto || std::env::var_os("TAIKO_RECORD_AUTO").is_some())
-                                && self.from.is_none()
-                                && !mods.unranked(),
-                        );
-                        if mods.has(mods::Mod::Autoplay) {
-                            game.view.banner = Some("AUTOPLAY".into());
-                        }
-                        if state.cfg.fail_restart {
-                            game.set_fail_linger(FAIL_RESTART_LINGER);
-                        }
-                    }
-                }
-                state.play = Some(Box::new(game));
-                next = Some(super::play::PlayScreen::scene(self.entry, self.from));
+                next = Some(start_game(
+                    state, self.entry, self.from, self.retry, map, track,
+                ));
             }
             Some(Some(Err(e))) => {
                 state.status = format!("failed to load {}: {e}", self.label);
                 eprintln!("{}", state.status);
-                next = Some(SongSelect::scene());
+                state.show_select();
             }
             None => {}
-            Some(None) => next = Some(SongSelect::scene()),
+            Some(None) => state.show_select(),
         }
         next
     }
+}
+
+/// The game for a map that has loaded (`entry`'s chart and music), started from map time `from`
+/// or, `skip_intro`, just before its first note: the scene that plays it.
+pub(crate) fn start_game(
+    state: &mut State,
+    entry: usize,
+    from: Option<f64>,
+    skip_intro: bool,
+    map: Beatmap,
+    track: Arc<Track>,
+) -> Scene {
+    let mods = std::mem::take(&mut state.pending_mods);
+    // Random: the replay's colouring, otherwise the configured repeatable seed.
+    let seed = match &state.pending_replay {
+        Some(r) => r.seed,
+        None if mods.has(mods::Mod::Random) => state.cfg.random_seed,
+        None => 0,
+    };
+    let half = state
+        .pending_replay
+        .as_ref()
+        .map_or(Default::default(), |r| r.half_rule());
+    let mut game = Play::new(
+        Game::with_half(map, track, sound(&state.audio), mods, seed, half)
+            .with_settings(&crate::game::settings()),
+    );
+    game.set_scroll_speed(state.cfg.scroll_speed);
+    let live_pp = pp::Live::start(
+        state.library[entry].path.clone(),
+        stars::read,
+        game.rate(),
+        mods,
+        game.scroll_speed(),
+        game.seed(),
+        half,
+    );
+    game.set_live_pp(live_pp);
+    let skip_intro = std::mem::take(&mut state.journey.skip_intro_next) || skip_intro;
+    if let Some(t) = from {
+        game.start_from(t, sound(&state.audio), state.play_offset);
+    } else if skip_intro {
+        game.skip(sound(&state.audio), state.play_offset);
+    }
+    match state.pending_replay.take() {
+        Some(r) => {
+            game.set_mash(r.mash());
+            game.set_window_rule(r.window_rule());
+            game.set_scroll_speed(r.scroll_speed);
+            game.set_replay_of(Some(r.player.clone()));
+            game.view.banner = Some(format!("REPLAY  -  {}", r.player));
+            game.set_replay(Some((r.inputs, 0)));
+        }
+        // A test play from the editor keeps nothing.
+        None if state.editor_back.is_some() => {
+            game.set_record(false);
+            game.view.test_play = true;
+            game.view.banner = Some(State::test_banner(state.test_auto));
+        }
+        // Full plays (not autoplay, not from a start point) are kept.
+        None => {
+            game.set_record(
+                (!state.auto || std::env::var_os("TAIKO_RECORD_AUTO").is_some())
+                    && from.is_none()
+                    && !mods.unranked(),
+            );
+            if mods.has(mods::Mod::Autoplay) {
+                game.view.banner = Some("AUTOPLAY".into());
+            }
+            // A marathon goes on past a fail.
+            if state.cfg.fail_restart && state.journey.marathon.is_none() {
+                game.set_fail_linger(FAIL_RESTART_LINGER);
+            }
+        }
+    }
+    game.view.marathon = state.journey.marathon.is_some();
+    game.view.hardcore = state.journey.marathon.is_some() && state.cfg.journey_hardcore;
+    if let Some(m) = &mut state.journey.marathon {
+        m.map_started();
+    }
+    state.play = Some(Box::new(game));
+    super::play::PlayScreen::scene(entry, from)
 }

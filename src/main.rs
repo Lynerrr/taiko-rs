@@ -5,7 +5,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "--recalc-pp") {
         if let Err(e) = taiko_rs::recalc_pp(&args[1..]) {
-            eprintln!("{e}");
+            let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("{e}\n"));
             std::process::exit(1);
         }
         return;

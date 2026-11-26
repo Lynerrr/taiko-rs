@@ -194,6 +194,8 @@ impl State {
                     view.draw(canvas);
                 }
             }
+            // A frame between a song starting and `tick` taking the medal off.
+            Layer::Unlock if self.in_song() => {}
             Layer::Unlock => self.unlock.draw(canvas),
             Layer::Changelog => {
                 if let Some(view) = &self.changelog {
@@ -275,7 +277,7 @@ impl State {
                 }
             }
             Layer::Unlock => {
-                if !self.unlock.showing() {
+                if !self.unlock.showing() || self.in_song() {
                     return false;
                 }
                 if pressed {
@@ -566,7 +568,8 @@ impl State {
                 }
             }
             Layer::Unlock => {
-                if !self.unlock.showing() {
+                // A drum key in a song is the play's, whatever is still up.
+                if !self.unlock.showing() || self.in_song() {
                     return false;
                 }
                 self.unlock.skip();

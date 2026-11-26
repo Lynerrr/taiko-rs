@@ -4,6 +4,19 @@
 // First, so `tr!` is there for every module after it.
 #[macro_use]
 extern crate taiko_proto;
+
+/// Writes a diagnostic line to `stderr` without panicking if the pipe or terminal is closed
+/// (`BrokenPipe` / `EIO` on Unix). Shadows `std::eprintln!` for every module in this crate so a
+/// closed `stderr` can never abort a release build (`panic = "abort"`).
+#[allow(unused_macros)]
+macro_rules! eprintln {
+    () => {
+        $crate::app::crash::write_stderr_line(::std::format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::app::crash::write_stderr_line(::std::format_args!($($arg)*))
+    };
+}
 use taiko_proto::lang;
 mod admin;
 #[cfg(target_os = "android")]
@@ -514,6 +527,8 @@ struct State {
     custom_dir: PathBuf,
     /// Where TJA charts are read from and imported to (`tja_maps`).
     tja_dir: Option<PathBuf>,
+    /// TJA charts being copied into the TJA folder (`import_tja`), each with its name.
+    tja_imports: Vec<Job<(String, Result<PathBuf, String>)>>,
     /// Beatmap set IDs in the library (built when first needed).
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
@@ -1820,16 +1835,54 @@ impl State {
     }
 
     fn start_loading_from(&mut self, entry: usize, from: Option<f64>) {
-        self.pending_replay = None;
-        // A test play from the editor plays the editor's map and isn't counted.
+        let (rx, label) = self.begin_load(entry, from, false);
+        self.scene = Loading::scene(rx, label, entry, from);
+    }
+
+    /// Starts loading `entry` to play it (from map time `from`): the job, and the label to show
+    /// meanwhile. `keep_audio`: what plays now plays on until the map starts (a marathon's
+    /// last map under its wheel).
+    pub(crate) fn begin_load(
+        &mut self,
+        entry: usize,
+        from: Option<f64>,
+        keep_audio: bool,
+    ) -> (Job<Loaded>, String) {
+        let mut label = self.play_begins(entry, from, keep_audio);
+        // A test play from the editor plays the editor's map.
         let test = self.editor_back.as_ref().map(|v| v.ed.chart.to_text());
-        if test.is_none() {
+        let rx = match test {
+            Some(text) => {
+                label = format!("TEST  {label}");
+                self.load_text(entry, text)
+            }
+            None => self.load_with(entry, self.cfg.rate, self.cfg.mods),
+        };
+        (rx, label)
+    }
+
+    /// What starting to play `entry` does before its chart and song are read (`begin_load`, or
+    /// a marathon's map loaded ahead of time): it's counted, its background comes up, and what
+    /// plays now stops unless `keep_audio`. The label to show while it loads.
+    pub(crate) fn play_begins(
+        &mut self,
+        entry: usize,
+        from: Option<f64>,
+        keep_audio: bool,
+    ) -> String {
+        self.pending_replay = None;
+        // A test play from the editor isn't counted.
+        if self.editor_back.is_none() {
             self.record_play(entry);
             if self.again.start(&self.library[entry].path) {
                 ura::report(&self.cfg, ura::Event::Again);
             }
         }
-        self.stop_audio();
+        if keep_audio {
+            self.preview.invalidate_audio();
+        } else {
+            self.stop_audio();
+        }
         self.preview.show_background_for(&self.library[entry]);
         let mut label = self.library[entry].label();
         audiolog::line(&format!(
@@ -1845,14 +1898,7 @@ impl State {
             let at = fmt_time(t);
             label.push_str(&tr!("  (from {at})", "  ({at}から)", "  (с {at})"; [] [at]));
         }
-        let rx = match test {
-            Some(text) => {
-                label = format!("TEST  {label}");
-                self.load_text(entry, text)
-            }
-            None => self.load_with(entry, self.cfg.rate, self.cfg.mods),
-        };
-        self.scene = Loading::scene(rx, label, entry, from);
+        label
     }
 
     /// Plays the map again, like starting it except that the intro is skipped.
@@ -1881,6 +1927,16 @@ impl State {
     }
 
     fn retry_now(&mut self, entry: usize, from: Option<f64>) {
+        if self.journey.marathon.is_some() && self.journey.in_play {
+            // Hardcore cannot dodge a failing run via retry; normal marathons break the carried
+            // combo so misses cannot be undone by restarting.
+            if self.cfg.journey_hardcore {
+                return;
+            }
+            if let Some(m) = &mut self.journey.marathon {
+                m.combo_broken();
+            }
+        }
         self.pending_restart = None;
         self.start_loading_from(entry, from);
         if let Some(l) = self.scene.screen_mut::<Loading>() {
@@ -2090,6 +2146,19 @@ impl State {
         text: Option<String>,
     ) -> Job<Loaded> {
         let path = self.library[entry].path.clone();
+        self.spawn_loader_at(path, (speed, keep_pitch), mods, cached, may_stream, text)
+    }
+
+    /// `spawn_loader` for the chart at `path`, in the library or not.
+    fn spawn_loader_at(
+        &self,
+        path: PathBuf,
+        (speed, keep_pitch): (f64, bool),
+        mods: Mods,
+        cached: Option<Arc<Track>>,
+        may_stream: bool,
+        text: Option<String>,
+    ) -> Job<Loaded> {
         let rate = self.audio.as_ref().map(|a| a.rate);
         Job::spawn(move || {
             (|| {
@@ -2149,9 +2218,14 @@ impl State {
         }
         // Leaving a map played from Journey (Pause -> Quit, Esc, fail, load error) returns
         // to the Journey screen instead of kicking the player back to Song Select / Main Menu.
+        if self.journey.active && self.journey.marathon.is_some() {
+            self.marathon_end();
+            return;
+        }
         if self.journey.active && self.journey.in_play {
             self.journey.in_play = false;
             self.journey.playing_cached = None;
+            self.journey.skip_intro_next = false;
             self.journey.shown_at = Instant::now();
             self.stop_audio();
             self.report_smoothness();
@@ -3277,6 +3351,7 @@ impl State {
             }
             Item::ShowFps => on(c.show_fps),
             Item::SelectInfo => on(c.select_info),
+            Item::OriginalNames => on(c.original_names),
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
             Item::EpilepsyWarning => on(c.epilepsy_warning),
@@ -3631,6 +3706,7 @@ impl State {
             }
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
             Item::SelectInfo => self.cfg.select_info = !self.cfg.select_info,
+            Item::OriginalNames => self.cfg.original_names = !self.cfg.original_names,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::EpilepsyWarning => self.cfg.epilepsy_warning = !self.cfg.epilepsy_warning,
@@ -5331,12 +5407,33 @@ impl State {
         let Some(root) = self.tja_dir.clone() else {
             return;
         };
-        match crate::tja_maps::import(from, &root) {
-            Ok(_) => {
-                self.toast(tr!("{name} added to the TJA charts", "{name}をTJA譜面に追加しました", "{name} добавлен в TJA-чарты"; [] [name]));
-                self.refresh_library(false);
+        // Copying a pack of charts and their audio takes a while: not on the frame's thread.
+        let (from, name) = (from.to_path_buf(), name.to_string());
+        self.tja_imports.push(Job::spawn(move || {
+            let result = crate::tja_maps::import(&from, &root);
+            (name, result)
+        }));
+    }
+
+    /// Takes the TJA imports that have finished: the list is looked through again for what
+    /// they brought, and the player is told how each went.
+    fn poll_tja_imports(&mut self) {
+        let mut done = Vec::new();
+        self.tja_imports.retain_mut(|job| match job.poll_ended() {
+            None => true,
+            Some(result) => {
+                done.extend(result);
+                false
             }
-            Err(e) => self.toast(tr!("can't add {name}: {e}", "{name}を追加できません: {e}", "не получилось добавить {name}: {e}"; [] [name, e])),
+        });
+        for (name, result) in done {
+            match result {
+                Ok(_) => {
+                    self.toast(tr!("{name} added to the TJA charts", "{name}をTJA譜面に追加しました", "{name} добавлен в TJA-чарты"; [] [name]));
+                    self.refresh_library(false);
+                }
+                Err(e) => self.toast(tr!("can't add {name}: {e}", "{name}を追加できません: {e}", "не получилось добавить {name}: {e}"; [] [name, e])),
+            }
         }
     }
 
@@ -6334,16 +6431,22 @@ impl State {
     }
 
     fn pause_key(&mut self, code: KeyCode) {
+        let marathon = self.journey.marathon.is_some() && self.journey.in_play;
+        let hardcore_marathon = marathon && self.cfg.journey_hardcore;
         if code == KeyCode::KeyO {
             self.apply_live_offset();
             return;
         }
         if code == KeyCode::Backquote {
-            self.hold_retry();
+            if !hardcore_marathon {
+                self.hold_retry();
+            }
             return;
         }
         if code == KeyCode::KeyR && self.modifiers_ctrl {
-            self.restart_map();
+            if !hardcore_marathon {
+                self.restart_map();
+            }
             return;
         }
         let (Some((entry, from)), Some(game)) = (self.scene.song_play(), self.play.as_deref_mut())
@@ -6358,14 +6461,22 @@ impl State {
             return;
         }
         let delay = Duration::from_millis(self.cfg.resume_delay_ms as u64);
-        let cursor = game.paused().unwrap_or(0);
+        let item_count = if hardcore_marathon { 3 } else { PAUSE_ITEMS };
+        let cursor = game.paused().unwrap_or(0).min(item_count - 1);
         match code {
             // Wrapping: Up from Continue is Quit, so pause, Up, Enter leaves at once.
-            KeyCode::ArrowUp => game.set_pause_cursor((cursor + PAUSE_ITEMS - 1) % PAUSE_ITEMS),
-            KeyCode::ArrowDown => game.set_pause_cursor((cursor + 1) % PAUSE_ITEMS),
+            KeyCode::ArrowUp => game.set_pause_cursor((cursor + item_count - 1) % item_count),
+            KeyCode::ArrowDown => game.set_pause_cursor((cursor + 1) % item_count),
             KeyCode::Escape => game.resume_after(delay, sound(&self.audio)),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
                 0 => game.resume_after(delay, sound(&self.audio)),
+                // Hardcore marathon: Continue, Settings, End the marathon (no Skip or Retry).
+                1 if hardcore_marathon => self.open_settings(),
+                2 if hardcore_marathon => self.marathon_end(),
+                // Normal marathon: skip this map, retry, settings, end the marathon.
+                1 if marathon => self.marathon_skip_map(),
+                2 if marathon => self.retry_now(entry, from),
+                4 if marathon => self.marathon_end(),
                 1 => {
                     let (e, f) = (entry, from);
                     self.retry_now(e, f);
@@ -8028,6 +8139,8 @@ impl State {
 
     fn leave_room(&mut self, why: &str) {
         self.stop_audio();
+        self.stop_host_transfer();
+        self.auto_fetched = None;
         self.mp = None;
         self.picking_lobby_map = false;
         self.mp_status = why.to_string();
@@ -9506,6 +9619,7 @@ impl State {
                 .selected()
                 .and_then(|i| self.library.get(i))
                 .map(|e| e.path.clone());
+            let player_path = self.active_player_path();
             let (mut added, mut changed) = (0, 0);
             for e in &checked {
                 match index.get(e.path.as_os_str()).map(|&i| &self.library[i]) {
@@ -9522,7 +9636,7 @@ impl State {
                     .filter(|(i, e)| !seen[*i] && e.path.is_file())
                     .map(|(_, e)| e),
             );
-            self.use_library(checked, selected);
+            self.use_library_with_player(checked, selected, player_path);
             self.report_refresh(refreshing, added, changed, gone.len());
             return;
         }
@@ -9573,11 +9687,66 @@ impl State {
         self.report_refresh(refreshing, added, edited, gone.len());
     }
 
+    /// The library path of the music player's active track, if the player is open.
+    fn active_player_path(&self) -> Option<PathBuf> {
+        self.player
+            .as_ref()
+            .and_then(|p| p.list.entry())
+            .and_then(|i| self.library.get(i))
+            .map(|e| e.path.clone())
+    }
+
     /// `library` in place of the list, on `selected` if that's still there, else a random song.
     fn use_library(&mut self, library: Vec<Entry>, selected: Option<PathBuf>) {
+        let player_path = self.active_player_path();
+        self.use_library_with_player(library, selected, player_path);
+    }
+
+    fn use_library_with_player(
+        &mut self,
+        library: Vec<Entry>,
+        selected: Option<PathBuf>,
+        player_path: Option<PathBuf>,
+    ) {
+        let results_path = self
+            .scene
+            .screen_as::<ResultsScreen>()
+            .or_else(|| {
+                self.behind
+                    .as_deref()
+                    .and_then(|s| s.screen_as::<ResultsScreen>())
+            })
+            .filter(|r| !r.gone)
+            .and_then(|r| self.library.get(r.entry))
+            .map(|e| e.path.clone());
         self.stars.clear();
+        self.preview.forget();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
+        if let Some(p) = &mut self.player {
+            let entry = player_path
+                .as_deref()
+                .and_then(|path| self.library.iter().position(|e| e.path == path));
+            p.rebuild(&self.library, entry, fresh_seed());
+        }
+        if let Some(r) = self.scene.screen_mut::<ResultsScreen>().or_else(|| {
+            self.behind
+                .as_deref_mut()
+                .and_then(|s| s.screen_mut::<ResultsScreen>())
+        }) {
+            match results_path
+                .as_deref()
+                .and_then(|path| self.library.iter().position(|e| e.path == path))
+            {
+                Some(i) => {
+                    r.entry = i;
+                    r.gone = false;
+                }
+                None => {
+                    r.gone = true;
+                }
+            }
+        }
         self.rebuild_library_indices();
         // Song select's cards show every set's background: small copies made ahead read fast.
         // 1.0's look has no cards.
@@ -9668,15 +9837,21 @@ impl State {
         self.find_lobby_map();
     }
 
-    /// A lobby map may have been announced before our library was ready.
+    /// A lobby map may have been announced before our library was ready, or the library may have
+    /// been refreshed/replaced while in the lobby (shifting or removing indices).
     fn find_lobby_map(&mut self) {
         if let Some(s) = &mut self.mp
             && let Some(m) = &s.map
-            && !s.have_map
         {
+            let had = s.have_map;
             s.map_entry = find_map(&self.library, m);
             s.have_map = s.map_entry.is_some();
-            s.client.send(net::ClientMsg::HasMap(s.have_map));
+            if !s.have_map {
+                s.ready = false;
+            }
+            if s.have_map != had {
+                s.client.send(net::ClientMsg::HasMap(s.have_map));
+            }
         }
     }
 
@@ -12600,6 +12775,8 @@ impl State {
                     .screen()
                     .is_some_and(|s| s.in_room() || s.spectating());
                 self.toast(format!("multiplayer: {why}"));
+                self.stop_host_transfer();
+                self.auto_fetched = None;
                 self.mp = None;
                 self.picking_lobby_map = false;
                 if in_mp {
@@ -13116,6 +13293,7 @@ impl State {
         self.drop_finished_play();
         // Here too, so a new choice (or a test's) shows from the next frame on.
         lang::set(self.cfg.language);
+        library::set_original_names(self.cfg.original_names);
         system_font::select(&self.cfg.ui_font);
         system_font::begin_frame();
         // What this frame is drawn with; the beat carries on from the last frame until
@@ -13447,6 +13625,8 @@ impl State {
             self.toast_download(&name);
         }
         self.poll_downloads();
+        self.poll_tja_imports();
+        self.journey_poll_saves();
         self.poll_score_link();
         self.poll_set_check(now);
         self.poll_sorting();
@@ -13679,12 +13859,12 @@ impl State {
         }
         if let Some(p) = self
             .player
-            .as_ref()
+            .as_mut()
             .filter(|p| p.library_len != self.library.len())
         {
             // The library changed under the list: same song on, if it's still there.
             let entry = p.list.entry();
-            self.player = Some(Box::new(player::Player::new(&self.library, entry)));
+            p.rebuild(&self.library, entry, fresh_seed());
         }
         self.poll_media();
         if let Some(item) = self.main_menu.as_mut().and_then(menu::Menu::ready) {
@@ -14397,7 +14577,7 @@ impl State {
     fn send_map_to(&mut self, to: u32) {
         let Some(s) = &self.mp else { return };
         let tx = s.client.bulk_sender();
-        let entry = s.map_entry.map(|i| &self.library[i]);
+        let entry = s.map_entry.and_then(|i| self.library.get(i));
         let folder = entry.and_then(|e| e.path.parent().map(|p| p.to_path_buf()));
         // A TJA chart: its file, sent with what it names rather than its whole folder.
         let tja = entry
@@ -14508,6 +14688,8 @@ impl State {
                 ranked_date: String::new(),
                 custom: None,
             };
+            // A transfer that's still going is given up before starting the new one.
+            self.stop_host_transfer();
             let (job, feed) = download::receive(
                 set,
                 part.name.clone(),
@@ -14517,8 +14699,6 @@ impl State {
                 self.custom_dir.clone(),
                 self.tja_dir.clone(),
             );
-            // A transfer that's still going is given up for this one.
-            self.stop_host_transfer();
             let done = job.done.clone();
             self.downloads.push(job);
             self.host_transfer = Some((feed, done));
@@ -15959,10 +16139,26 @@ impl State {
             Hit::JourneyLevelStep(d) => self.journey_step_level(d),
             Hit::JourneyLevelOpen => self.journey_open_level_picker(),
             Hit::JourneySave => self.journey_save_current(),
-            Hit::JourneyNext => self.journey_next_from_results(false),
+            Hit::JourneyNext => {
+                let failed = self
+                    .scene
+                    .screen_as::<ResultsScreen>()
+                    .is_some_and(|r| r.results.failed);
+                self.journey_next_from_results(failed);
+                self.journey.autostart =
+                    self.cfg.journey_flow == crate::config::JourneyFlow::Nonstop;
+            }
             Hit::JourneyLogin(register) => self.journey_login(register),
             Hit::JourneyOffline => self.journey_go_offline(),
             Hit::JourneyRetry => self.journey_retry(),
+            Hit::JourneySettings => self.journey_toggle_settings(),
+            Hit::JourneySettingsBody => {}
+            Hit::JourneySetting(row, dir) => self.journey_change_setting(row, dir),
+            Hit::JourneyFocus(focus) => self.journey_set_focus(focus),
+            Hit::JourneyLength(length) => self.journey_set_length(length),
+            Hit::JourneyFlow(flow) => self.journey_set_flow(flow),
+            Hit::MarathonGap(gap) => self.journey_set_gap(gap),
+            Hit::MarathonRestart => self.marathon_start(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
                 self.toggle_mod(mods::ALL[i]);
