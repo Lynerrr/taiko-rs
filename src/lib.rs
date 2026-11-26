@@ -13623,6 +13623,7 @@ impl State {
         }
         self.poll_downloads();
         self.poll_tja_imports();
+        self.journey_poll_saves();
         self.poll_score_link();
         self.poll_set_check(now);
         self.poll_sorting();

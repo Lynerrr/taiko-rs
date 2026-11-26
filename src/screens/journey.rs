@@ -3028,22 +3028,7 @@ impl State {
                 }
             }
             Ok(crate::journey::SaveOutcome::NeedsCopy { dest_root, dest }) => {
-                // Cross-drive save: copy + scan on a background thread so UI/audio never stall.
-                let (tx, rx) = std::sync::mpsc::channel();
-                let folder_bg = folder.clone();
-                std::thread::spawn(move || {
-                    let res = crate::journey::copy_cached_folder(&folder_bg, &dest_root, &dest)
-                        .map(|d| {
-                            let fresh = crate::journey::scan_single_folder(&d);
-                            (d, fresh)
-                        });
-                    let _ = tx.send(res);
-                });
-                self.journey.saving.push(crate::journey::SaveJob {
-                    folder,
-                    toast_on_success,
-                    rx,
-                });
+                self.spawn_journey_copy(folder, dest_root, dest, toast_on_success);
             }
             Err(e) => {
                 self.toast(
@@ -3051,6 +3036,31 @@ impl State {
                 );
             }
         }
+    }
+
+    /// Runs a cross-drive Journey folder copy and sibling difficulty scan on a background thread
+    /// so UI and audio never stall.
+    pub(crate) fn spawn_journey_copy(
+        &mut self,
+        folder: PathBuf,
+        dest_root: PathBuf,
+        dest: PathBuf,
+        toast_on_success: bool,
+    ) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let folder_bg = folder.clone();
+        std::thread::spawn(move || {
+            let res = crate::journey::copy_cached_folder(&folder_bg, &dest_root, &dest).map(|d| {
+                let fresh = crate::journey::scan_single_folder(&d);
+                (d, fresh)
+            });
+            let _ = tx.send(res);
+        });
+        self.journey.saving.push(crate::journey::SaveJob {
+            folder,
+            toast_on_success,
+            rx,
+        });
     }
 
     fn journey_finish_move(&mut self, folder: &Path, dest: &Path, toast_on_success: bool) {

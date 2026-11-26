@@ -527,7 +527,9 @@ impl Journey {
     /// Resets session state for a fresh Journey run.
     pub fn reset(&mut self) {
         self.cancel_downloads();
+        let saving = std::mem::take(&mut self.saving);
         *self = Self::new();
+        self.saving = saving;
         self.active = true;
     }
 
@@ -1313,18 +1315,25 @@ pub fn try_rename_cached_folder(
     Ok(SaveOutcome::NeedsCopy { dest_root, dest })
 }
 
-/// Completes a cross-drive move by copying into a sibling `.part` folder, renaming atomically
-/// into `dest`, and removing `cached_folder`. Intended to run on a background worker thread.
+/// Completes a cross-drive save by copying into a unique sibling `.part` folder and renaming
+/// atomically into `dest`. Intended to run on a background worker thread; leaves `cached_folder`
+/// intact so concurrent readers (`results_job`, `pp::play_pp`, `submit_score`) never race against
+/// a deleted cache directory (cache pruning reclaims it once unprotected).
 pub fn copy_cached_folder(
     cached_folder: &Path,
     dest_root: &Path,
     dest: &Path,
 ) -> Result<PathBuf, String> {
+    static NEXT_PART: AtomicU64 = AtomicU64::new(0);
     let name = cached_folder
         .file_name()
         .ok_or_else(|| "invalid cached folder name".to_string())?;
     let mut part_name = name.to_os_string();
-    part_name.push(".part");
+    part_name.push(format!(
+        ".{}.{}.part",
+        std::process::id(),
+        NEXT_PART.fetch_add(1, Ordering::Relaxed)
+    ));
     let part = dest_root.join(part_name);
     let _ = std::fs::remove_dir_all(&part);
     let copied = copy_dir_all(cached_folder, &part).and_then(|()| std::fs::rename(&part, dest));
@@ -1332,7 +1341,6 @@ pub fn copy_cached_folder(
         let _ = std::fs::remove_dir_all(&part);
         return Err(format!("copy to {}: {e}", dest.display()));
     }
-    let _ = std::fs::remove_dir_all(cached_folder);
     Ok(dest.to_path_buf())
 }
 
@@ -1350,7 +1358,9 @@ pub fn save_cached_folder(
     match try_rename_cached_folder(cached_folder, is_custom, save_to, osu_songs)? {
         SaveOutcome::Moved(dest) => Ok(dest),
         SaveOutcome::NeedsCopy { dest_root, dest } => {
-            copy_cached_folder(cached_folder, &dest_root, &dest)
+            let dest = copy_cached_folder(cached_folder, &dest_root, &dest)?;
+            let _ = std::fs::remove_dir_all(cached_folder);
+            Ok(dest)
         }
     }
 }

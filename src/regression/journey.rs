@@ -2488,29 +2488,27 @@ fn marathon_outage_continue_offline_keeps_server_probe_and_fills_queue_on_map_on
 }
 
 #[test]
-fn background_journey_save_updates_library_and_marathon_last_when_polled() {
+fn background_journey_save_runs_real_copy_polls_globally_and_preserves_cache_source() {
     let songs = Songs::new("journey-bg-save", &maps::all());
     let mut s = state_with(harness::config(), songs.entries());
     let mut now = Instant::now();
     ready(&mut s, &mut now);
 
-    let cache_dir = config::journey_cache_dir().join(format!(
-        "9901 Bg Artist - Bg Title ({})",
-        std::process::id()
-    ));
-    let dest_dir = std::env::temp_dir().join(format!("taiko-bg-save-dest-{}", std::process::id()));
+    let folder_name = format!("9901 Bg Artist - Bg Title ({})", std::process::id());
+    let cache_dir = config::journey_cache_dir().join(&folder_name);
+    let dest_root = std::env::temp_dir().join(format!("taiko-bg-save-root-{}", std::process::id()));
+    let dest_dir = dest_root.join(&folder_name);
     let _ = std::fs::remove_dir_all(&cache_dir);
-    let _ = std::fs::remove_dir_all(&dest_dir);
+    let _ = std::fs::remove_dir_all(&dest_root);
     std::fs::create_dir_all(&cache_dir).unwrap();
-    std::fs::create_dir_all(&dest_dir).unwrap();
+    std::fs::create_dir_all(&dest_root).unwrap();
     let src_osu = s.library[0].path.clone();
     std::fs::copy(&src_osu, cache_dir.join("chart.osu")).unwrap();
-    std::fs::copy(&src_osu, dest_dir.join("chart.osu")).unwrap();
+    std::fs::copy(&src_osu, cache_dir.join("sibling.osu")).unwrap();
     let cached_entry = crate::journey::scan_single_folder(&cache_dir)
         .into_iter()
-        .next()
+        .find(|e| e.path.ends_with("chart.osu"))
         .unwrap();
-    let dest_entries = crate::journey::scan_single_folder(&dest_dir);
 
     s.append_maps(vec![cached_entry]);
     let mut m = crate::journey::Marathon::new(now);
@@ -2528,19 +2526,92 @@ fn background_journey_save_updates_library_and_marathon_last_when_polled() {
     });
     s.journey.marathon = Some(m);
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    s.journey.saving.push(crate::journey::SaveJob {
-        folder: cache_dir.clone(),
-        toast_on_success: false,
-        rx,
-    });
+    // Exercise the real NeedsCopy background worker path.
+    s.spawn_journey_copy(cache_dir.clone(), dest_root.clone(), dest_dir.clone(), true);
     assert!(
         s.journey.protected_cache_folders().contains(&cache_dir),
         "in-flight save folder must be protected from cache pruning"
     );
 
-    tx.send(Ok((dest_dir.clone(), dest_entries))).unwrap();
-    s.journey_poll_saves();
+    // Stay on Select (not Journey/Play) and poll via the global frame loop.
+    assert_eq!(s.scene.screen().map(|sc| sc.name()), Some("Select"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !s.journey.saving.is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+
+    assert!(
+        s.journey.saving.is_empty(),
+        "global frame loop must drain background saves"
+    );
+    assert!(
+        s.library
+            .iter()
+            .any(|e| e.path == dest_dir.join("chart.osu")),
+        "moved chart must point to permanent destination"
+    );
+    assert!(
+        s.library
+            .iter()
+            .any(|e| e.path == dest_dir.join("sibling.osu")),
+        "sibling difficulty from copied folder must be appended to library"
+    );
+    assert!(
+        cache_dir.join("chart.osu").is_file(),
+        "background copy must not delete cache folder while results/pp/submit jobs may read it"
+    );
+    let last = s.journey.marathon.as_ref().unwrap().last.as_ref().unwrap();
+    assert!(last.cached.is_none());
+    assert!(last.saved);
+
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let _ = std::fs::remove_dir_all(&dest_root);
+}
+
+#[test]
+fn journey_reset_preserves_in_flight_background_saves() {
+    let songs = Songs::new("journey-reset-save", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    let folder_name = format!("9902 Reset Artist - Reset Title ({})", std::process::id());
+    let cache_dir = config::journey_cache_dir().join(&folder_name);
+    let dest_root =
+        std::env::temp_dir().join(format!("taiko-reset-save-root-{}", std::process::id()));
+    let dest_dir = dest_root.join(&folder_name);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let _ = std::fs::remove_dir_all(&dest_root);
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::create_dir_all(&dest_root).unwrap();
+    let src_osu = s.library[0].path.clone();
+    std::fs::copy(&src_osu, cache_dir.join("chart.osu")).unwrap();
+    let cached_entry = crate::journey::scan_single_folder(&cache_dir)
+        .into_iter()
+        .next()
+        .unwrap();
+    s.append_maps(vec![cached_entry]);
+
+    s.spawn_journey_copy(
+        cache_dir.clone(),
+        dest_root.clone(),
+        dest_dir.clone(),
+        false,
+    );
+    s.journey.reset();
+    assert!(
+        !s.journey.saving.is_empty(),
+        "Journey::reset must preserve in-flight background saves"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !s.journey.saving.is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
 
     assert!(s.journey.saving.is_empty());
     assert!(
@@ -2548,10 +2619,7 @@ fn background_journey_save_updates_library_and_marathon_last_when_polled() {
             .iter()
             .any(|e| e.path == dest_dir.join("chart.osu"))
     );
-    let last = s.journey.marathon.as_ref().unwrap().last.as_ref().unwrap();
-    assert!(last.cached.is_none());
-    assert!(last.saved);
 
     let _ = std::fs::remove_dir_all(&cache_dir);
-    let _ = std::fs::remove_dir_all(&dest_dir);
+    let _ = std::fs::remove_dir_all(&dest_root);
 }
