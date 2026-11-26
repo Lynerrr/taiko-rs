@@ -187,6 +187,11 @@ pub fn import(from: &Path, root: &Path) -> Result<PathBuf, String> {
     if from.starts_with(root) {
         return Err("it's in the TJA folder already".into());
     }
+    // An ancestor of the TJA folder would be copied into itself without end.
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    if root.starts_with(from) || real(root).starts_with(real(from)) {
+        return Err("the TJA folder is inside it".into());
+    }
     let name = |p: &Path, what: &str| {
         p.file_stem()
             .or_else(|| p.file_name())
@@ -303,6 +308,20 @@ mod tests {
         assert!(folder.join("other.txt").is_file() && folder.join("Song.tja").is_file());
         assert!(import(&to, &root).is_err(), "already there");
         assert!(import(&from.join("snd"), &root).is_err(), "no chart in it");
+        // A folder holding the TJA folder is refused, not copied into itself.
+        let outer = tmp.join("outer");
+        std::fs::create_dir_all(&outer).unwrap();
+        std::fs::write(
+            outer.join("Song.tja"),
+            "TITLE:Song\nBPM:120\nCOURSE:Oni\n#START\n1,\n#END\n",
+        )
+        .unwrap();
+        let inner_root = outer.join("Tja");
+        assert_eq!(
+            import(&outer, &inner_root),
+            Err("the TJA folder is inside it".to_string())
+        );
+        assert!(!inner_root.join("outer").exists(), "nothing was copied");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

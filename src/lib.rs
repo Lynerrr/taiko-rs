@@ -527,6 +527,8 @@ struct State {
     custom_dir: PathBuf,
     /// Where TJA charts are read from and imported to (`tja_maps`).
     tja_dir: Option<PathBuf>,
+    /// TJA charts being copied into the TJA folder (`import_tja`), each with its name.
+    tja_imports: Vec<Job<(String, Result<PathBuf, String>)>>,
     /// Beatmap set IDs in the library (built when first needed).
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
@@ -5402,12 +5404,33 @@ impl State {
         let Some(root) = self.tja_dir.clone() else {
             return;
         };
-        match crate::tja_maps::import(from, &root) {
-            Ok(_) => {
-                self.toast(tr!("{name} added to the TJA charts", "{name}をTJA譜面に追加しました", "{name} добавлен в TJA-чарты"; [] [name]));
-                self.refresh_library(false);
+        // Copying a pack of charts and their audio takes a while: not on the frame's thread.
+        let (from, name) = (from.to_path_buf(), name.to_string());
+        self.tja_imports.push(Job::spawn(move || {
+            let result = crate::tja_maps::import(&from, &root);
+            (name, result)
+        }));
+    }
+
+    /// Takes the TJA imports that have finished: the list is looked through again for what
+    /// they brought, and the player is told how each went.
+    fn poll_tja_imports(&mut self) {
+        let mut done = Vec::new();
+        self.tja_imports.retain_mut(|job| match job.poll_ended() {
+            None => true,
+            Some(result) => {
+                done.extend(result);
+                false
             }
-            Err(e) => self.toast(tr!("can't add {name}: {e}", "{name}を追加できません: {e}", "не получилось добавить {name}: {e}"; [] [name, e])),
+        });
+        for (name, result) in done {
+            match result {
+                Ok(_) => {
+                    self.toast(tr!("{name} added to the TJA charts", "{name}をTJA譜面に追加しました", "{name} добавлен в TJA-чарты"; [] [name]));
+                    self.refresh_library(false);
+                }
+                Err(e) => self.toast(tr!("can't add {name}: {e}", "{name}を追加できません: {e}", "не получилось добавить {name}: {e}"; [] [name, e])),
+            }
         }
     }
 
@@ -13576,6 +13599,7 @@ impl State {
             self.toast_download(&name);
         }
         self.poll_downloads();
+        self.poll_tja_imports();
         self.poll_score_link();
         self.poll_set_check(now);
         self.poll_sorting();

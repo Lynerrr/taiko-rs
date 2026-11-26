@@ -2737,7 +2737,10 @@ mod tests {
         let new = std::fs::read_to_string(&path).unwrap();
         assert!(!new.contains("hud_preset ="), "{new}");
         assert!(!new.contains("editor_recent ="), "{new}");
-        assert!(new.contains("future_option = keep"), "unknown keys still kept");
+        assert!(
+            new.contains("future_option = keep"),
+            "unknown keys still kept"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

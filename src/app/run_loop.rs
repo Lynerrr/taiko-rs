@@ -1455,6 +1455,7 @@ impl State {
             mapinfo_sorted: false,
             song_dirs,
             osudb_rx: Job::idle(),
+            tja_imports: Vec::new(),
             db_status: Default::default(),
             set_status: status_cache
                 .iter()

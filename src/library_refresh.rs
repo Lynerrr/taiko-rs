@@ -367,8 +367,16 @@ mod tests {
         settle(&mut s);
 
         let now = Instant::now();
-        s.preview
-            .update(now, &s.library, Some(0), None, true, true, 0.0, (1.0, false));
+        s.preview.update(
+            now,
+            &s.library,
+            Some(0),
+            None,
+            true,
+            true,
+            0.0,
+            (1.0, false),
+        );
         assert_eq!(s.preview.requested(), Some(0));
 
         // In-place rewrite (e.g. saved in the editor): preview must forget the stale map.
