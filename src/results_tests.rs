@@ -538,6 +538,33 @@ fn a_player_logged_out_has_nobody_to_tell_what_they_think_of_the_map() {
 }
 
 #[test]
+fn the_music_player_keeps_its_song_when_the_library_is_reordered_to_the_same_length() {
+    let mut s = crate::layout_tests::state();
+    let (a, b) = (
+        crate::layout_tests::entry(0, 0, false),
+        crate::layout_tests::entry(1, 0, false),
+    );
+    let (pa, pb) = (a.path.clone(), b.path.clone());
+    s.use_library(vec![a, b], None);
+    s.player = Some(Box::new(crate::player::Player::new(&s.library, Some(1))));
+    let playing = |s: &State| {
+        let i = s.player.as_ref().and_then(|p| p.list.entry()).unwrap();
+        s.library[i].path.clone()
+    };
+    assert_eq!(playing(&s), pb);
+    // Same length, other order: the index 1 now names the other map.
+    s.use_library(
+        vec![
+            crate::layout_tests::entry(1, 0, false),
+            crate::layout_tests::entry(0, 0, false),
+        ],
+        None,
+    );
+    assert_eq!(playing(&s), pb, "still the same song");
+    assert_ne!(playing(&s), pa);
+}
+
+#[test]
 fn changing_library_from_settings_over_results_re_resolves_or_guards_entry() {
     let mut s = crate::layout_tests::state();
     let e0 = crate::layout_tests::entry(0, 0, false);

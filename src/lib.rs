@@ -9673,8 +9673,22 @@ impl State {
             .map(|e| e.path.clone());
         self.stars.clear();
         self.preview.forget();
+        // The music player's track is a library index: kept by path across the swap, even when
+        // the list is as long as before but in another order.
+        let player_path = self
+            .player
+            .as_ref()
+            .and_then(|p| p.list.entry())
+            .and_then(|i| self.library.get(i))
+            .map(|e| e.path.clone());
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
+        if self.player.is_some() {
+            let entry = player_path
+                .as_deref()
+                .and_then(|path| self.library.iter().position(|e| e.path == path));
+            self.player = Some(Box::new(player::Player::new(&self.library, entry)));
+        }
         if let Some(r) = self.scene.screen_mut::<ResultsScreen>().or_else(|| {
             self.behind
                 .as_deref_mut()
