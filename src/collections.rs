@@ -216,9 +216,12 @@ pub fn find_with(collections: &[Collection], finder: &Finder) -> Vec<Found> {
 }
 
 impl MapRef {
-    /// Library entry `e` as a collection keeps it (its file read for the MD5); None if the file
-    /// can't be read.
+    /// Library entry `e` as a collection keeps it (its file read for the MD5); None for TJA
+    /// courses (which have no `.osu` file of their own) or if the file can't be read.
     pub fn of(e: &Entry) -> Option<MapRef> {
+        if e.is_tja() {
+            return None;
+        }
         let name = |p: Option<&std::ffi::OsStr>| {
             p.map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default()
