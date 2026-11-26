@@ -2405,3 +2405,221 @@ fn marathon_save_maps_option_controls_auto_saving_played_maps() {
     let _ = std::fs::remove_dir_all(&folder_skip);
     let _ = std::fs::remove_dir_all(&dest_skip);
 }
+
+#[test]
+fn a_journey_load_failure_clears_skip_intro_and_returns_to_journey() {
+    let songs = Songs::new("journey-load-fail", &maps::all());
+    let mut cfg = harness::config();
+    cfg.journey_flow = JourneyFlow::Nonstop;
+    cfg.journey_skip_intro = true;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    s.journey.in_play = true;
+    s.journey.skip_intro_next = true;
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(Err("corrupt audio".into())).unwrap();
+    s.scene = screens::loading::Loading::scene(
+        crate::Job::from_receiver(rx),
+        "broken map".into(),
+        0,
+        None,
+    );
+
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+
+    assert_eq!(scene_name(&s), "Journey");
+    assert!(!s.journey.in_play);
+    assert!(
+        !s.journey.skip_intro_next,
+        "load failure must not leak skip_intro_next"
+    );
+
+    // Exiting Journey also clears skip_intro_next if it was set.
+    s.journey.skip_intro_next = true;
+    s.journey.stop();
+    assert!(!s.journey.skip_intro_next);
+}
+
+#[test]
+fn marathon_outage_continue_offline_keeps_server_probe_and_fills_queue_on_map_one() {
+    let songs = Songs::new("marathon-outage-offline", &maps::all());
+    let mut cfg = harness::config();
+    cfg.online_token = "tok".into();
+    cfg.journey_flow = JourneyFlow::Marathon;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    // Simulate an online Marathon whose first fetch failed past OUTAGE_GRACE (step == 0, Auto).
+    s.journey.reset();
+    s.journey.fetching = None;
+    s.journey.outage_since = Some(now - crate::journey::OUTAGE_GRACE - Duration::from_secs(1));
+    s.journey.error = Some("server unreachable".into());
+    s.journey.retry_after = Some(now + Duration::from_secs(30));
+    s.marathon_start();
+
+    let _ = frame(&mut s, now);
+    assert!(
+        s.hits.iter().any(|h| h.hit == hit::Hit::JourneyOffline),
+        "outage card offers Continue offline"
+    );
+
+    s.click(hit::Hit::JourneyOffline, None);
+    assert_eq!(
+        s.journey.offline,
+        Some(crate::journey::Gate::ServerDown),
+        "must record ServerDown so recovery probing stays enabled"
+    );
+    assert!(s.journey.next_probe.is_some());
+    assert!(
+        !s.journey.needs_level,
+        "Marathon must not stall on needs_level when going offline on map 1"
+    );
+    assert!(
+        !s.journey.queue.is_empty(),
+        "local library maps should fill the Marathon queue immediately"
+    );
+}
+
+#[test]
+fn background_journey_save_runs_real_copy_polls_globally_and_preserves_cache_source() {
+    let songs = Songs::new("journey-bg-save", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    let folder_name = format!("9901 Bg Artist - Bg Title ({})", std::process::id());
+    let cache_dir = config::journey_cache_dir().join(&folder_name);
+    let dest_root = std::env::temp_dir().join(format!("taiko-bg-save-root-{}", std::process::id()));
+    let dest_dir = dest_root.join(&folder_name);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let _ = std::fs::remove_dir_all(&dest_root);
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::create_dir_all(&dest_root).unwrap();
+    let src_osu = s.library[0].path.clone();
+    std::fs::copy(&src_osu, cache_dir.join("chart.osu")).unwrap();
+    std::fs::copy(&src_osu, cache_dir.join("sibling.osu")).unwrap();
+    let cached_entry = crate::journey::scan_single_folder(&cache_dir)
+        .into_iter()
+        .find(|e| e.path.ends_with("chart.osu"))
+        .unwrap();
+
+    s.append_maps(vec![cached_entry]);
+    let mut m = crate::journey::Marathon::new(now);
+    m.record(crate::journey::MarathonPlay {
+        item: item("Bg Title", "Oni", 9901),
+        outcome: crate::journey::MarathonOutcome::Passed,
+        accuracy: 1.0,
+        max_combo: 10,
+        misses: 0,
+        pp: None,
+        vote_on: None,
+        vote: None,
+        cached: Some((cache_dir.clone(), item("Bg Title", "Oni", 9901))),
+        saved: false,
+    });
+    s.journey.marathon = Some(m);
+
+    // Exercise the real NeedsCopy background worker path.
+    s.spawn_journey_copy(cache_dir.clone(), dest_root.clone(), dest_dir.clone(), true);
+    assert!(
+        s.journey.protected_cache_folders().contains(&cache_dir),
+        "in-flight save folder must be protected from cache pruning"
+    );
+
+    // Stay on Select (not Journey/Play) and poll via the global frame loop.
+    assert_eq!(s.scene.screen().map(|sc| sc.name()), Some("Select"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !s.journey.saving.is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+
+    assert!(
+        s.journey.saving.is_empty(),
+        "global frame loop must drain background saves"
+    );
+    assert!(
+        s.library
+            .iter()
+            .any(|e| e.path == dest_dir.join("chart.osu")),
+        "moved chart must point to permanent destination"
+    );
+    assert!(
+        s.library
+            .iter()
+            .any(|e| e.path == dest_dir.join("sibling.osu")),
+        "sibling difficulty from copied folder must be appended to library"
+    );
+    assert!(
+        cache_dir.join("chart.osu").is_file(),
+        "background copy must not delete cache folder while results/pp/submit jobs may read it"
+    );
+    let last = s.journey.marathon.as_ref().unwrap().last.as_ref().unwrap();
+    assert!(last.cached.is_none());
+    assert!(last.saved);
+
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let _ = std::fs::remove_dir_all(&dest_root);
+}
+
+#[test]
+fn journey_reset_preserves_in_flight_background_saves() {
+    let songs = Songs::new("journey-reset-save", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    let folder_name = format!("9902 Reset Artist - Reset Title ({})", std::process::id());
+    let cache_dir = config::journey_cache_dir().join(&folder_name);
+    let dest_root =
+        std::env::temp_dir().join(format!("taiko-reset-save-root-{}", std::process::id()));
+    let dest_dir = dest_root.join(&folder_name);
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let _ = std::fs::remove_dir_all(&dest_root);
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::create_dir_all(&dest_root).unwrap();
+    let src_osu = s.library[0].path.clone();
+    std::fs::copy(&src_osu, cache_dir.join("chart.osu")).unwrap();
+    let cached_entry = crate::journey::scan_single_folder(&cache_dir)
+        .into_iter()
+        .next()
+        .unwrap();
+    s.append_maps(vec![cached_entry]);
+
+    s.spawn_journey_copy(
+        cache_dir.clone(),
+        dest_root.clone(),
+        dest_dir.clone(),
+        false,
+    );
+    s.journey.reset();
+    assert!(
+        !s.journey.saving.is_empty(),
+        "Journey::reset must preserve in-flight background saves"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !s.journey.saving.is_empty() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+
+    assert!(s.journey.saving.is_empty());
+    assert!(
+        s.library
+            .iter()
+            .any(|e| e.path == dest_dir.join("chart.osu"))
+    );
+
+    let _ = std::fs::remove_dir_all(&cache_dir);
+    let _ = std::fs::remove_dir_all(&dest_root);
+}

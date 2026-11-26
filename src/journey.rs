@@ -140,6 +140,13 @@ pub struct QueuedMap {
     pub source: MapSource,
 }
 
+/// Outcome of a background cross-drive Journey save (folder copy + sibling difficulty scan).
+pub struct SaveJob {
+    pub folder: PathBuf,
+    pub toast_on_success: bool,
+    pub rx: Receiver<Result<(PathBuf, Vec<Entry>), String>>,
+}
+
 /// Active Journey session state held on `State`.
 pub struct Journey {
     pub active: bool,
@@ -213,6 +220,8 @@ pub struct Journey {
     /// Smoothly animated 0..=1 visibility for the in-play "Up next" card (prevents pop-in and
     /// sudden combo chip jumps).
     pub up_next_alpha: f32,
+    /// In-flight background saves (cross-drive folder copies or sibling difficulty scans).
+    pub saving: Vec<SaveJob>,
 }
 
 /// What became of a map in a marathon.
@@ -474,6 +483,7 @@ impl Journey {
             skip_intro_next: false,
             marathon: None,
             up_next_alpha: 0.0,
+            saving: Vec::new(),
         }
     }
 
@@ -517,7 +527,9 @@ impl Journey {
     /// Resets session state for a fresh Journey run.
     pub fn reset(&mut self) {
         self.cancel_downloads();
+        let saving = std::mem::take(&mut self.saving);
         *self = Self::new();
+        self.saving = saving;
         self.active = true;
     }
 
@@ -529,6 +541,7 @@ impl Journey {
         self.in_play = false;
         self.fetching = None;
         self.playing_cached = None;
+        self.skip_intro_next = false;
         self.pool_exhausted = false;
         self.retry_after = None;
     }
@@ -675,6 +688,9 @@ impl Journey {
         }
         if let Some((folder, _)) = &self.playing_cached {
             out.push(folder.clone());
+        }
+        for job in &self.saving {
+            out.push(job.folder.clone());
         }
         out
     }
@@ -1255,17 +1271,23 @@ pub fn pick_difficulty(entries: Vec<Entry>, item: &JourneyItem) -> Option<Entry>
     entries.into_iter().nth(at)
 }
 
-/// Moves a cached mapset folder into the player's permanent library folder:
-/// - custom maps -> `config::custom_dir()`
-/// - osu! maps -> `config::own_songs_dir()` when `save_to == JourneySaveTo::Own` (default),
-///   or `osu_songs` when `save_to == JourneySaveTo::Osu` (an error without one: taiko.rs's own
-///   folder isn't osu!'s).
-pub fn save_cached_folder(
+/// Result of attempting the instant same-drive rename half of saving a cached folder.
+pub enum SaveOutcome {
+    /// Moved immediately on the same drive (or already present at `dest`).
+    Moved(PathBuf),
+    /// On a different drive: needs a background copy from `cached_folder` to `dest`.
+    NeedsCopy { dest_root: PathBuf, dest: PathBuf },
+}
+
+/// Resolves the save destination and tries an instant same-drive rename. Returns
+/// `SaveOutcome::NeedsCopy` when the destination is on another drive so the caller can offload
+/// the recursive copy to a background thread.
+pub fn try_rename_cached_folder(
     cached_folder: &Path,
     is_custom: bool,
     save_to: JourneySaveTo,
     osu_songs: Option<&Path>,
-) -> Result<PathBuf, String> {
+) -> Result<SaveOutcome, String> {
     let dest_root = if is_custom {
         config::custom_dir()
     } else {
@@ -1287,24 +1309,60 @@ pub fn save_cached_folder(
         .file_name()
         .ok_or_else(|| "invalid cached folder name".to_string())?;
     let dest = dest_root.join(name);
-    if dest.exists() {
-        return Ok(dest);
+    if dest.exists() || std::fs::rename(cached_folder, &dest).is_ok() {
+        return Ok(SaveOutcome::Moved(dest));
     }
-    if std::fs::rename(cached_folder, &dest).is_ok() {
-        return Ok(dest);
-    }
-    // Another drive: copied beside it first, so a copy cut short is never taken for the set.
+    Ok(SaveOutcome::NeedsCopy { dest_root, dest })
+}
+
+/// Completes a cross-drive save by copying into a unique sibling `.part` folder and renaming
+/// atomically into `dest`. Intended to run on a background worker thread; leaves `cached_folder`
+/// intact so concurrent readers (`results_job`, `pp::play_pp`, `submit_score`) never race against
+/// a deleted cache directory (cache pruning reclaims it once unprotected).
+pub fn copy_cached_folder(
+    cached_folder: &Path,
+    dest_root: &Path,
+    dest: &Path,
+) -> Result<PathBuf, String> {
+    static NEXT_PART: AtomicU64 = AtomicU64::new(0);
+    let name = cached_folder
+        .file_name()
+        .ok_or_else(|| "invalid cached folder name".to_string())?;
     let mut part_name = name.to_os_string();
-    part_name.push(".part");
+    part_name.push(format!(
+        ".{}.{}.part",
+        std::process::id(),
+        NEXT_PART.fetch_add(1, Ordering::Relaxed)
+    ));
     let part = dest_root.join(part_name);
     let _ = std::fs::remove_dir_all(&part);
-    let copied = copy_dir_all(cached_folder, &part).and_then(|()| std::fs::rename(&part, &dest));
+    let copied = copy_dir_all(cached_folder, &part).and_then(|()| std::fs::rename(&part, dest));
     if let Err(e) = copied {
         let _ = std::fs::remove_dir_all(&part);
         return Err(format!("copy to {}: {e}", dest.display()));
     }
-    let _ = std::fs::remove_dir_all(cached_folder);
-    Ok(dest)
+    Ok(dest.to_path_buf())
+}
+
+/// Moves a cached mapset folder into the player's permanent library folder:
+/// - custom maps -> `config::custom_dir()`
+/// - osu! maps -> `config::own_songs_dir()` when `save_to == JourneySaveTo::Own` (default),
+///   or `osu_songs` when `save_to == JourneySaveTo::Osu` (an error without one: taiko.rs's own
+///   folder isn't osu!'s).
+pub fn save_cached_folder(
+    cached_folder: &Path,
+    is_custom: bool,
+    save_to: JourneySaveTo,
+    osu_songs: Option<&Path>,
+) -> Result<PathBuf, String> {
+    match try_rename_cached_folder(cached_folder, is_custom, save_to, osu_songs)? {
+        SaveOutcome::Moved(dest) => Ok(dest),
+        SaveOutcome::NeedsCopy { dest_root, dest } => {
+            let dest = copy_cached_folder(cached_folder, &dest_root, &dest)?;
+            let _ = std::fs::remove_dir_all(cached_folder);
+            Ok(dest)
+        }
+    }
 }
 
 fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {

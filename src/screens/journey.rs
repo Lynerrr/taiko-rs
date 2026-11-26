@@ -2519,6 +2519,7 @@ impl State {
     }
 
     pub(crate) fn journey_tick(&mut self) {
+        self.journey_poll_saves();
         let was_offline = self.journey.offline == Some(Gate::ServerDown);
         let fetched = self.journey.poll_fetch(&self.library);
         let dl_done = self.journey.poll_downloads();
@@ -2561,9 +2562,18 @@ impl State {
     /// Journey's upkeep away from its screen (a marathon): answers and downloads come in and the
     /// queue is kept filled, with no preview played.
     pub(crate) fn journey_tick_quiet(&mut self) {
+        self.journey_poll_saves();
         self.journey.poll_fetch(&self.library);
         self.journey.poll_downloads();
-        if self.journey.can_refill(Instant::now()) {
+        let now = Instant::now();
+        if !self.cfg.online_token.is_empty() && self.journey.probe_due(now) {
+            self.journey.probe(
+                self.cfg.online_server.clone(),
+                self.cfg.online_token.clone(),
+                self.cfg.scroll_speed,
+            );
+        }
+        if self.journey.can_refill(now) {
             self.journey_refill();
         }
     }
@@ -2585,7 +2595,10 @@ impl State {
             );
         } else {
             self.journey.local_mode = true;
-            if self.journey.target_stars.is_none() && self.journey.step == 0 {
+            if self.journey.target_stars.is_none()
+                && self.journey.step == 0
+                && self.journey.marathon.is_none()
+            {
                 self.journey.needs_level = true;
                 return;
             }
@@ -2829,10 +2842,18 @@ impl State {
 
     /// Goes on with the library only, for the reason Journey asked.
     pub(crate) fn journey_go_offline(&mut self) {
-        let reason = self.journey.gate.unwrap_or(Gate::SignedOut);
+        let reason = self.journey.gate.unwrap_or_else(|| {
+            if !self.cfg.online_token.is_empty() && self.journey.outage_since.is_some() {
+                Gate::ServerDown
+            } else {
+                Gate::SignedOut
+            }
+        });
         self.journey.go_offline(reason);
         self.journey_refill();
-        self.journey_preview_current();
+        if self.journey.marathon.is_none() {
+            self.journey_preview_current();
+        }
     }
 
     /// Asks the server again now instead of after the backoff.
@@ -2978,6 +2999,9 @@ impl State {
             return;
         };
 
+        if self.journey.saving.iter().any(|j| j.folder == folder) {
+            return;
+        }
         // osu!'s Songs folder: the one picked in Settings, else an osu! install found (never
         // taiko.rs's own, which the other choice is).
         let own = [
@@ -2987,56 +3011,129 @@ impl State {
         let osu_songs = library::song_dirs()
             .into_iter()
             .find(|d| d.is_dir() && !own.iter().flatten().any(|o| o == d));
-        match crate::journey::save_cached_folder(
+        match crate::journey::try_rename_cached_folder(
             &folder,
             item.custom_id.is_some(),
             self.cfg.journey_save_to,
             osu_songs.as_deref(),
         ) {
-            Ok(dest) => {
-                // The maps the list has from the cache are where they were moved to now: the same
-                // entries at the same indices (a play's results, Ctrl+R, still find theirs).
-                let mut moved = Vec::new();
-                for (i, e) in self.library.iter_mut().enumerate() {
-                    if e.path.starts_with(&folder) {
-                        e.path = crate::journey::moved_path(&e.path, &folder, &dest);
-                        moved.push((i, e.path.clone(), e.modified, e.size));
-                    }
-                }
-                if !moved.is_empty() {
-                    self.invalidate_library_indices();
-                    if let Some(info) = &self.mapinfo {
-                        info.extend(moved);
-                        self.mapinfo_sorted = false;
-                    }
-                }
-                // The set's other difficulties join the list too.
+            Ok(crate::journey::SaveOutcome::Moved(dest)) => {
+                self.journey_finish_move(&folder, &dest, toast_on_success);
                 let fresh: Vec<_> = crate::journey::scan_single_folder(&dest)
                     .into_iter()
                     .filter(|e| !self.library.iter().any(|x| x.path == e.path))
                     .collect();
-                if fresh.is_empty() {
-                    self.select.refilter(&self.library);
-                } else {
+                if !fresh.is_empty() {
                     self.append_maps(fresh);
                 }
-                // Every queued map of the set is in the library now, and the play of it has
-                // nothing left to save.
-                self.journey.saved(&folder, &dest);
-                if toast_on_success {
-                    let where_saved = self.cfg.journey_save_to.name();
-                    self.toast(tr!(
-                        "Saved to {where_saved}",
-                        "{where_saved}に保存しました",
-                        "Сохранено в: {where_saved}";
-                        [] [where_saved]
-                    ));
-                }
+            }
+            Ok(crate::journey::SaveOutcome::NeedsCopy { dest_root, dest }) => {
+                self.spawn_journey_copy(folder, dest_root, dest, toast_on_success);
             }
             Err(e) => {
                 self.toast(
                     tr!("Save failed: {e}", "保存失敗: {e}", "Ошибка сохранения: {e}"; [] [e]),
                 );
+            }
+        }
+    }
+
+    /// Runs a cross-drive Journey folder copy and sibling difficulty scan on a background thread
+    /// so UI and audio never stall.
+    pub(crate) fn spawn_journey_copy(
+        &mut self,
+        folder: PathBuf,
+        dest_root: PathBuf,
+        dest: PathBuf,
+        toast_on_success: bool,
+    ) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let folder_bg = folder.clone();
+        std::thread::spawn(move || {
+            let res = crate::journey::copy_cached_folder(&folder_bg, &dest_root, &dest).map(|d| {
+                let fresh = crate::journey::scan_single_folder(&d);
+                (d, fresh)
+            });
+            let _ = tx.send(res);
+        });
+        self.journey.saving.push(crate::journey::SaveJob {
+            folder,
+            toast_on_success,
+            rx,
+        });
+    }
+
+    fn journey_finish_move(&mut self, folder: &Path, dest: &Path, toast_on_success: bool) {
+        // The maps the list has from the cache are where they were moved to now: the same
+        // entries at the same indices (a play's results, Ctrl+R, still find theirs).
+        let mut moved = Vec::new();
+        for (i, e) in self.library.iter_mut().enumerate() {
+            if e.path.starts_with(folder) {
+                e.path = crate::journey::moved_path(&e.path, folder, dest);
+                moved.push((i, e.path.clone(), e.modified, e.size));
+            }
+        }
+        if !moved.is_empty() {
+            self.invalidate_library_indices();
+            if let Some(info) = &self.mapinfo {
+                info.extend(moved);
+                self.mapinfo_sorted = false;
+            }
+        }
+        self.select.refilter(&self.library);
+        // Every queued map of the set is in the library now, and the play of it has
+        // nothing left to save.
+        self.journey.saved(folder, dest);
+        if let Some(p) = self.journey.marathon.as_mut().and_then(|m| m.last.as_mut())
+            && p.cached.as_ref().is_some_and(|(f, _)| f == folder)
+        {
+            p.cached = None;
+            p.saved = true;
+        }
+        if toast_on_success {
+            let where_saved = self.cfg.journey_save_to.name();
+            self.toast(tr!(
+                "Saved to {where_saved}",
+                "{where_saved}に保存しました",
+                "Сохранено в: {where_saved}";
+                [] [where_saved]
+            ));
+        }
+    }
+
+    /// Polls background cross-drive Journey save jobs.
+    pub(crate) fn journey_poll_saves(&mut self) {
+        let mut done = Vec::new();
+        let mut i = 0;
+        while i < self.journey.saving.len() {
+            match self.journey.saving[i].rx.try_recv() {
+                Ok(res) => {
+                    let job = self.journey.saving.remove(i);
+                    done.push((job.folder, job.toast_on_success, res));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => i += 1,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.journey.saving.remove(i);
+                }
+            }
+        }
+        for (folder, toast_on_success, res) in done {
+            match res {
+                Ok((dest, scanned)) => {
+                    self.journey_finish_move(&folder, &dest, toast_on_success);
+                    let fresh: Vec<_> = scanned
+                        .into_iter()
+                        .filter(|e| !self.library.iter().any(|x| x.path == e.path))
+                        .collect();
+                    if !fresh.is_empty() {
+                        self.append_maps(fresh);
+                    }
+                }
+                Err(e) => {
+                    self.toast(
+                        tr!("Save failed: {e}", "保存失敗: {e}", "Ошибка сохранения: {e}"; [] [e]),
+                    );
+                }
             }
         }
     }

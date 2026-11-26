@@ -2898,11 +2898,13 @@ pub fn receive(
     let done = Arc::new(AtomicU64::new(0));
     let total_bytes = Arc::new(AtomicU64::new(total));
     let d = done.clone();
+    static RECEIVE_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = RECEIVE_SEQ.fetch_add(1, Ordering::Relaxed);
     std::thread::spawn(move || {
         let result = (|| {
             std::fs::create_dir_all(&songs).map_err(|e| e.to_string())?;
             let name = safe_folder_name(&name);
-            let archive = songs.join(format!("{name}.osz.part"));
+            let archive = songs.join(format!("{name}.{}.{seq}.osz.part", std::process::id()));
             let mut file = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
             let mut got = 0u64;
             while got < total {
@@ -4316,5 +4318,63 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    #[test]
+    fn aborting_an_earlier_host_receive_does_not_delete_a_newer_transfers_part_file() {
+        let map_bytes = b"osu file format v14\n[Metadata]\nTitle:T\nArtist:A\nVersion:Oni\n";
+        let (dir, zip_path) = a_zip("receive-unique", &[("map [Oni].osu", map_bytes)]);
+        let archive_bytes = std::fs::read(&zip_path).unwrap();
+        let hash = crate::net::map_hash(map_bytes);
+        let songs = dir.join("Songs");
+        let custom = dir.join("Custom");
+        let mid = archive_bytes.len() / 2;
+
+        let (job1, feed1) = receive(
+            SetInfo::default(),
+            "42 A - T".into(),
+            archive_bytes.len() as u64,
+            hash,
+            songs.clone(),
+            custom.clone(),
+            None,
+        );
+        feed1.send(Some(archive_bytes[..mid].to_vec())).unwrap();
+
+        let (job2, feed2) = receive(
+            SetInfo::default(),
+            "42 A - T".into(),
+            archive_bytes.len() as u64,
+            hash,
+            songs.clone(),
+            custom.clone(),
+            None,
+        );
+        feed2.send(Some(archive_bytes[..mid].to_vec())).unwrap();
+
+        // Wait until both threads have created their .part files, then abort transfer 1.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (job1.done.load(Ordering::Relaxed) == 0 || job2.done.load(Ordering::Relaxed) == 0)
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        drop(feed1);
+        assert!(
+            job1.rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .is_err()
+        );
+
+        // Transfer 2 finishes and unpacks cleanly even after transfer 1 cleaned up.
+        feed2.send(Some(archive_bytes[mid..].to_vec())).unwrap();
+        let dest = job2
+            .rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .expect("second transfer must survive first transfer cleanup");
+        assert!(dest.join("map [Oni].osu").is_file());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

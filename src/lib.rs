@@ -2225,6 +2225,7 @@ impl State {
         if self.journey.active && self.journey.in_play {
             self.journey.in_play = false;
             self.journey.playing_cached = None;
+            self.journey.skip_intro_next = false;
             self.journey.shown_at = Instant::now();
             self.stop_audio();
             self.report_smoothness();
@@ -8136,6 +8137,8 @@ impl State {
 
     fn leave_room(&mut self, why: &str) {
         self.stop_audio();
+        self.stop_host_transfer();
+        self.auto_fetched = None;
         self.mp = None;
         self.picking_lobby_map = false;
         self.mp_status = why.to_string();
@@ -9832,15 +9835,21 @@ impl State {
         self.find_lobby_map();
     }
 
-    /// A lobby map may have been announced before our library was ready.
+    /// A lobby map may have been announced before our library was ready, or the library may have
+    /// been refreshed/replaced while in the lobby (shifting or removing indices).
     fn find_lobby_map(&mut self) {
         if let Some(s) = &mut self.mp
             && let Some(m) = &s.map
-            && !s.have_map
         {
+            let had = s.have_map;
             s.map_entry = find_map(&self.library, m);
             s.have_map = s.map_entry.is_some();
-            s.client.send(net::ClientMsg::HasMap(s.have_map));
+            if !s.have_map {
+                s.ready = false;
+            }
+            if s.have_map != had {
+                s.client.send(net::ClientMsg::HasMap(s.have_map));
+            }
         }
     }
 
@@ -12764,6 +12773,8 @@ impl State {
                     .screen()
                     .is_some_and(|s| s.in_room() || s.spectating());
                 self.toast(format!("multiplayer: {why}"));
+                self.stop_host_transfer();
+                self.auto_fetched = None;
                 self.mp = None;
                 self.picking_lobby_map = false;
                 if in_mp {
@@ -13612,6 +13623,7 @@ impl State {
         }
         self.poll_downloads();
         self.poll_tja_imports();
+        self.journey_poll_saves();
         self.poll_score_link();
         self.poll_set_check(now);
         self.poll_sorting();
@@ -14562,7 +14574,7 @@ impl State {
     fn send_map_to(&mut self, to: u32) {
         let Some(s) = &self.mp else { return };
         let tx = s.client.bulk_sender();
-        let entry = s.map_entry.map(|i| &self.library[i]);
+        let entry = s.map_entry.and_then(|i| self.library.get(i));
         let folder = entry.and_then(|e| e.path.parent().map(|p| p.to_path_buf()));
         // A TJA chart: its file, sent with what it names rather than its whole folder.
         let tja = entry
@@ -14673,6 +14685,8 @@ impl State {
                 ranked_date: String::new(),
                 custom: None,
             };
+            // A transfer that's still going is given up before starting the new one.
+            self.stop_host_transfer();
             let (job, feed) = download::receive(
                 set,
                 part.name.clone(),
@@ -14682,8 +14696,6 @@ impl State {
                 self.custom_dir.clone(),
                 self.tja_dir.clone(),
             );
-            // A transfer that's still going is given up for this one.
-            self.stop_host_transfer();
             let done = job.done.clone();
             self.downloads.push(job);
             self.host_transfer = Some((feed, done));

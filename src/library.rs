@@ -914,13 +914,17 @@ fn log_scan(cache_path: &Path, line: &str) {
 }
 
 fn save_cache(path: &Path, folders: Vec<CachedFolder>) {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let Ok(json) = serde_json::to_vec(&folders) else {
         return;
     };
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
-    let tmp = path.with_extension("partial");
-    if std::fs::write(&tmp, json).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(format!(".{}.{n}.partial", std::process::id()));
+    let tmp = path.with_file_name(tmp_name);
+    if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
 }
 
@@ -2012,5 +2016,45 @@ mod tests {
         let log = std::fs::read_to_string(cache.with_file_name("library-scan.log")).unwrap();
         assert_eq!(log.lines().count(), SCAN_LOG_LINES);
         let _ = (songs, std::fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn concurrent_save_cache_writes_do_not_corrupt_or_leave_partials() {
+        let (root, _songs, cache) = songs_folder("concurrent-save");
+        let dir = cache.parent().unwrap().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::thread::scope(|s| {
+            for t in 0..8usize {
+                let cache = cache.clone();
+                let root = root.clone();
+                s.spawn(move || {
+                    for k in 0..15usize {
+                        let folder = CachedFolder {
+                            dir: root.join(format!("set-{t}-{k}")),
+                            modified: (t * 100 + k) as u128,
+                            maps: Vec::new(),
+                            tja: TJA_READ,
+                        };
+                        save_cache(&cache, vec![folder]);
+                    }
+                });
+            }
+        });
+        let (loaded, state) = load_cache(&cache);
+        assert!(
+            !matches!(state, CacheState::Missing | CacheState::Unreadable(_)),
+            "cache must remain valid JSON after concurrent saves: {state:?}"
+        );
+        assert_eq!(loaded.len(), 1);
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".partial"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no .partial temp files left behind: {leftovers:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
