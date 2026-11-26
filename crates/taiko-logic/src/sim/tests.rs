@@ -1845,3 +1845,55 @@ fn autoplay_leaves_bombs_and_adlibs_and_plays_a_kadon_whole() {
         (4, 0, 0, 0, 1)
     );
 }
+
+#[test]
+fn rewind_and_replay_misses_reset_tko_play_events() {
+    use crate::tko::gimmick::{FieldProp, Gimmick};
+    use crate::tko::graph::{Graph, Kind as NodeKind, Target};
+
+    let mut graph = Graph::default();
+    let on_hit = graph.add(NodeKind::OnHit, 0.0, 0.0).unwrap();
+    let counter = graph.add(NodeKind::Counter, 0.0, 0.0).unwrap();
+    graph.node_mut(counter).unwrap().p = vec![2.0];
+    let pulse = graph.add(NodeKind::Pulse, 0.0, 0.0).unwrap();
+    graph.node_mut(pulse).unwrap().p = vec![10.0, 200.0];
+    graph.node_mut(pulse).unwrap().target = Some(Target::Field(FieldProp::X));
+    graph.connect(on_hit, counter, 0).unwrap();
+    graph.connect(counter, pulse, 0).unwrap();
+
+    let mut map = beatmap::calibration_map(500.0, 0, 3);
+    map.gimmick = Some(Arc::new(Gimmick {
+        graph,
+        ..Gimmick::default()
+    }));
+    let note_times: Vec<f64> = map.notes.iter().map(|n| n.time).collect();
+
+    let mut g = Game::new(map, Arc::new(Silence), None);
+    let inputs: Vec<(f64, u8)> = note_times.iter().map(|&t| (t, 1)).collect();
+    g.set_replay(Some((inputs, 0)));
+
+    // Drawing the replay bar simulates the whole replay via `replay_misses()` and rewinds back.
+    assert!(g.replay_misses().is_empty());
+
+    // Replaying only the first note must not fire a 2-hit Counter (would fire if events from
+    // `replay_misses()` were retained and duplicated).
+    let after_first = note_times[0] + 50.0;
+    g.set_time(after_first);
+    let tko = g.tko.as_mut().unwrap();
+    tko.prepare(after_first);
+    assert_eq!(tko.field(after_first).x, 0.0);
+
+    // Hitting the second note fires the 2-hit Counter once.
+    let after_second = note_times[1] + 50.0;
+    g.set_time(after_second);
+    let tko = g.tko.as_mut().unwrap();
+    tko.prepare(after_second);
+    assert!(tko.field(after_second).x > 0.0);
+
+    // Rewinding and replaying only the first note again must still not fire the 2-hit Counter.
+    g.rewind();
+    g.set_time(after_first);
+    let tko = g.tko.as_mut().unwrap();
+    tko.prepare(after_first);
+    assert_eq!(tko.field(after_first).x, 0.0);
+}
