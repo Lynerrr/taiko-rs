@@ -562,6 +562,7 @@ pub struct Renderer {
     /// The font's glyphs (`font::atlas`), for text quads.
     font_view: wgpu::TextureView,
     font_texture: wgpu::Texture,
+    font_custom_height: u32,
     font_revision: u64,
     /// Profile pictures, a grid of `avatars::CELL` squares (`Renderer::set_avatar`).
     avatar_texture: wgpu::Texture,
@@ -1278,14 +1279,14 @@ fn shape_binding_stages(binding: u32) -> wgpu::ShaderStages {
     }
 }
 
-fn shape_shader() -> String {
+fn shape_shader(custom_height: u32) -> String {
     SHADER
         .replace("GROUND_ALPHA_FN", GROUND_ALPHA_WGSL)
         .replace("SPRITE_COUNT", &SPRITES.to_string())
         .replace("SPRITE_LAST", &(SPRITES - 1).to_string())
         .replace("CUSTOM_BASE", &format!("{:.1}", crate::system_font::BASE))
         .replace("CUSTOM_WIDTH", &crate::system_font::WIDTH.to_string())
-        .replace("CUSTOM_HEIGHT", &crate::system_font::HEIGHT.to_string())
+        .replace("CUSTOM_HEIGHT", &custom_height.to_string())
         .replace("FONT_COLS", &crate::font::ATLAS_COLS.to_string())
         .replace("FONT_CELL_W", &crate::font::CELL_W.to_string())
         .replace("CJK_BASE", &crate::font::CHINESE_BASE.to_string())
@@ -1615,12 +1616,21 @@ fn shade(in: VOut) -> vec4<f32> {
 }
 "#;
 
+/// How many rows of the font texture can hold system-font glyphs without exceeding `max_dim`.
+fn custom_font_height(base_h: u32, max_dim: u32) -> u32 {
+    max_dim
+        .saturating_sub(base_h)
+        .min(crate::system_font::HEIGHT as u32)
+}
+
 fn make_font_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-) -> (wgpu::TextureView, wgpu::Texture) {
-    let (w, h, mut px) = crate::font::atlas();
-    let h = h + crate::system_font::HEIGHT as u32;
+) -> (wgpu::TextureView, wgpu::Texture, u32) {
+    let (w, base_h, mut px) = crate::font::atlas();
+    let custom_h = custom_font_height(base_h, device.limits().max_texture_dimension_2d);
+    crate::system_font::set_atlas_height(custom_h as usize);
+    let h = base_h + custom_h;
     px.resize(w as usize * h as usize, 0);
     let size = wgpu::Extent3d {
         width: w,
@@ -1650,15 +1660,26 @@ fn make_font_texture(
     (
         texture.create_view(&wgpu::TextureViewDescriptor::default()),
         texture,
+        custom_h,
     )
 }
 
-fn upload_font_glyphs(queue: &wgpu::Queue, texture: &wgpu::Texture, last_revision: &mut u64) {
-    let height = texture.height() - crate::system_font::HEIGHT as u32;
+fn upload_font_glyphs(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    custom_height: u32,
+    last_revision: &mut u64,
+) {
+    let base_h = texture.height().saturating_sub(custom_height);
     for glyph in crate::system_font::uploads(*last_revision) {
         *last_revision = (*last_revision).max(glyph.revision);
         let m = glyph.metrics;
         let (w, h) = (m.width + 2, m.height + 2);
+        let x = (glyph.slot % crate::system_font::WIDTH) as u32;
+        let y = base_h + (glyph.slot / crate::system_font::WIDTH) as u32;
+        if x + w as u32 > texture.width() || y + h as u32 > texture.height() {
+            continue;
+        }
         let mut pixels = vec![0; w * h];
         for row in 0..m.height {
             let start = (row + 1) * w + 1;
@@ -1669,11 +1690,7 @@ fn upload_font_glyphs(queue: &wgpu::Queue, texture: &wgpu::Texture, last_revisio
             wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: (glyph.slot % crate::system_font::WIDTH) as u32,
-                    y: height + (glyph.slot / crate::system_font::WIDTH) as u32,
-                    z: 0,
-                },
+                origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
             &pixels,
@@ -1740,9 +1757,10 @@ impl Renderer {
         config.format = format;
         config.alpha_mode = alpha_mode;
 
+        let (font_view, font_texture, font_custom_height) = make_font_texture(&device, &queue);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shapes"),
-            source: wgpu::ShaderSource::Wgsl(shape_shader().into()),
+            source: wgpu::ShaderSource::Wgsl(shape_shader(font_custom_height).into()),
         });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
@@ -1813,7 +1831,6 @@ impl Renderer {
                 },
             ],
         });
-        let (font_view, font_texture) = make_font_texture(&device, &queue);
         let sprite_rects = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sprites"),
             size: (SPRITES * 16) as u64,
@@ -2215,6 +2232,7 @@ impl Renderer {
             sampler,
             font_view,
             font_texture,
+            font_custom_height,
             font_revision: 0,
             avatar_texture,
             avatar_view,
@@ -2773,7 +2791,12 @@ impl Renderer {
     }
 
     fn upload_font(&mut self) {
-        upload_font_glyphs(&self.queue, &self.font_texture, &mut self.font_revision);
+        upload_font_glyphs(
+            &self.queue,
+            &self.font_texture,
+            self.font_custom_height,
+            &mut self.font_revision,
+        );
     }
 
     /// Render pixels per virtual unit for crisp text (`set_text_grid`) when drawing at half
@@ -6107,7 +6130,7 @@ mod tests {
 
     #[test]
     fn every_binding_the_shape_shader_reads_is_visible_to_the_stage_reading_it() {
-        let src = super::shape_shader();
+        let src = super::shape_shader(crate::system_font::HEIGHT as u32);
         let module = naga::front::wgsl::parse_str(&src).expect("parses");
         let info = naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
@@ -6268,7 +6291,7 @@ mod tests {
 
     #[test]
     fn shaders_compile() {
-        let shapes = super::shape_shader();
+        let shapes = super::shape_shader(crate::system_font::HEIGHT as u32);
         let background = super::bg_shader();
         for (name, src) in [
             ("shapes", shapes.as_str()),
@@ -6479,6 +6502,35 @@ mod shape_limit_tests {
         assert!((limit * std::mem::size_of::<Shape>()) as u64 <= max);
         let capacity = (limit + 1000).next_power_of_two().min(limit);
         assert!((capacity * std::mem::size_of::<Shape>()) as u64 <= max);
+    }
+
+    #[test]
+    fn font_texture_height_fits_within_gpu_texture_limit() {
+        let (_, base_h, _) = crate::font::atlas();
+        assert!(base_h > 0 && base_h < 2048);
+        for max_dim in [2048u32, 4096, 8192, 16384] {
+            let custom_h = custom_font_height(base_h, max_dim);
+            assert!(
+                base_h + custom_h <= max_dim,
+                "font atlas {} + {custom_h} exceeds GPU limit {max_dim}",
+                base_h
+            );
+            assert!(custom_h <= crate::system_font::HEIGHT as u32);
+            // Shader compiles cleanly with the clamped custom height.
+            let src = super::shape_shader(custom_h);
+            let module = wgpu::naga::front::wgsl::parse_str(&src).expect("parses");
+            wgpu::naga::valid::Validator::new(
+                wgpu::naga::valid::ValidationFlags::all(),
+                wgpu::naga::valid::Capabilities::default(),
+            )
+            .validate(&module)
+            .expect("valid");
+        }
+        assert_eq!(custom_font_height(base_h, base_h), 0);
+        assert_eq!(
+            custom_font_height(base_h, 8192),
+            crate::system_font::HEIGHT as u32
+        );
     }
 }
 
