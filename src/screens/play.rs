@@ -443,6 +443,7 @@ impl Screen for PlayScreen {
             KeyCode::KeyN
                 if state.playing_journey()
                     && state.cfg.journey_flow != crate::config::JourneyFlow::Off
+                    && state.cfg.journey_up_next
                     && state.play.as_deref().is_some_and(|g| {
                         g.replay().is_none()
                             && g.paused().is_none()
@@ -542,6 +543,7 @@ impl Screen for PlayScreen {
         let up_next_target = if state.journey.active
             && state.journey.in_play
             && state.cfg.journey_flow != crate::config::JourneyFlow::Off
+            && state.cfg.journey_up_next
             && game.replay().is_none()
             && game.paused().is_none()
             && crate::screens::journey::up_next_due(&game.map().notes, game.time())
