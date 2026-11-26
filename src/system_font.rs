@@ -4,13 +4,28 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{
     OnceLock,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 pub const WIDTH: usize = 1024;
 pub const HEIGHT: usize = 4096;
 pub const BASE: f32 = 50000.0;
 const PX: f32 = 32.0;
+
+static ATLAS_HEIGHT: AtomicUsize = AtomicUsize::new(HEIGHT);
+
+/// Height of the system-font region in the font texture, bounded by the GPU's texture limit.
+pub fn atlas_height() -> usize {
+    ATLAS_HEIGHT.load(Ordering::Relaxed)
+}
+
+/// Limits the system-font region to `height` rows (at most `HEIGHT`) to match the GPU texture.
+pub fn set_atlas_height(height: usize) {
+    let clamped = height.min(HEIGHT);
+    if ATLAS_HEIGHT.swap(clamped, Ordering::Relaxed) != clamped {
+        CACHE.with_borrow_mut(|cache| cache.reset(clamped));
+    }
+}
 
 fn database() -> &'static fontdb::Database {
     static DB: OnceLock<fontdb::Database> = OnceLock::new();
@@ -59,7 +74,58 @@ struct Cache {
     x: usize,
     y: usize,
     row_height: usize,
+    atlas_height: usize,
     full: bool,
+}
+
+impl Cache {
+    fn reset(&mut self, max_h: usize) {
+        self.glyphs.clear();
+        self.x = 0;
+        self.y = 0;
+        self.row_height = 0;
+        self.atlas_height = max_h;
+        self.full = false;
+    }
+
+    fn raster_with_height(&mut self, ch: char, px: u16, max_h: usize) -> Option<Rc<Glyph>> {
+        if self.atlas_height != max_h {
+            self.reset(max_h);
+        }
+        if let Some(glyph) = self.glyphs.get(&(ch, px)) {
+            return glyph.clone();
+        }
+        let font = self.font.as_ref()?;
+        if font.lookup_glyph_index(ch) == 0 {
+            self.glyphs.insert((ch, px), None);
+            return None;
+        }
+        let (metrics, pixels) = font.rasterize(ch, f32::from(px));
+        let (w, h) = (metrics.width + 2, metrics.height + 2);
+        if w > WIDTH || h > max_h {
+            return None;
+        }
+        if self.x + w > WIDTH {
+            self.x = 0;
+            self.y += self.row_height;
+            self.row_height = 0;
+        }
+        if self.y + h > max_h || self.full {
+            self.full = true;
+            return None;
+        }
+        let glyph = Rc::new(Glyph {
+            slot: self.y * WIDTH + self.x,
+            design_scale: PX / f32::from(px),
+            metrics,
+            pixels,
+            revision: revision(),
+        });
+        self.x += w;
+        self.row_height = self.row_height.max(h);
+        self.glyphs.insert((ch, px), Some(glyph.clone()));
+        Some(glyph)
+    }
 }
 
 thread_local! {
@@ -108,6 +174,7 @@ pub fn select(family: &str) -> bool {
             requested: family.into(),
             font,
             cap,
+            atlas_height: atlas_height(),
             ..Default::default()
         };
         ok
@@ -117,13 +184,10 @@ pub fn select(family: &str) -> bool {
 /// Keep the atlas bounded without permanently losing glyphs after browsing many map titles.
 /// Reset only between frames: all shapes in a frame must keep the slots they measured.
 pub fn begin_frame() {
+    let max_h = atlas_height();
     CACHE.with_borrow_mut(|cache| {
-        if cache.full {
-            cache.glyphs.clear();
-            cache.x = 0;
-            cache.y = 0;
-            cache.row_height = 0;
-            cache.full = false;
+        if cache.full || cache.atlas_height != max_h {
+            cache.reset(max_h);
         }
     });
 }
@@ -177,41 +241,8 @@ pub fn glyph_at(ch: char, size: f32) -> Option<Rc<Glyph>> {
 }
 
 fn raster(ch: char, px: u16) -> Option<Rc<Glyph>> {
-    CACHE.with_borrow_mut(|cache| {
-        if let Some(glyph) = cache.glyphs.get(&(ch, px)) {
-            return glyph.clone();
-        }
-        let font = cache.font.as_ref()?;
-        if font.lookup_glyph_index(ch) == 0 {
-            cache.glyphs.insert((ch, px), None);
-            return None;
-        }
-        let (metrics, pixels) = font.rasterize(ch, f32::from(px));
-        let (w, h) = (metrics.width + 2, metrics.height + 2);
-        if w > WIDTH || h > HEIGHT {
-            return None;
-        }
-        if cache.x + w > WIDTH {
-            cache.x = 0;
-            cache.y += cache.row_height;
-            cache.row_height = 0;
-        }
-        if cache.y + h > HEIGHT || cache.full {
-            cache.full = true;
-            return None;
-        }
-        let glyph = Rc::new(Glyph {
-            slot: cache.y * WIDTH + cache.x,
-            design_scale: PX / f32::from(px),
-            metrics,
-            pixels,
-            revision: revision(),
-        });
-        cache.x += w;
-        cache.row_height = cache.row_height.max(h);
-        cache.glyphs.insert((ch, px), Some(glyph.clone()));
-        Some(glyph)
-    })
+    let max_h = atlas_height();
+    CACHE.with_borrow_mut(|cache| cache.raster_with_height(ch, px, max_h))
 }
 
 #[cfg(all(test, feature = "gpu-tests"))]
@@ -257,5 +288,33 @@ mod tests {
         assert!(new.revision > old.revision);
         assert_eq!(uploads(old.revision).len(), 1);
         select("");
+    }
+
+    #[test]
+    fn reduced_atlas_height_keeps_all_glyphs_within_bounds() {
+        let font = fontdue::Font::from_bytes(
+            include_bytes!("regression/fixtures/Abel-Regular.ttf").as_slice(),
+            fontdue::FontSettings::default(),
+        )
+        .unwrap();
+        let mut cache = Cache {
+            font: Some(font),
+            cap: PX,
+            atlas_height: 40,
+            ..Default::default()
+        };
+        let mut placed = 0;
+        for ch in '!'..='~' {
+            if let Some(g) = cache.raster_with_height(ch, 32, 40) {
+                let y = g.slot / WIDTH;
+                let h = g.metrics.height + 2;
+                assert!(y + h <= 40, "glyph {ch} exceeded reduced atlas height");
+                placed += 1;
+            }
+        }
+        assert!(placed > 0, "at least one glyph fits in the reduced atlas");
+        assert!(cache.full, "cache marks full instead of overflowing max_h");
+        // Zero height disables custom glyph placement cleanly.
+        assert!(cache.raster_with_height('A', 32, 0).is_none());
     }
 }

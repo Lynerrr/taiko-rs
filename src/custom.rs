@@ -694,7 +694,7 @@ pub fn outdated(folder: &Path, site: &SiteSet) -> bool {
             .values()
             .filter_map(|h| u64::from_str_radix(h, 16).ok())
             .collect();
-        return site.hashes.iter().any(|h| !have.contains(h));
+        return wanted.iter().any(|h| !have.contains(h));
     }
     let Ok(dir) = std::fs::read_dir(folder) else {
         return false;
@@ -1087,6 +1087,37 @@ mod tests {
             ..site
         };
         assert!(outdated(&dir, &newer));
+    }
+
+    #[test]
+    fn deleted_difficulty_with_v2_manifest_is_not_outdated() {
+        let dir = folder("deleted-diff-manifest");
+        let (oni, easy) = (crate::net::map_hash(b"oni"), crate::net::map_hash(b"easy"));
+        let mut m = Manifest {
+            id: Some(4),
+            ..Manifest::default()
+        };
+        m.add_file("a [Oni].tko", oni);
+        m.write(&dir).unwrap();
+        let site = SiteSet {
+            id: 4,
+            approved: true,
+            hashes: vec![oni, easy],
+            updated: 100,
+        };
+        assert!(outdated(&dir, &site), "[Easy] is missing from manifest");
+        assert!(note_deleted(&dir, easy));
+        assert!(
+            !outdated(&dir, &site),
+            "deleted difficulty must not keep v2 manifest outdated"
+        );
+        let hard = crate::net::map_hash(b"hard");
+        let newer = SiteSet {
+            hashes: vec![oni, easy, hard],
+            ..site
+        };
+        assert!(outdated(&dir, &newer), "new non-deleted diff still updates");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
