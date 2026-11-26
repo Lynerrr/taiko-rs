@@ -2639,6 +2639,8 @@ fn keep_unknown(out: &mut String, old: &str) {
                 k,
                 "songs"
                     | "multiverse_preset"
+                    | "hud_preset"
+                    | "editor_recent"
                     | "mod_preset"
                     | "skin_part"
                     | "editor_snap_preset"
@@ -2714,6 +2716,28 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(left, ["config.txt"], "no temporary file is left behind");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_the_last_hud_preset_or_recent_map_is_not_undone_by_a_save() {
+        let dir = std::env::temp_dir().join(format!("taiko-config-lists-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.txt");
+        std::fs::write(
+            &path,
+            "hud_preset = mine: x\neditor_recent = /maps/a.osu\nfuture_option = keep\n",
+        )
+        .unwrap();
+        // This build's text, from a config with neither list (the last one just deleted).
+        let text = Config::default().to_text();
+        assert!(!text.contains("hud_preset ="));
+        assert!(!text.contains("editor_recent ="));
+        write_pending(&mut std::collections::HashMap::from([(path.clone(), text)]));
+        let new = std::fs::read_to_string(&path).unwrap();
+        assert!(!new.contains("hud_preset ="), "{new}");
+        assert!(!new.contains("editor_recent ="), "{new}");
+        assert!(new.contains("future_option = keep"), "unknown keys still kept");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
