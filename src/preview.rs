@@ -641,7 +641,10 @@ impl Preview {
                     .and_then(|e| e.position_ms(now))
                     .zip(self.audio.as_ref())
                     .map(|(p, s)| p * s.rate);
-                self.resume_at = self.pending_seek.or(playing).or(self.resume_at);
+                // Paused (the fullscreen preview held), the music has no clock: it waits where
+                // the notes stand.
+                let held = self.held_time();
+                self.resume_at = self.pending_seek.or(playing).or(held).or(self.resume_at);
             }
             self.requested = None;
             self.changed_at = Some(now.checked_sub(DEBOUNCE).unwrap_or(now));
@@ -820,6 +823,10 @@ impl Preview {
             && let Ok(map) = result
         {
             self.left_out = (!left_out.is_empty()).then(|| (i, left_out_text(&left_out)));
+            // Held, the notes stay where they stood (the same map read again at a new speed).
+            let held = self
+                .held_time()
+                .filter(|_| self.map.as_ref().is_some_and(|(mi, ..)| *mi == i));
             let details = Details::of(&map);
             let mut graph = difficulty::analyze(&map);
             if let Some(curve) = curve {
@@ -830,6 +837,9 @@ impl Preview {
                 (!map.too_wild_to_preview()).then(|| new_preview_game(&map, self.requested_rate.0));
             self.last_time = f64::NEG_INFINITY;
             self.map = Some((i, map, details, graph));
+            if held.is_some() {
+                self.pending_seek = held;
+            }
             if reach != self.reach.1 {
                 self.reach = (self.shown_reach(), reach, Some(Instant::now()));
             }
@@ -921,6 +931,12 @@ impl Preview {
                 self.audio_active = true;
                 self.ended_at = None;
                 self.pending_seek = None; // the music won't reach it now
+                if self.held {
+                    // Held (a speed change while paused): a new track starts playing, so it's
+                    // paused again where it starts, and the notes are put there.
+                    engine.set_paused(true);
+                    self.pending_seek = Some(at * song.rate);
+                }
             }
         }
 
@@ -1014,6 +1030,16 @@ impl Preview {
             from[0] + (to[0] - from[0]) * p,
             from[1] + (to[1] - from[1]) * p,
         ]
+    }
+
+    /// Held (the fullscreen preview paused), the map time it stands at: where it was sent, where
+    /// the music is to go on from (a speed change), or where the notes are.
+    fn held_time(&self) -> Option<f64> {
+        let shown = self.game.as_ref().map(|g| g.time());
+        self.held
+            .then(|| self.pending_seek.or(self.resume_at).or(shown))
+            .flatten()
+            .filter(|t| t.is_finite())
     }
 
     pub fn seek(&mut self, t: f64, engine: Option<&Engine>) {
@@ -4316,5 +4342,56 @@ mod sim_tests {
         sim.step(0, -1);
         assert_eq!(sim.misses, 1);
         assert!((sim.accuracy - 0.995).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod held_tests {
+    use super::*;
+
+    /// Discord bug: a speed change in the paused fullscreen preview threw it back to 0:00 with
+    /// no notes, and the new track played on behind the pause (paused, the music has no clock
+    /// to carry on from).
+    #[test]
+    fn a_speed_change_while_held_keeps_the_preview_where_it_stood() {
+        let songs = crate::regression::harness::Songs::new(
+            "held-speed",
+            &[crate::regression::maps::basics()],
+        );
+        let library = songs.entries();
+        let map = beatmap::load(&library[0].path).expect("the chart");
+        let mut game = new_preview_game(&map, 1.1);
+        game.seek(5_000.0, None, 0.0);
+        let mut p = Preview {
+            seen: Some(0),
+            requested: Some(0),
+            requested_rate: (1.1, false),
+            held: true,
+            audio_active: true,
+            game: Some(game),
+            map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+            ..Default::default()
+        };
+        let mut now = Instant::now();
+        let update = |p: &mut Preview, now: Instant| {
+            p.update(now, &library, Some(0), None, true, true, 0.0, (1.05, false));
+        };
+        update(&mut p, now);
+        assert_eq!(
+            p.resume_at,
+            Some(5_000.0),
+            "the music goes on from where it waits"
+        );
+        // The map is read again at the new speed; the notes stay where they stood.
+        for _ in 0..500 {
+            if p.requested_rate == (1.05, false) && p.game.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            now += Duration::from_millis(10);
+            update(&mut p, now);
+        }
+        assert!(p.game.is_some(), "the map read again");
+        assert_eq!(p.held_time(), Some(5_000.0), "still where it stood");
     }
 }
