@@ -9614,6 +9614,7 @@ impl State {
                 .selected()
                 .and_then(|i| self.library.get(i))
                 .map(|e| e.path.clone());
+            let player_path = self.active_player_path();
             let (mut added, mut changed) = (0, 0);
             for e in &checked {
                 match index.get(e.path.as_os_str()).map(|&i| &self.library[i]) {
@@ -9630,7 +9631,7 @@ impl State {
                     .filter(|(i, e)| !seen[*i] && e.path.is_file())
                     .map(|(_, e)| e),
             );
-            self.use_library(checked, selected);
+            self.use_library_with_player(checked, selected, player_path);
             self.report_refresh(refreshing, added, changed, gone.len());
             return;
         }
@@ -9681,8 +9682,27 @@ impl State {
         self.report_refresh(refreshing, added, edited, gone.len());
     }
 
+    /// The library path of the music player's active track, if the player is open.
+    fn active_player_path(&self) -> Option<PathBuf> {
+        self.player
+            .as_ref()
+            .and_then(|p| p.list.entry())
+            .and_then(|i| self.library.get(i))
+            .map(|e| e.path.clone())
+    }
+
     /// `library` in place of the list, on `selected` if that's still there, else a random song.
     fn use_library(&mut self, library: Vec<Entry>, selected: Option<PathBuf>) {
+        let player_path = self.active_player_path();
+        self.use_library_with_player(library, selected, player_path);
+    }
+
+    fn use_library_with_player(
+        &mut self,
+        library: Vec<Entry>,
+        selected: Option<PathBuf>,
+        player_path: Option<PathBuf>,
+    ) {
         let results_path = self
             .scene
             .screen_as::<ResultsScreen>()
@@ -9696,21 +9716,13 @@ impl State {
             .map(|e| e.path.clone());
         self.stars.clear();
         self.preview.forget();
-        // The music player's track is a library index: kept by path across the swap, even when
-        // the list is as long as before but in another order.
-        let player_path = self
-            .player
-            .as_ref()
-            .and_then(|p| p.list.entry())
-            .and_then(|i| self.library.get(i))
-            .map(|e| e.path.clone());
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
-        if self.player.is_some() {
+        if let Some(p) = &mut self.player {
             let entry = player_path
                 .as_deref()
                 .and_then(|path| self.library.iter().position(|e| e.path == path));
-            self.player = Some(Box::new(player::Player::new(&self.library, entry)));
+            p.rebuild(&self.library, entry, fresh_seed());
         }
         if let Some(r) = self.scene.screen_mut::<ResultsScreen>().or_else(|| {
             self.behind
@@ -13832,12 +13844,12 @@ impl State {
         }
         if let Some(p) = self
             .player
-            .as_ref()
+            .as_mut()
             .filter(|p| p.library_len != self.library.len())
         {
             // The library changed under the list: same song on, if it's still there.
             let entry = p.list.entry();
-            self.player = Some(Box::new(player::Player::new(&self.library, entry)));
+            p.rebuild(&self.library, entry, fresh_seed());
         }
         self.poll_media();
         if let Some(item) = self.main_menu.as_mut().and_then(menu::Menu::ready) {

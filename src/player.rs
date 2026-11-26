@@ -489,6 +489,27 @@ impl Player {
         }
     }
 
+    /// Rebuilds the track list against a replaced `library` while keeping playback settings
+    /// (`repeat`, `shuffle`, `daycore`, speed, folder, filter, and favourites in memory).
+    pub fn rebuild(&mut self, library: &[Entry], entry: Option<usize>, seed: u64) {
+        let favourites = std::mem::take(&mut self.list.favourites);
+        let folder = self.list.folder;
+        let filter = std::mem::take(&mut self.list.filter);
+        let repeat = self.list.repeat;
+        let shuffled = self.list.is_shuffled();
+        let mut list = Playlist::with_favourites(library, entry, favourites);
+        list.repeat = repeat;
+        list.set_folder(folder, seed);
+        list.set_filter(filter);
+        if shuffled {
+            list.toggle_shuffle(seed);
+        }
+        self.list = list;
+        self.library_len = library.len();
+        self.scroll = 0;
+        self.followed = None;
+    }
+
     /// The speed the music plays at, and whether that keeps its pitch.
     pub fn rate(&self) -> (f64, bool) {
         if self.daycore {

@@ -565,6 +565,45 @@ fn the_music_player_keeps_its_song_when_the_library_is_reordered_to_the_same_len
 }
 
 #[test]
+fn check_library_deletion_keeps_music_player_track_and_playback_settings() {
+    let mut s = crate::layout_tests::state();
+    s.play_when_scanned = false;
+    let a = crate::layout_tests::entry(0, 0, false);
+    let b = crate::layout_tests::entry(1, 0, false);
+    let c = crate::layout_tests::entry(2, 0, false);
+    let pc = c.path.clone();
+    s.use_library(vec![a, b, c], None);
+    s.scene = SongSelect::scene();
+    s.mp = None;
+
+    let mut player = crate::player::Player::new(&s.library, Some(2));
+    player.list.repeat = crate::playlist::Repeat::One;
+    player.list.toggle_shuffle(42);
+    player.set_custom_rate(1.15, false);
+    player.daycore = true;
+    s.player = Some(Box::new(player));
+
+    // Delete map 0 (its path is /nonexistent/..., so !is_file() triggers the !gone.is_empty()
+    // branch in check_library that takes self.library before calling use_library).
+    let remaining = vec![
+        crate::layout_tests::entry(1, 0, false),
+        crate::layout_tests::entry(2, 0, false),
+    ];
+    s.check_library(remaining);
+    assert_eq!(s.library.len(), 2, "check_library replaced the library");
+
+    let p = s.player.as_ref().expect("player stays open");
+    let i = p.list.entry().expect("active track");
+    assert_eq!(
+        s.library[i].path, pc,
+        "player must keep its active song across check_library deletion refresh"
+    );
+    assert_eq!(p.list.repeat, crate::playlist::Repeat::One);
+    assert!(p.list.is_shuffled());
+    assert!(p.daycore);
+}
+
+#[test]
 fn changing_library_from_settings_over_results_re_resolves_or_guards_entry() {
     let mut s = crate::layout_tests::state();
     let e0 = crate::layout_tests::entry(0, 0, false);

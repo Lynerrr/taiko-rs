@@ -94,7 +94,7 @@ impl Playlist {
         Self::with_favourites(library, entry, load_favourites())
     }
 
-    fn with_favourites(
+    pub(crate) fn with_favourites(
         library: &[Entry],
         entry: Option<usize>,
         favourites: HashSet<String>,
