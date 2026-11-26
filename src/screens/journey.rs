@@ -3,7 +3,7 @@
 //! in the middle, and a Song-Select-style action bar along the bottom.
 
 use super::screen::{Frame, Key, Screen};
-use crate::config::{JourneyFlow, MarathonGap};
+use crate::config::{JourneyFlow, JourneyFocus, JourneyLength, MarathonGap};
 use crate::journey::{Gate, LEVEL_CHOICES, MapSource, PastOutcome};
 use crate::*;
 
@@ -99,19 +99,22 @@ impl Screen for JourneyScreen {
         }
 
         if let Some(row) = state.journey.settings {
+            let visible = visible_settings(state.cfg.journey_flow);
+            let max_row = visible.len().saturating_sub(1);
+            let cur = row.min(max_row);
             match code {
                 KeyCode::ArrowUp | KeyCode::KeyW => {
-                    state.journey.settings = Some(row.saturating_sub(1));
+                    state.journey.settings = Some(cur.saturating_sub(1));
                 }
                 KeyCode::ArrowDown | KeyCode::KeyS => {
-                    state.journey.settings = Some((row + 1).min(SETTINGS_ROWS - 1));
+                    state.journey.settings = Some((cur + 1).min(max_row));
                 }
-                KeyCode::ArrowLeft | KeyCode::KeyA => state.journey_change_setting(row, -1),
+                KeyCode::ArrowLeft | KeyCode::KeyA => state.journey_change_setting(cur, -1),
                 KeyCode::ArrowRight
                 | KeyCode::KeyD
                 | KeyCode::Enter
                 | KeyCode::NumpadEnter
-                | KeyCode::Space => state.journey_change_setting(row, 1),
+                | KeyCode::Space => state.journey_change_setting(cur, 1),
                 KeyCode::Escape | KeyCode::KeyO => state.journey_toggle_settings(),
                 _ => {}
             }
@@ -196,200 +199,798 @@ impl Screen for JourneyScreen {
             return None;
         }
 
+        let hits_before = canvas.hits.len();
         draw_top_lane(state, canvas, w);
         draw_center_card(state, canvas, w, h);
         if state.journey.settings.is_some() {
+            // Clear underlying hit areas while the settings modal is open so clicks outside
+            // close the modal instead of activating buttons underneath.
+            canvas.hits.truncate(hits_before);
             draw_settings(state, canvas, w, h);
         }
         None
     }
 }
 
-/// Rows of Journey's settings panel: focus, chill, flow, hardcore, skipping intros, and what a
-/// marathon shows between maps.
-pub(crate) const SETTINGS_ROWS: usize = 6;
+/// Logical settings in Journey's settings panel. Only settings relevant to the active
+/// `JourneyFlow` are shown and navigable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SettingId {
+    Focus,
+    Length,
+    Chill,
+    Flow,
+    Gap,
+    SkipIntro,
+    Hardcore,
+}
 
-/// Journey's settings panel (its gear): what kind of maps to pick, how hard to go, and how to go
-/// from map to map.
-fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
-    let on_off = |on: bool| {
-        if on {
-            tr!("On", "オン", "Вкл")
-        } else {
-            tr!("Off", "オフ", "Выкл")
+fn visible_settings(flow: JourneyFlow) -> &'static [SettingId] {
+    match flow {
+        JourneyFlow::Off => &[
+            SettingId::Focus,
+            SettingId::Length,
+            SettingId::Chill,
+            SettingId::Flow,
+        ],
+        JourneyFlow::Nonstop => &[
+            SettingId::Focus,
+            SettingId::Length,
+            SettingId::Chill,
+            SettingId::Flow,
+            SettingId::SkipIntro,
+        ],
+        JourneyFlow::Marathon => &[
+            SettingId::Focus,
+            SettingId::Length,
+            SettingId::Chill,
+            SettingId::Flow,
+            SettingId::Gap,
+            SettingId::SkipIntro,
+            SettingId::Hardcore,
+        ],
+    }
+}
+
+fn setting_help(state: &State, id: SettingId) -> &'static str {
+    match id {
+        SettingId::Focus if state.journey.local_mode => tr!(
+            "Focus picks maps rich in streams, tech or SV. Requires online mode (using library offline).",
+            "フォーカスは連打・テクニカル・SVの濃い譜面を選びます（オンライン専用）。",
+            "Фокус подбирает карты со стримами, техникой или SV. Работает только онлайн."
+        ),
+        SettingId::Focus => tr!(
+            "Prefer maps rich in streams, long deathstreams, rhythm/tech or SV for their star rating.",
+            "その難易度の中で連打・長い連打・テクニカル・SVが多い譜面を優先して選びます。",
+            "Подбирает карты, насыщенные стримами, дэтстримами, техникой или SV для своих звёзд."
+        ),
+        SettingId::Length => {
+            if state.cfg.journey_flow == JourneyFlow::Marathon
+                && state.cfg.journey_length == JourneyLength::Any
+            {
+                tr!(
+                    "Filter chart duration. In Marathon, Any caps maps at 5:00 so hour-long marathons don't ambush you.",
+                    "譜面の長さを制限します。マラソンでは「おまかせ」でも5分以下に制限されます。",
+                    "Лимит длины карты. В марафоне «Любые» ограничены 5:00, чтобы не кидало часовые карты."
+                )
+            } else {
+                tr!(
+                    "Filter recommended charts by duration (applied both online and in your local library).",
+                    "おすすめの譜面を長さで絞り込みます（オンライン・ローカル共通）。",
+                    "Ограничивает длину подбираемых карт (работает и онлайн, и в локальной библиотеке)."
+                )
+            }
         }
-    };
-    let rows: [(&str, &str, &str); SETTINGS_ROWS] = [
-        (
-            tr!("Focus", "フォーカス", "Фокус"),
-            state.cfg.journey_focus.name(),
-            tr!(
-                "Maps rich in it for their stars: streams, long streams (deathstreams), tech or SV.",
-                "その難易度の中で特徴が強い譜面を選びます: 連打、長い連打、テクニカル、SV。",
-                "Карты, где этого много для их звёзд: стримы, длинные стримы (дэтстримы), техника или SV."
+        SettingId::Chill => tr!(
+            "Easier pace: maps half a star below your comfort level and no stretch maps. Your level stays unchanged.",
+            "レベルより0.5☆やさしい譜面のみ、ストレッチなし。推定レベルは変わりません。",
+            "Спокойный темп: карты на 0.5* ниже твоего уровня и без челлендж-карт. Уровень не падает."
+        ),
+        SettingId::Flow => match state.cfg.journey_flow {
+            JourneyFlow::Off => tr!(
+                "Manual: see results after each map and start the next one yourself.",
+                "手動: 毎回リザルトを表示し、次の譜面は自分で始めます。",
+                "Вручную: результаты после каждой карты, следующую запускаешь сам."
             ),
-        ),
-        (
-            tr!("Chill", "チル", "Чилл"),
-            on_off(state.cfg.journey_chill),
-            tr!(
-                "Easier maps, half a star below your level, and no stretch maps. Your level stays.",
-                "レベルより0.5☆やさしい譜面のみ、ストレッチなし。レベルはそのままです。",
-                "Карты на ползвезды легче твоего уровня и без stretch-карт. Уровень не меняется."
+            JourneyFlow::Nonstop => tr!(
+                "Non-stop: results count down 5s, then the next map starts automatically. Press N on the up-next card to swap.",
+                "ノンストップ: リザルト5秒後に次の譜面が自動開始。次の譜面表示中にNで変更できます。",
+                "Без перерывов: 5с на результаты, затем автостарт следующей. N при показе следующей — заменить."
             ),
-        ),
-        (
-            tr!("Flow", "流れ", "Поток"),
-            state.cfg.journey_flow.name(),
-            match state.cfg.journey_flow {
-                JourneyFlow::Off => tr!(
-                    "Results after each map; the next one starts when you say.",
-                    "毎回リザルトを表示し、次の譜面は自分で始めます。",
-                    "Результаты после каждой карты, следующая — когда скажешь."
-                ),
-                JourneyFlow::Nonstop => tr!(
-                    "Results count down, then the next map starts. N in a map: another next one.",
-                    "リザルトのカウントダウン後に次の譜面が始まります。プレイ中Nで次を変更。",
-                    "Результаты с отсчётом, потом сразу следующая. N в игре — другую следующую."
-                ),
-                JourneyFlow::Marathon => tr!(
-                    "No results: a wheel turns from map to map until you stop (Esc).",
-                    "リザルトなし: 止めるまで譜面が次々と続きます (Esc)。",
-                    "Без результатов: карты идут одна за другой, пока не остановишь (Esc)."
-                ),
-            },
-        ),
-        (
-            tr!("Hardcore", "ハードコア", "Хардкор"),
-            on_off(state.cfg.journey_hardcore),
-            tr!(
-                "Marathon: the first failed map ends it.",
-                "マラソン: 一度でもクリア失敗すると終了します。",
-                "Марафон: первый же фейл его заканчивает."
+            JourneyFlow::Marathon => tr!(
+                "Marathon: maps play back-to-back with no results screen and a carried combo until you stop.",
+                "マラソン: リザルトなしで譜面が連続し、コンボを引き継ぎます。止めるまで続きます。",
+                "Марафон: карты идут подряд без результатов и со сквозным комбо, пока не остановишь."
             ),
-        ),
-        (
-            tr!("Skip intros", "イントロをスキップ", "Скип интро"),
-            on_off(state.cfg.journey_skip_intro),
-            tr!(
-                "Maps that start by themselves (non-stop, marathon) start just before the first note.",
-                "自動で始まる譜面は最初のノーツの直前から始まります。",
-                "Карты, что стартуют сами (без перерывов, марафон), начинаются прямо перед первой нотой."
+        },
+        SettingId::Gap => match state.cfg.journey_gap {
+            MarathonGap::Wheel => tr!(
+                "Wheel: a short intermission card between maps (~2.2s) where you can hold, swap, vote or save.",
+                "ホイール: 譜面間に約2.2秒のカード画面を挟み、一時停止・変更・評価・保存ができます。",
+                "Колесо: ~2.2с между картами с карточкой следующей карты, паузой, заменой, оценкой и сохранением."
             ),
+            MarathonGap::Short => tr!(
+                "Short: a brief transition (~0.8s) showing the next map before starting.",
+                "短め: 約0.8秒だけ次の譜面を表示してから開始します。",
+                "Короткое: быстрая пауза (~0.8с) с показом следующей карты перед стартом."
+            ),
+            MarathonGap::Seamless => tr!(
+                "Seamless: no wheel. The next map preloads during play and crossfades straight in.",
+                "シームレス: ホイールなし。プレイ中に次の譜面を先読みし、クロスフェードで連続開始します。",
+                "Бесшовно: без экрана между картами. Следующая грузится заранее и стартует с кроссфейдом."
+            ),
+        },
+        SettingId::SkipIntro => tr!(
+            "Auto-started maps jump straight to just before the first note, skipping long intros.",
+            "自動で始まる譜面は長いイントロを飛ばして最初のノーツ直前から始まります。",
+            "Карты с автостартом начинаются прямо перед первой нотой, пропуская длинные вступления."
         ),
-        (
-            tr!("Between maps", "譜面の間", "Между картами"),
-            state.cfg.journey_gap.name(),
-            match state.cfg.journey_gap {
-                MarathonGap::Wheel => tr!(
-                    "Marathon: the wheel of maps turns for a couple of seconds.",
-                    "マラソン: 譜面のホイールが数秒回ります。",
-                    "Марафон: пару секунд крутится колесо карт."
-                ),
-                MarathonGap::Short => tr!(
-                    "Marathon: the wheel, for under a second.",
-                    "マラソン: ホイールは1秒未満。",
-                    "Марафон: колесо меньше секунды."
-                ),
-                MarathonGap::Seamless => tr!(
-                    "Marathon: no wheel. The next map loads during this one and starts as it ends.",
-                    "マラソン: ホイールなし。次の譜面はプレイ中に読み込まれ、終わるとすぐ始まります。",
-                    "Марафон: без колеса. Следующая карта грузится заранее и стартует сразу."
-                ),
-            },
+        SettingId::Hardcore => tr!(
+            "Hardcore marathon: the first failed map ends the run immediately. Pause Skip and Retry are disabled.",
+            "ハードコア: 1度でも失敗すると即終了。プレイ中のスキップとリトライは無効になります。",
+            "Хардкор: первый же фейл сразу заканчивает марафон. Скип и ретрай в паузе отключены."
         ),
-    ];
+    }
+}
 
-    let pw = 380.0_f32.min(w - 32.0);
-    let row_h = 46.0;
-    let ph = 62.0 + rows.len() as f32 * row_h + 26.0;
+fn focus_chip_label(f: JourneyFocus) -> &'static str {
+    match f {
+        JourneyFocus::Any => tr!("Any", "おまかせ", "Любые"),
+        JourneyFocus::Streams => tr!("Streams", "連打", "Стримы"),
+        JourneyFocus::LongStreams => tr!("Long", "長連打", "Дэтстрим"),
+        JourneyFocus::Tech => tr!("Tech", "技術", "Техника"),
+        JourneyFocus::Sv => "SV",
+    }
+}
+
+/// Journey's settings modal: opaque over a dark backdrop scrim, split into Map Pool (always active)
+/// and Session Flow (showing only controls relevant to the selected flow mode).
+fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
+    // Full-screen dark scrim: dims the bright Journey card underneath and catches outside clicks.
+    c.rect(0.0, 0.0, w, h, rgba(0x080a12, 0.80));
+    c.hit(0.0, 0.0, w, h, hit::Hit::JourneySettings);
+
+    let flow = state.cfg.journey_flow;
+    let visible = visible_settings(flow);
+    let cursor = state
+        .journey
+        .settings
+        .unwrap_or(0)
+        .min(visible.len().saturating_sub(1));
+    let mut active_id = visible[cursor];
+
+    let pw = 472.0_f32.min(w - 28.0);
+    let pad = 16.0;
+    let inner_w = pw - pad * 2.0;
+
+    // Height adapts cleanly to the active flow mode so there's never dead space or hidden rows.
+    let sub_h = match flow {
+        JourneyFlow::Off => 30.0,
+        JourneyFlow::Nonstop => 36.0,
+        JourneyFlow::Marathon => 112.0,
+    };
+    let footer_h = 56.0;
+    let ph = 44.0
+        + 18.0
+        + 32.0
+        + 32.0
+        + 30.0
+        + 12.0
+        + 18.0
+        + 34.0
+        + 8.0
+        + sub_h
+        + 12.0
+        + footer_h
+        + 12.0;
     let x = (w - pw) / 2.0;
-    let y = ((h - ph) / 2.0).max(40.0);
-    style::panel(c, x, y, pw, ph);
+    let y = ((h - ph) / 2.0).max(20.0);
+
+    // Solid modal surface (0.99 alpha over 0.80 scrim: zero bleed-through).
+    c.round_rect(
+        [x, y],
+        [pw, ph],
+        10.0,
+        rgba(style::PANEL_COLD, 0.99),
+        rgba(style::tone::EDGE, 1.0),
+        1.5,
+    );
+    // Swallow clicks on empty panel space so they don't dismiss the modal.
+    c.hit(x, y, pw, ph, hit::Hit::JourneySettingsBody);
+
+    // Header + close button.
     let heading = tr!("JOURNEY SETTINGS", "ジャーニー設定", "НАСТРОЙКИ JOURNEY");
     let tw = Canvas::text_width(12.0, heading);
-    style::title(c, x + (pw - tw) / 2.0, y + 16.0, 12.0, 0xffffff, heading);
-    style::rule(c, x + 16.0, y + 40.0, pw - 32.0);
+    style::title(c, x + (pw - tw) / 2.0, y + 14.0, 12.0, 0xffffff, heading);
+    let close_x = x + pw - 32.0;
+    let close_y = y + 10.0;
+    let close_h = c.hovered(close_x, close_y, 22.0, 22.0);
+    c.round_rect(
+        [close_x, close_y],
+        [22.0, 22.0],
+        style::radius::SMALL,
+        rgba(if close_h { 0x34344a } else { 0x1b1e2c }, 1.0),
+        rgba(if close_h { 0x8a8aa8 } else { style::tone::EDGE }, 0.8),
+        1.0,
+    );
+    c.text_centered(
+        close_x + 11.0,
+        close_y + 6.5,
+        9.0,
+        rgba(if close_h { 0xffffff } else { 0xa8a8bc }, 1.0),
+        "x",
+    );
+    c.hit(close_x, close_y, 22.0, 22.0, hit::Hit::JourneySettings);
+    style::rule(c, x + pad, y + 38.0, inner_w);
 
-    let rx = x + 12.0;
-    let rw = pw - 24.0;
-    let cursor = state.journey.settings.unwrap_or(0).min(SETTINGS_ROWS - 1);
-    for (i, (label, value, about)) in rows.iter().enumerate() {
-        let ry = y + 50.0 + i as f32 * row_h;
-        let rh = row_h - 4.0;
-        let selected = i == cursor;
+    let row_index_of = |id: SettingId| visible.iter().position(|&v| v == id);
+
+    // Helper for row highlight + keyboard selector brackets.
+    let draw_row_bg = |c: &mut Canvas,
+                       rx: f32,
+                       ry: f32,
+                       rw: f32,
+                       rh: f32,
+                       id: SettingId,
+                       accent_col: u32,
+                       active_id: &mut SettingId| {
+        let selected = row_index_of(id) == Some(cursor);
+        let hovered = c.hovered(rx, ry, rw, rh);
+        if hovered {
+            *active_id = id;
+        }
         if selected {
             c.round_rect(
                 [rx, ry],
                 [rw, rh],
                 6.0,
-                rgba(0x22c8b8, 0.16),
+                rgba(accent_col, 0.14),
                 rgba(0, 0.0),
                 0.0,
             );
             style::selector(c, "journey-set", [rx - 2.0, ry - 2.0, rw + 4.0, rh + 4.0]);
-        } else if c.hovered(rx, ry, rw, rh) {
+        } else if hovered {
             c.round_rect(
                 [rx, ry],
                 [rw, rh],
                 6.0,
-                rgba(0x262634, 0.7),
+                rgba(0x262634, 0.72),
                 rgba(0, 0.0),
                 0.0,
             );
         }
-        c.hit(rx, ry, rw, rh, hit::Hit::JourneySetting(i, 1));
-        c.text(rx + 10.0, ry + 7.0, 10.0, rgba(0xffffff, 1.0), label);
+    };
 
-        // The value between its arrows, right-aligned.
-        let vw = Canvas::text_width(10.0, value);
-        let right = rx + rw - 10.0;
-        let arrow = 12.0;
-        let vx = right - arrow - 6.0 - vw;
-        let lit = if selected { 0x62f2df } else { 0x22d4c0 };
-        c.text(right - arrow, ry + 7.0, 10.0, rgba(lit, 1.0), ">");
-        c.text(vx, ry + 7.0, 10.0, rgba(0xffffff, 1.0), value);
-        c.text(vx - 6.0 - arrow, ry + 7.0, 10.0, rgba(lit, 1.0), "<");
-        c.hit(
-            vx - 8.0 - arrow,
-            ry,
-            arrow + 6.0,
-            22.0,
-            hit::Hit::JourneySetting(i, -1),
-        );
-        c.hit(
-            right - arrow - 2.0,
-            ry,
-            arrow + 6.0,
-            22.0,
-            hit::Hit::JourneySetting(i, 1),
-        );
+    let mut cy = y + 48.0;
+    let rx = x + pad;
 
-        let about = Canvas::fit(7.0, rw - 20.0, about);
-        c.text(rx + 10.0, ry + 25.0, 7.0, rgba(0x9a9ab0, 1.0), &about);
+    // --- SECTION 1: MAP POOL (always active) ---
+    c.text(
+        rx + 4.0,
+        cy,
+        6.5,
+        rgba(0x22d4c0, 0.95),
+        tr!("MAP POOL", "選曲フィルター", "ПОДБОР КАРТ"),
+    );
+    cy += 14.0;
+
+    // 1. Focus (segmented chips)
+    let row_h = 28.0;
+    draw_row_bg(
+        c,
+        rx,
+        cy,
+        inner_w,
+        row_h,
+        SettingId::Focus,
+        0x22c8b8,
+        &mut active_id,
+    );
+    let offline_focus = state.journey.local_mode;
+    let label_col = if offline_focus { 0x74728a } else { 0xffffff };
+    c.text(
+        rx + 8.0,
+        cy + 9.5,
+        9.0,
+        rgba(label_col, 1.0),
+        tr!("Focus", "フォーカス", "Фокус"),
+    );
+    let seg_left = rx + 96.0;
+    let seg_w = inner_w - 102.0;
+    let chip_gap = 4.0;
+    let chip_w =
+        (seg_w - chip_gap * (JourneyFocus::ALL.len() - 1) as f32) / JourneyFocus::ALL.len() as f32;
+    for (k, &f) in JourneyFocus::ALL.iter().enumerate() {
+        let bx = seg_left + k as f32 * (chip_w + chip_gap);
+        let by = cy + 4.0;
+        let bh = row_h - 8.0;
+        let on = state.cfg.journey_focus == f;
+        let hov = c.hovered(bx, by, chip_w, bh);
+        let fill = if on {
+            rgba(if offline_focus { 0x4a4a62 } else { 0x22d4c0 }, 0.24)
+        } else if hov {
+            rgba(0x2d3042, 0.95)
+        } else {
+            rgba(0x161926, 0.95)
+        };
+        let edge = if on {
+            rgba(if offline_focus { 0x6a6a84 } else { 0x22d4c0 }, 0.9)
+        } else if hov {
+            rgba(style::tone::EDGE_HOVER, 0.9)
+        } else {
+            rgba(style::tone::EDGE, 0.65)
+        };
+        c.round_rect(
+            [bx, by],
+            [chip_w, bh],
+            style::radius::SMALL,
+            fill,
+            edge,
+            1.0,
+        );
+        let lbl = focus_chip_label(f);
+        c.text_centered(
+            bx + chip_w / 2.0,
+            by + (bh - 7.5) / 2.0,
+            7.5,
+            rgba(
+                if on {
+                    if offline_focus { 0xb4b4c8 } else { 0x62f2df }
+                } else if offline_focus {
+                    0x6e6e84
+                } else {
+                    0xc4c4d8
+                },
+                1.0,
+            ),
+            &Canvas::fit(7.5, chip_w - 6.0, lbl),
+        );
+        c.hit(bx, by, chip_w, bh, hit::Hit::JourneyFocus(f));
+    }
+    cy += 32.0;
+
+    // 2. Length (segmented chips)
+    draw_row_bg(
+        c,
+        rx,
+        cy,
+        inner_w,
+        row_h,
+        SettingId::Length,
+        0x22c8b8,
+        &mut active_id,
+    );
+    c.text(
+        rx + 8.0,
+        cy + 9.5,
+        9.0,
+        rgba(0xffffff, 1.0),
+        tr!("Length", "長さ", "Длина"),
+    );
+    let marathon_flow = flow == JourneyFlow::Marathon;
+    let lchip_w = (seg_w - chip_gap * (JourneyLength::ALL.len() - 1) as f32)
+        / JourneyLength::ALL.len() as f32;
+    for (k, &len) in JourneyLength::ALL.iter().enumerate() {
+        let bx = seg_left + k as f32 * (lchip_w + chip_gap);
+        let by = cy + 4.0;
+        let bh = row_h - 8.0;
+        let on = state.cfg.journey_length == len;
+        let hov = c.hovered(bx, by, lchip_w, bh);
+        let fill = if on {
+            rgba(0x22d4c0, 0.24)
+        } else if hov {
+            rgba(0x2d3042, 0.95)
+        } else {
+            rgba(0x161926, 0.95)
+        };
+        let edge = if on {
+            rgba(0x22d4c0, 0.9)
+        } else if hov {
+            rgba(style::tone::EDGE_HOVER, 0.9)
+        } else {
+            rgba(style::tone::EDGE, 0.65)
+        };
+        c.round_rect(
+            [bx, by],
+            [lchip_w, bh],
+            style::radius::SMALL,
+            fill,
+            edge,
+            1.0,
+        );
+        let lbl = len.chip(marathon_flow);
+        c.text_centered(
+            bx + lchip_w / 2.0,
+            by + (bh - 7.5) / 2.0,
+            7.5,
+            rgba(if on { 0x62f2df } else { 0xc4c4d8 }, 1.0),
+            &Canvas::fit(7.5, lchip_w - 6.0, lbl),
+        );
+        c.hit(bx, by, lchip_w, bh, hit::Hit::JourneyLength(len));
+    }
+    cy += 32.0;
+
+    // 3. Chill (switch)
+    let sw_row_h = 26.0;
+    draw_row_bg(
+        c,
+        rx,
+        cy,
+        inner_w,
+        sw_row_h,
+        SettingId::Chill,
+        0x22c8b8,
+        &mut active_id,
+    );
+    if let Some(idx) = row_index_of(SettingId::Chill) {
+        c.hit(rx, cy, inner_w, sw_row_h, hit::Hit::JourneySetting(idx, 1));
+    }
+    c.text(
+        rx + 8.0,
+        cy + 8.5,
+        9.0,
+        rgba(0xffffff, 1.0),
+        tr!("Chill mode", "チルモード", "Чилл-режим"),
+    );
+    let chill_note = tr!(
+        "-0.5* easier, no stretch maps",
+        "-0.5* やさしめ、ストレッチなし",
+        "-0.5* легче, без челлендж-карт"
+    );
+    c.text(
+        rx + 102.0,
+        cy + 9.5,
+        7.5,
+        rgba(0x8888a4, 1.0),
+        &Canvas::fit(7.5, inner_w - 140.0, chill_note),
+    );
+    style::switch(
+        c,
+        [
+            rx + inner_w - style::SWITCH[0] - 8.0,
+            cy + (sw_row_h - style::SWITCH[1]) / 2.0,
+        ],
+        state.cfg.journey_chill,
+    );
+    cy += 32.0;
+
+    style::rule(c, rx, cy, inner_w);
+    cy += 10.0;
+
+    // --- SECTION 2: SESSION FLOW ---
+    c.text(
+        rx + 4.0,
+        cy,
+        6.5,
+        rgba(0x22d4c0, 0.95),
+        tr!("SESSION FLOW", "進行モード", "РЕЖИМ СЕССИИ"),
+    );
+    cy += 14.0;
+
+    // 4. Flow mode cards (Manual | Non-stop | Marathon)
+    let flow_h = 30.0;
+    draw_row_bg(
+        c,
+        rx,
+        cy,
+        inner_w,
+        flow_h,
+        SettingId::Flow,
+        0x22c8b8,
+        &mut active_id,
+    );
+    let fgap = 6.0;
+    let fw = (inner_w - 12.0 - fgap * 2.0) / 3.0;
+    for (k, &f) in JourneyFlow::ALL.iter().enumerate() {
+        let bx = rx + 6.0 + k as f32 * (fw + fgap);
+        let by = cy + 3.0;
+        let bh = flow_h - 6.0;
+        let on = flow == f;
+        let hov = c.hovered(bx, by, fw, bh);
+        let col = if f == JourneyFlow::Marathon {
+            0xffd24a
+        } else {
+            0x22d4c0
+        };
+        let fill = if on {
+            rgba(col, 0.22)
+        } else if hov {
+            rgba(0x2d3042, 0.95)
+        } else {
+            rgba(0x161926, 0.95)
+        };
+        let edge = if on {
+            rgba(col, 0.92)
+        } else if hov {
+            rgba(style::tone::EDGE_HOVER, 0.9)
+        } else {
+            rgba(style::tone::EDGE, 0.65)
+        };
+        c.round_rect([bx, by], [fw, bh], style::radius::CONTROL, fill, edge, 1.0);
+        c.text_centered(
+            bx + fw / 2.0,
+            by + (bh - 8.5) / 2.0,
+            8.5,
+            rgba(if on { 0xffffff } else { 0xb4b4c8 }, 1.0),
+            &Canvas::fit(8.5, fw - 10.0, f.name()),
+        );
+        c.hit(bx, by, fw, bh, hit::Hit::JourneyFlow(f));
+    }
+    cy += flow_h + 8.0;
+
+    // Contextual sub-card directly tied to the chosen Flow mode.
+    let sub_accent = match flow {
+        JourneyFlow::Off => style::tone::EDGE,
+        JourneyFlow::Nonstop => 0x22d4c0,
+        JourneyFlow::Marathon => 0xffd24a,
+    };
+    c.round_rect(
+        [rx, cy],
+        [inner_w, sub_h],
+        style::radius::CARD,
+        rgba(0x141724, 0.98),
+        rgba(sub_accent, 0.35),
+        1.0,
+    );
+    c.rect(rx + 1.0, cy + 5.0, 2.5, sub_h - 10.0, rgba(sub_accent, 0.9));
+
+    let sub_rx = rx + 10.0;
+    let sub_rw = inner_w - 16.0;
+    match flow {
+        JourneyFlow::Off => {
+            let note = tr!(
+                "Manual mode: results after each map, no auto-advance options.",
+                "手動モード: 毎回リザルトを表示します（自動進行オプションなし）。",
+                "Ручной режим: результаты после каждой карты, без автоперехода."
+            );
+            c.text(
+                sub_rx + 4.0,
+                cy + 11.0,
+                7.5,
+                rgba(0x8888a4, 1.0),
+                &Canvas::fit(7.5, sub_rw - 8.0, note),
+            );
+        }
+        JourneyFlow::Nonstop => {
+            let sy = cy + 5.0;
+            draw_row_bg(
+                c,
+                sub_rx,
+                sy,
+                sub_rw,
+                26.0,
+                SettingId::SkipIntro,
+                0x22c8b8,
+                &mut active_id,
+            );
+            if let Some(idx) = row_index_of(SettingId::SkipIntro) {
+                c.hit(sub_rx, sy, sub_rw, 26.0, hit::Hit::JourneySetting(idx, 1));
+            }
+            c.text(
+                sub_rx + 6.0,
+                sy + 8.5,
+                9.0,
+                rgba(0xffffff, 1.0),
+                tr!("Skip intros", "イントロをスキップ", "Скип интро"),
+            );
+            c.text(
+                sub_rx + 100.0,
+                sy + 9.5,
+                7.5,
+                rgba(0x8888a4, 1.0),
+                &Canvas::fit(
+                    7.5,
+                    sub_rw - 138.0,
+                    tr!(
+                        "Jump to the first note",
+                        "最初のノーツ直前から",
+                        "Сразу к первой ноте"
+                    ),
+                ),
+            );
+            style::switch(
+                c,
+                [
+                    sub_rx + sub_rw - style::SWITCH[0] - 6.0,
+                    sy + (26.0 - style::SWITCH[1]) / 2.0,
+                ],
+                state.cfg.journey_skip_intro,
+            );
+        }
+        JourneyFlow::Marathon => {
+            c.text(
+                sub_rx + 6.0,
+                cy + 6.0,
+                6.5,
+                rgba(0xffd24a, 0.95),
+                tr!("MARATHON OPTIONS", "マラソン設定", "НАСТРОЙКИ МАРАФОНА"),
+            );
+            let mut my = cy + 19.0;
+
+            // Between maps (Wheel | Short | Seamless)
+            draw_row_bg(
+                c,
+                sub_rx,
+                my,
+                sub_rw,
+                28.0,
+                SettingId::Gap,
+                0xffd24a,
+                &mut active_id,
+            );
+            c.text(
+                sub_rx + 6.0,
+                my + 9.5,
+                8.5,
+                rgba(0xffffff, 1.0),
+                tr!("Between maps", "譜面の間", "Между картами"),
+            );
+            let g_left = sub_rx + 114.0;
+            let g_w = (sub_rw - 120.0 - 8.0) / 3.0;
+            for (k, &g) in MarathonGap::ALL.iter().enumerate() {
+                let bx = g_left + k as f32 * (g_w + 4.0);
+                let by = my + 4.0;
+                let bh = 20.0;
+                let on = state.cfg.journey_gap == g;
+                let hov = c.hovered(bx, by, g_w, bh);
+                let fill = if on {
+                    rgba(0xffd24a, 0.22)
+                } else if hov {
+                    rgba(0x2d3042, 0.95)
+                } else {
+                    rgba(0x161926, 0.95)
+                };
+                let edge = if on {
+                    rgba(0xffd24a, 0.9)
+                } else if hov {
+                    rgba(style::tone::EDGE_HOVER, 0.9)
+                } else {
+                    rgba(style::tone::EDGE, 0.65)
+                };
+                c.round_rect([bx, by], [g_w, bh], style::radius::SMALL, fill, edge, 1.0);
+                c.text_centered(
+                    bx + g_w / 2.0,
+                    by + (bh - 7.5) / 2.0,
+                    7.5,
+                    rgba(if on { 0xffd24a } else { 0xc4c4d8 }, 1.0),
+                    &Canvas::fit(7.5, g_w - 6.0, g.name()),
+                );
+                c.hit(bx, by, g_w, bh, hit::Hit::MarathonGap(g));
+            }
+            my += 30.0;
+
+            // Skip intros
+            draw_row_bg(
+                c,
+                sub_rx,
+                my,
+                sub_rw,
+                26.0,
+                SettingId::SkipIntro,
+                0x22c8b8,
+                &mut active_id,
+            );
+            if let Some(idx) = row_index_of(SettingId::SkipIntro) {
+                c.hit(sub_rx, my, sub_rw, 26.0, hit::Hit::JourneySetting(idx, 1));
+            }
+            c.text(
+                sub_rx + 6.0,
+                my + 8.5,
+                8.5,
+                rgba(0xffffff, 1.0),
+                tr!("Skip intros", "イントロをスキップ", "Скип интро"),
+            );
+            style::switch(
+                c,
+                [
+                    sub_rx + sub_rw - style::SWITCH[0] - 6.0,
+                    my + (26.0 - style::SWITCH[1]) / 2.0,
+                ],
+                state.cfg.journey_skip_intro,
+            );
+            my += 28.0;
+
+            // Hardcore
+            let hc_col = if state.cfg.journey_hardcore {
+                style::DANGER
+            } else {
+                0x22c8b8
+            };
+            draw_row_bg(
+                c,
+                sub_rx,
+                my,
+                sub_rw,
+                26.0,
+                SettingId::Hardcore,
+                hc_col,
+                &mut active_id,
+            );
+            if let Some(idx) = row_index_of(SettingId::Hardcore) {
+                c.hit(sub_rx, my, sub_rw, 26.0, hit::Hit::JourneySetting(idx, 1));
+            }
+            c.text(
+                sub_rx + 6.0,
+                my + 8.5,
+                8.5,
+                rgba(
+                    if state.cfg.journey_hardcore {
+                        style::DANGER
+                    } else {
+                        0xffffff
+                    },
+                    1.0,
+                ),
+                tr!("Hardcore", "ハードコア", "Хардкор"),
+            );
+            let hc_note = tr!(
+                "First fail ends run (no Skip/Retry)",
+                "最初の失敗で終了（スキップ/リトライ不可）",
+                "Первый фейл = конец (без скипа/ретрая)"
+            );
+            c.text(
+                sub_rx + 86.0,
+                my + 9.5,
+                7.0,
+                rgba(0x8888a4, 1.0),
+                &Canvas::fit(7.0, sub_rw - 122.0, hc_note),
+            );
+            style::switch(
+                c,
+                [
+                    sub_rx + sub_rw - style::SWITCH[0] - 6.0,
+                    my + (26.0 - style::SWITCH[1]) / 2.0,
+                ],
+                state.cfg.journey_hardcore,
+            );
+        }
+    }
+    cy += sub_h + 12.0;
+
+    // Footer help strip: full wrapped description (never truncated with '...').
+    c.round_rect(
+        [rx, cy],
+        [inner_w, 36.0],
+        style::radius::SMALL,
+        rgba(0x0a0c15, 0.96),
+        rgba(style::tone::EDGE, 0.45),
+        1.0,
+    );
+    let help = setting_help(state, active_id);
+    for (k, line) in crate::mobile::wrap(7.0, inner_w - 16.0, help, 2)
+        .into_iter()
+        .enumerate()
+    {
+        c.text(
+            rx + 8.0,
+            cy + 7.0 + k as f32 * 12.0,
+            7.0,
+            rgba(0xb4b4cc, 1.0),
+            &line,
+        );
     }
 
     let hint = tr!(
-        "Up/Down choose   Left/Right change   Esc close",
+        "Up/Down select   Left/Right change   Esc close",
         "上下で選択   左右で変更   Esc 閉じる",
         "Вверх/Вниз выбор   Влево/Вправо менять   Esc закрыть"
     );
     c.text_centered(
         x + pw / 2.0,
-        y + ph - 18.0,
+        y + ph - 16.0,
         7.0,
         rgba(0x787890, 1.0),
-        &Canvas::fit(7.0, pw - 24.0, hint),
+        &Canvas::fit(7.0, inner_w, hint),
     );
 }
 
-/// How long before the last note, and from how long into a break, Non-stop shows what's up next.
+/// How long before the last note, and from how long into a break, Non-stop/Marathon shows up-next.
 const UP_NEXT_LEAD_MS: f64 = 12_000.0;
 /// A gap between notes at least this long is a break.
 const BREAK_MS: f64 = 5_000.0;
 
-/// Whether Non-stop shows what's up next at map time `t`: towards the end of the map, after it,
-/// and in its breaks (not right at their edges).
+/// Whether Non-stop/Marathon shows what's up next at map time `t`: towards the end of the map,
+/// after it, and in its breaks (not right at their edges).
 pub(crate) fn up_next_due(notes: &[beatmap::Note], t: f64) -> bool {
     let Some(last) = notes.last() else {
         return false;
@@ -405,51 +1006,100 @@ pub(crate) fn up_next_due(notes: &[beatmap::Note], t: f64) -> bool {
     next.time - prev_end >= BREAK_MS && t - prev_end >= 500.0 && next.time - t >= 1_500.0
 }
 
-/// Non-stop's "up next" card in a play's bottom-right corner: the map after this one, or that
-/// one is still being picked.
-pub(crate) fn draw_up_next(c: &mut Canvas, next: Option<&online::JourneyItem>) {
-    let pw = 236.0;
-    let ph = 50.0;
-    let x = c.width - pw - 12.0;
+fn format_length_short(ms: u64) -> Option<String> {
+    if ms == 0 {
+        return None;
+    }
+    let s = ms / 1000;
+    Some(format!("{}:{:02}", s / 60, s % 60))
+}
+
+/// In-play "Up next" card in the bottom-right corner with smooth entrance (`alpha` 0..=1),
+/// difficulty-colored accent bar, map duration, and `[N] Swap` keycap.
+pub(crate) fn draw_up_next(c: &mut Canvas, next: Option<&online::JourneyItem>, alpha: f32) {
+    let alpha = alpha.clamp(0.0, 1.0);
+    if alpha <= 0.01 {
+        return;
+    }
+    let start = c.shapes.len();
+    let pw = 252.0;
+    let ph = 54.0;
+    let slide_x = (1.0 - alpha) * 14.0;
+    let x = c.width - pw - 12.0 + slide_x;
     let y = c.height - ph - 12.0;
+    let stripe_col = next.filter(|i| i.stars > 0.1).map_or(0x22d4c0, |i| {
+        style::role::rating(None, Some(i.stars as f32))
+    });
+
     style::cold_panel(c, [x, y, pw, ph]);
+    c.round_rect(
+        [x, y],
+        [pw, ph],
+        style::radius::CARD,
+        rgba(0, 0.0),
+        rgba(stripe_col, 0.35),
+        1.0,
+    );
+    c.rect(x + 1.0, y + 6.0, 2.5, ph - 12.0, rgba(stripe_col, 0.95));
+
     c.text(
         x + 10.0,
         y + 7.0,
-        7.0,
+        6.5,
         rgba(0x22d4c0, 1.0),
         tr!("UP NEXT", "次の譜面", "ДАЛЬШЕ"),
     );
     match next {
         Some(item) => {
+            let mut right_meta = format!("{:.2}*", item.stars);
+            if let Some(len) = format_length_short(item.length_ms) {
+                right_meta.push_str(&format!("  {len}"));
+            }
+            let mw = Canvas::text_width(7.0, &right_meta);
+            c.text(
+                x + pw - 10.0 - mw,
+                y + 7.0,
+                7.0,
+                rgba(0xffd24a, 0.95),
+                &right_meta,
+            );
+
             let title = format!("{} - {}", item.artist, item.title);
             c.text(
                 x + 10.0,
-                y + 19.0,
-                8.0,
+                y + 20.0,
+                8.5,
                 rgba(0xffffff, 1.0),
-                &Canvas::fit(8.0, pw - 20.0, &title),
+                &Canvas::fit(8.5, pw - 20.0, &title),
             );
-            let stars = format!("{:.2}*", item.stars);
-            let version = &item.version;
-            let line = tr!(
-                "[{version}] {stars}   N: no, another",
-                "[{version}] {stars}   N: ほかの譜面",
-                "[{version}] {stars}   N: другую";
-                [] [version, stars]
+
+            let swap = tr!("N: swap", "N: 変更", "N: заменить");
+            let sw = Canvas::text_width(6.5, swap) + 10.0;
+            let sx = x + pw - 10.0 - sw;
+            let sy = y + 34.0;
+            c.round_rect(
+                [sx, sy],
+                [sw, 13.0],
+                3.0,
+                rgba(0x1c2030, 0.95),
+                rgba(style::tone::EDGE, 0.7),
+                1.0,
             );
+            c.text_centered(sx + sw / 2.0, sy + 3.5, 6.5, rgba(0xb4b4cc, 1.0), swap);
+
+            let ver = format!("[{}]", item.version);
             c.text(
                 x + 10.0,
-                y + 33.0,
+                y + 36.0,
                 7.0,
                 rgba(0x9a9ab0, 1.0),
-                &Canvas::fit(7.0, pw - 20.0, &line),
+                &Canvas::fit(7.0, (sx - (x + 10.0) - 8.0).max(20.0), &ver),
             );
         }
         None => {
             c.text(
                 x + 10.0,
-                y + 21.0,
+                y + 23.0,
                 8.0,
                 rgba(0x9a9ab0, 1.0),
                 tr!(
@@ -460,6 +1110,7 @@ pub(crate) fn draw_up_next(c: &mut Canvas, next: Option<&online::JourneyItem>) {
             );
         }
     }
+    c.fade_since(start, alpha, 1.0);
 }
 
 /// What Journey asks before it goes on: log in or go offline (signed out), or wait for the
@@ -1167,19 +1818,67 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         &Canvas::fit(7.5, reason_room, &item.reason),
     );
 
-    // Bottom of banner: title, artist, difficulty + mapper.
+    // Bottom of banner: title, artist, difficulty + mapper, plus active Journey filter chips on
+    // the right so players can see active Focus/Length/Chill/Flow without opening Settings.
+    let mut active_tags: Vec<(&str, u32)> = Vec::new();
+    if state.cfg.journey_flow == JourneyFlow::Marathon {
+        active_tags.push((tr!("MARATHON", "マラソン", "МАРАФОН"), 0xffd24a));
+        if state.cfg.journey_hardcore {
+            active_tags.push((tr!("HARDCORE", "ハードコア", "ХАРДКОР"), style::DANGER));
+        }
+    } else if state.cfg.journey_flow == JourneyFlow::Nonstop {
+        active_tags.push((tr!("NON-STOP", "ノンストップ", "НОН-СТОП"), 0x22d4c0));
+    }
+    if state.cfg.journey_focus != JourneyFocus::Any && !state.journey.local_mode {
+        active_tags.push((focus_chip_label(state.cfg.journey_focus), 0xa66cff));
+    }
+    if state.cfg.journey_length != JourneyLength::Any {
+        active_tags.push((state.cfg.journey_length.chip(false), 0x4ea8ff));
+    }
+    if state.cfg.journey_chill {
+        active_tags.push((tr!("CHILL", "チル", "ЧИЛЛ"), 0x4ee07a));
+    }
+    let mut tags_w = 0.0f32;
+    if !active_tags.is_empty() {
+        let tag_y = cy + banner_h - 22.0;
+        let mut rx_tag = cx + cw - pad;
+        for (lbl, col) in active_tags.iter().rev() {
+            let tw_tag = Canvas::text_width(6.5, lbl) + 10.0;
+            rx_tag -= tw_tag;
+            c.round_rect(
+                [rx_tag, tag_y],
+                [tw_tag, 14.0],
+                style::radius::SMALL,
+                rgba(*col, 0.16),
+                rgba(*col, 0.72),
+                1.0,
+            );
+            c.text_centered(
+                rx_tag + tw_tag / 2.0,
+                tag_y + 3.5,
+                6.5,
+                rgba(*col, 1.0),
+                lbl,
+            );
+            c.hit(rx_tag, tag_y, tw_tag, 14.0, hit::Hit::JourneySettings);
+            rx_tag -= 5.0;
+        }
+        tags_w = (cx + cw - pad - rx_tag).max(0.0);
+    }
+
     let title_y = cy + banner_h - 54.0;
     let title = Canvas::fit(15.0, inner_w, &item.title);
     style::title(c, cx + pad, title_y, 15.0, 0xffffff, &title);
     let artist = Canvas::fit(9.5, inner_w, &item.artist);
     c.text(cx + pad, title_y + 21.0, 9.5, rgba(0xd0d0e4, 1.0), &artist);
     let diff_text = format!("[{}]  by {}", item.version, item.creator);
+    let diff_room = (inner_w - tags_w - 8.0).max(80.0);
     c.text(
         cx + pad,
         title_y + 36.0,
         8.5,
         rgba(role_col, 0.95),
-        &Canvas::fit(8.5, inner_w, &diff_text),
+        &Canvas::fit(8.5, diff_room, &diff_text),
     );
 
     // Divider under banner.
@@ -1606,7 +2305,8 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         hit::Hit::ModsButton,
         bh,
     );
-    let gear_lit = state.cfg.journey_focus != crate::config::JourneyFocus::Any
+    let gear_lit = state.cfg.journey_focus != JourneyFocus::Any
+        || state.cfg.journey_length != JourneyLength::Any
         || state.cfg.journey_chill
         || state.cfg.journey_flow != JourneyFlow::Off;
     let gear_w = style::block_button(
@@ -1686,7 +2386,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     );
 }
 
-fn role_badge(role: &str) -> (&'static str, u32) {
+pub(crate) fn role_badge(role: &str) -> (&'static str, u32) {
     match role {
         "warmup" => ("WARM-UP", 0x4ee07a),
         "stretch" => ("STRETCH", 0xff4d5a),
@@ -1704,6 +2404,8 @@ impl State {
         self.picking_lobby_map = false;
         self.journey.reset();
         self.journey.focus = self.cfg.journey_focus;
+        self.journey.length = self.cfg.journey_length;
+        self.journey.marathon_cap = self.cfg.journey_flow == JourneyFlow::Marathon;
         self.journey.chill = self.cfg.journey_chill;
         self.journey.screen_entered = Instant::now();
         if self.cfg.online_token.is_empty() {
@@ -1942,26 +2644,73 @@ impl State {
         };
     }
 
-    /// Steps a row of Journey's settings panel (`SETTINGS_ROWS`): it's kept in the config, and a
-    /// new focus or pace fills the queue again.
+    /// Steps a visible row of Journey's settings panel: kept in config, rebuilding the queue
+    /// whenever the effective map filter changed.
     pub(crate) fn journey_change_setting(&mut self, row: usize, dir: i32) {
-        if row >= SETTINGS_ROWS {
+        let visible = visible_settings(self.cfg.journey_flow);
+        let Some(&id) = visible.get(row) else {
             return;
-        }
+        };
         self.journey.settings = Some(row);
-        match row {
-            0 => self.cfg.journey_focus = self.cfg.journey_focus.step(dir),
-            1 => self.cfg.journey_chill = !self.cfg.journey_chill,
-            2 => self.cfg.journey_flow = self.cfg.journey_flow.step(dir),
-            3 => self.cfg.journey_hardcore = !self.cfg.journey_hardcore,
-            4 => self.cfg.journey_skip_intro = !self.cfg.journey_skip_intro,
-            _ => self.cfg.journey_gap = self.cfg.journey_gap.step(dir),
+        match id {
+            SettingId::Focus => self.cfg.journey_focus = self.cfg.journey_focus.step(dir),
+            SettingId::Length => self.cfg.journey_length = self.cfg.journey_length.step(dir),
+            SettingId::Chill => self.cfg.journey_chill = !self.cfg.journey_chill,
+            SettingId::Flow => self.cfg.journey_flow = self.cfg.journey_flow.step(dir),
+            SettingId::Gap => self.cfg.journey_gap = self.cfg.journey_gap.step(dir),
+            SettingId::SkipIntro => self.cfg.journey_skip_intro = !self.cfg.journey_skip_intro,
+            SettingId::Hardcore => self.cfg.journey_hardcore = !self.cfg.journey_hardcore,
+        }
+        self.journey_apply_settings();
+    }
+
+    pub(crate) fn journey_set_focus(&mut self, focus: JourneyFocus) {
+        self.journey.settings = visible_settings(self.cfg.journey_flow)
+            .iter()
+            .position(|&s| s == SettingId::Focus);
+        self.cfg.journey_focus = focus;
+        self.journey_apply_settings();
+    }
+
+    pub(crate) fn journey_set_length(&mut self, length: JourneyLength) {
+        self.journey.settings = visible_settings(self.cfg.journey_flow)
+            .iter()
+            .position(|&s| s == SettingId::Length);
+        self.cfg.journey_length = length;
+        self.journey_apply_settings();
+    }
+
+    pub(crate) fn journey_set_flow(&mut self, flow: JourneyFlow) {
+        self.journey.settings = visible_settings(flow)
+            .iter()
+            .position(|&s| s == SettingId::Flow);
+        self.cfg.journey_flow = flow;
+        self.journey_apply_settings();
+    }
+
+    pub(crate) fn journey_set_gap(&mut self, gap: MarathonGap) {
+        self.journey.settings = visible_settings(self.cfg.journey_flow)
+            .iter()
+            .position(|&s| s == SettingId::Gap);
+        self.cfg.journey_gap = gap;
+        self.journey_apply_settings();
+    }
+
+    fn journey_apply_settings(&mut self) {
+        if let Some(row) = self.journey.settings {
+            let max_row = visible_settings(self.cfg.journey_flow)
+                .len()
+                .saturating_sub(1);
+            self.journey.settings = Some(row.min(max_row));
         }
         self.cfg.save();
-        if self
-            .journey
-            .set_style(self.cfg.journey_focus, self.cfg.journey_chill)
-        {
+        let marathon_cap = self.cfg.journey_flow == JourneyFlow::Marathon;
+        if self.journey.set_style(
+            self.cfg.journey_focus,
+            self.cfg.journey_chill,
+            self.cfg.journey_length,
+            marathon_cap,
+        ) {
             self.journey_refill();
             self.journey_preview_current();
         }
@@ -1991,11 +2740,15 @@ impl State {
         due
     }
 
-    /// Non-stop, in a play: no to the map up next. The server hears of it as a skip.
+    /// Non-stop / Marathon, in a play: no to the map up next. The server hears of it as a skip,
+    /// and any marathon preload of the discarded map is dropped so the replacement can preload.
     pub(crate) fn journey_skip_upcoming(&mut self) {
         let Some(skipped) = self.journey.skip_upcoming() else {
             return;
         };
+        if let Some(m) = &mut self.journey.marathon {
+            m.preload = None;
+        }
         if !self.journey.local_mode
             && !self.cfg.online_token.is_empty()
             && !skipped.md5.starts_with("local:")

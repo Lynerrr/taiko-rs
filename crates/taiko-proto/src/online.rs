@@ -239,6 +239,11 @@ pub enum Request {
         /// An easy session: maps below the player's level and no stretch maps.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         chill: bool,
+        /// Optional inclusive bounds on chart length in milliseconds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_length_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_length_ms: Option<u64>,
     },
     /// Records that the player skipped a map in the Journey feed (`Reply::Counted`).
     JourneySkip {

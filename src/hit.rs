@@ -123,8 +123,17 @@ pub enum Hit {
     JourneyRetry,
     /// Journey's gear: opens or closes its settings panel.
     JourneySettings,
-    /// A row of Journey's settings panel (`journey::SETTINGS_ROWS`) stepped back (-1) or on (+1).
+    /// Empty area inside the Journey settings modal (captures clicks so they don't reach behind).
+    JourneySettingsBody,
+    /// A row of Journey's settings panel stepped back (-1) or on (+1).
     JourneySetting(usize, i32),
+    /// Direct choice clicks inside Journey's settings panel.
+    JourneyFocus(crate::config::JourneyFocus),
+    JourneyLength(crate::config::JourneyLength),
+    JourneyFlow(crate::config::JourneyFlow),
+    MarathonGap(crate::config::MarathonGap),
+    /// Starts a fresh marathon from the marathon summary screen.
+    MarathonRestart,
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
     SettingStep(usize, i32),
