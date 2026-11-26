@@ -7,7 +7,8 @@ use crate::*;
 /// The graphics APIs to draw with, from the `graphics_api` setting. "auto" is DX12 on Windows
 /// (whatever the card: Vulkan drivers there have crashed on start, Intel's igvk64.dll on a UHD
 /// 630 among them) unless no card has it, and wgpu's choice (Vulkan first) elsewhere. After a
-/// Windows start that never got going (`gpu_start`) the setting itself becomes "vulkan".
+/// Windows start that never got going (`gpu_start`), the setting steps through
+/// `startup_crash_fallback` (`auto`/`dx12` -> `vulkan` -> `gl`).
 pub fn graphics_backends(api: &str) -> wgpu::Backends {
     match api {
         "vulkan" => wgpu::Backends::VULKAN,
@@ -41,10 +42,23 @@ pub(super) fn auto_backends() -> wgpu::Backends {
     wgpu::Backends::all()
 }
 
+/// Next graphics API to try on Windows after the last start crashed in the graphics driver
+/// (`gpu_start::failed_last_time`): `auto` (DX12) -> `vulkan` -> `gl`, and explicit
+/// `dx12` -> `vulkan` -> `gl`. Returns `None` once the chain is exhausted (`gl` or unknown)
+/// so a machine where every backend fails does not cycle back to an earlier crashing one.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn startup_crash_fallback(api: &str) -> Option<&'static str> {
+    match api {
+        "auto" | "dx12" => Some("vulkan"),
+        "vulkan" => Some("gl"),
+        _ => None,
+    }
+}
+
 /// A start of the graphics that crashes (in the driver, where nothing of ours runs) leaves its
 /// mark behind: `gpu-start` in the data folder, written before the graphics start and removed
-/// once frames have been going for a few seconds. The next start finds it and takes the other
-/// way (`auto_backends`).
+/// once frames have been going for a few seconds. The next start finds it and steps to the next
+/// backend (`startup_crash_fallback`).
 pub(crate) mod gpu_start {
     const FILE: &str = "gpu-start";
     /// Frames drawn before the start counts as having worked.
@@ -190,5 +204,24 @@ mod drawing_hook_tests {
             )
             .contains("DX12")
         );
+    }
+
+    #[test]
+    fn startup_crash_fallback_steps_to_gl_and_stops() {
+        assert_eq!(startup_crash_fallback("auto"), Some("vulkan"));
+        assert_eq!(startup_crash_fallback("dx12"), Some("vulkan"));
+        assert_eq!(startup_crash_fallback("vulkan"), Some("gl"));
+        assert_eq!(startup_crash_fallback("gl"), None);
+        assert_eq!(startup_crash_fallback("metal"), None);
+        assert_eq!(startup_crash_fallback(""), None);
+
+        // Consecutive driver crashes on Windows walk auto -> vulkan -> gl and never cycle back.
+        let mut api = "auto";
+        let mut chain = Vec::new();
+        while let Some(next) = startup_crash_fallback(api) {
+            chain.push(next);
+            api = next;
+        }
+        assert_eq!(chain, vec!["vulkan", "gl"]);
     }
 }

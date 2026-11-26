@@ -1025,14 +1025,17 @@ impl ApplicationHandler<UserEvent> for App {
         }
         #[cfg_attr(not(windows), allow(unused_mut))]
         let mut api = lock(&self.state).cfg.graphics_api.clone();
-        // The last start crashed in the graphics driver: Vulkan from now on (kept, or every other
-        // start would crash again).
+        // The last start crashed in the graphics driver: step to the next backend
+        // (`auto`/`dx12` -> `vulkan` -> `gl`, kept so the next start doesn't crash again).
         #[cfg(windows)]
-        if api == "auto" && gpu_start::failed_last_time() {
+        if gpu_start::failed_last_time()
+            && let Some(next) = super::gpu::startup_crash_fallback(&api)
+        {
             eprintln!(
-                "graphics: the last start never got going: Vulkan from now on (graphics_api in config.txt)"
+                "graphics: the last start never got going: {} from now on (graphics_api in config.txt)",
+                config::renderer_name(next)
             );
-            api = "vulkan".into();
+            api = next.into();
             let mut s = lock(&self.state);
             s.cfg.graphics_api = api.clone();
             s.cfg.save();
