@@ -4042,7 +4042,10 @@ fn refreshing_the_library_in_a_lobby_re_resolves_the_lobby_map_entry() {
 #[test]
 fn leaving_or_disconnecting_aborts_in_progress_host_transfer() {
     let room = FakeRoom::new();
-    let (mut s, _songs, mut now) = guest("mp-transfer-leave", maps::basics(), &room);
+    let (mut s, songs, mut now) = guest("mp-transfer-leave", maps::basics(), &room);
+    // The transfer's part file needs a Songs folder it can write to: with none, its thread
+    // fails at once and drops the transfer before the test sees it (macOS runners).
+    s.songs_dir = songs.dir.clone();
     let missing = net::MapInfo {
         hash: 0xdead_beef_1234_5678,
         artist: "Other".into(),
