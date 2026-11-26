@@ -702,6 +702,11 @@ fn draw_wheel(
                 foot.push_str("  ·  ");
             }
             foot.push_str(tr!("S: save", "S: 保存", "S: сохр."));
+        } else if play.saved {
+            if !foot.is_empty() {
+                foot.push_str("  ·  ");
+            }
+            foot.push_str(tr!("Saved", "保存済み", "Сохранено"));
         }
         draw_side_card(
             c,
@@ -1496,6 +1501,7 @@ impl State {
                 vote_on: None,
                 vote: None,
                 cached: None,
+                saved: false,
             });
         }
         self.scene = MarathonScreen::scene();
@@ -1561,6 +1567,7 @@ impl State {
         self.journey.playing_cached = next;
         if saved && let Some(p) = self.journey.marathon.as_mut().and_then(|m| m.last.as_mut()) {
             p.cached = None;
+            p.saved = true;
         }
     }
 }

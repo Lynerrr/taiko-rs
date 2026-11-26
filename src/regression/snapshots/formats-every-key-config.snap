@@ -252,6 +252,8 @@ journey_hardcore = true
 journey_skip_intro = false
 # between a marathon's maps: wheel, short (a brief wheel) or seamless (none)
 journey_gap = seamless
+# automatically save maps played in a Journey marathon to the library
+journey_marathon_save = true
 # folder of TJA charts (empty = Tja beside Custom)
 tja_folder = /games/tja
 # extra song folders / .osz files, one per line

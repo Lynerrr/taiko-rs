@@ -241,6 +241,8 @@ pub struct MarathonPlay {
     /// Its folder in Journey's cache with its item, to save it to the library; None once saved
     /// (or for a library map).
     pub cached: Option<(PathBuf, JourneyItem)>,
+    /// True once moved from Journey's cache into the permanent library (auto-saved or via S/Like).
+    pub saved: bool,
 }
 
 /// Why a marathon ended.
