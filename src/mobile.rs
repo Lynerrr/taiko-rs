@@ -1192,9 +1192,9 @@ impl State {
                 format!("{count} diffs")
             };
             let tag_w = Canvas::text_width(SMALL, &tag) + 14.0;
-            let title = Canvas::fit(MEDIUM, room - tag_w, &lead.meta.title);
+            let title = Canvas::fit(MEDIUM, room - tag_w, lead.title());
             c.text(tx, sy + 7.0, MEDIUM, rgba(0xffffff, 1.0), &title);
-            let by = format!("{}  |  mapped by {}", lead.meta.artist, lead.meta.creator);
+            let by = format!("{}  |  mapped by {}", lead.artist(), lead.meta.creator);
             let by = Canvas::fit(SMALL, room, &by);
             c.text(tx, sy + 34.0, SMALL, rgba(0x9a9ab0, 1.0), &by);
             let tag_y = sy + 10.0;

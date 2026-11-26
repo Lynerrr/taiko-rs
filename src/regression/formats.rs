@@ -560,6 +560,7 @@ data_folder = /games/taiko-data
 wheel_resizes_playfield = true
 show_converts = true
 song_headings = true
+original_names = true
 select_info = true
 card_fade = left
 song_order = title desc

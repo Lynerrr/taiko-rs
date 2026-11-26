@@ -34,6 +34,26 @@ pub struct Entry {
     tja: bool,
 }
 
+thread_local! {
+    static ORIGINAL_NAMES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Settings > Original names, for the frames this thread builds (set at the start of each).
+pub fn set_original_names(on: bool) {
+    ORIGINAL_NAMES.with(|c| c.set(on));
+}
+
+/// The name to show: the one in its own script if asked for, there and drawable, else the
+/// romanised one (or the other when it's missing).
+fn shown_name<'a>(romanised: &'a str, own: &'a str) -> &'a str {
+    let own_drawn = !own.trim().is_empty() && own.chars().all(crate::font::drawable);
+    if own_drawn && (ORIGINAL_NAMES.with(std::cell::Cell::get) || romanised.trim().is_empty()) {
+        own
+    } else {
+        romanised
+    }
+}
+
 impl Entry {
     pub fn new(path: PathBuf, meta: Meta) -> Entry {
         let (size, modified) = file_stats(&path);
@@ -74,6 +94,27 @@ impl Entry {
         format!(
             "{} - {} [{}]",
             self.meta.artist, self.meta.title, self.meta.version
+        )
+    }
+
+    /// The title as shown: in its own script with Settings > Original names (`set_original_names`),
+    /// else romanised. `meta.title` stays the romanised one, what the map is known by.
+    pub fn title(&self) -> &str {
+        shown_name(&self.meta.title, self.meta.original_title())
+    }
+
+    /// The artist as shown, as `title`.
+    pub fn artist(&self) -> &str {
+        shown_name(&self.meta.artist, self.meta.original_artist())
+    }
+
+    /// `label` with the names as shown, for a screen to show (not to know the map by).
+    pub fn shown_label(&self) -> String {
+        format!(
+            "{} - {} [{}]",
+            self.artist(),
+            self.title(),
+            self.meta.version
         )
     }
 
@@ -841,11 +882,13 @@ struct CachedFolder {
 /// `LEVEL` apart from its name. 2: its pictures (`BGIMAGE`, `PREIMAGE`).
 const TJA_READ: u32 = 2;
 
-/// Named for what its maps hold: a new field needs every map read again, once.
+/// Named for what its maps hold: a new field needs every map read again, once. v4: the names
+/// in their own script apart from the romanised ones (v3 had Cyrillic ones in their place).
 fn library_cache() -> PathBuf {
-    let _ = std::fs::remove_file(cache_dir().join("library.json"));
-    let _ = std::fs::remove_file(cache_dir().join("library-v2.json"));
-    cache_dir().join("library-v3.json")
+    for old in ["library.json", "library-v2.json", "library-v3.json"] {
+        let _ = std::fs::remove_file(cache_dir().join(old));
+    }
+    cache_dir().join("library-v4.json")
 }
 
 /// How the cache could be read, for the scan's log.

@@ -140,8 +140,16 @@ impl ControlPoint {
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Meta {
+    /// The title and artist in plain Latin letters (`Title`, `Artist`): what lists, sorts and
+    /// names the map, whatever the setting for names in their own script.
     pub title: String,
     pub artist: String,
+    /// The title and artist in their own script (`TitleUnicode`, `ArtistUnicode`), shown
+    /// instead with Settings > Original names. None when the map has none apart from the
+    /// romanised ones (most maps), and in a cache from before they were kept: boxed, so a big
+    /// library's entries stay as small as they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original: Option<Box<OriginalNames>>,
     pub creator: String,
     pub version: String,
     pub audio_file: String,
@@ -212,7 +220,26 @@ pub struct Beatmap {
     pub branching: Option<std::sync::Arc<crate::branch::Branching>>,
 }
 
+/// A map's title and artist in their own script (`Meta::original`); either may be empty.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OriginalNames {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artist: String,
+}
+
 impl Meta {
+    /// The title in its own script, empty when the map has none.
+    pub fn original_title(&self) -> &str {
+        self.original.as_ref().map_or("", |o| &o.title)
+    }
+
+    /// The artist in its own script, empty when the map has none.
+    pub fn original_artist(&self) -> &str {
+        self.original.as_ref().map_or("", |o| &o.artist)
+    }
+
     pub fn is_playable(&self) -> bool {
         self.mode == 0 || self.mode == 1
     }
@@ -304,11 +331,6 @@ pub fn map_hash(bytes: &[u8]) -> u64 {
 fn kv(line: &str) -> Option<(&str, &str)> {
     let (k, v) = line.split_once(':')?;
     Some((k.trim(), v.trim()))
-}
-
-/// Has Cyrillic and nothing the font can't draw.
-fn cyrillic(s: &str) -> bool {
-    s.chars().any(|c| matches!(c, 'А'..='я' | 'Ё' | 'ё')) && s.chars().all(crate::font::drawable)
 }
 
 fn num<T: std::str::FromStr>(s: Option<&str>) -> Option<T> {
@@ -563,9 +585,13 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
             "Metadata" => match kv(trimmed) {
                 Some(("Title", v)) => meta.title = v.to_owned(),
                 Some(("Artist", v)) => meta.artist = v.to_owned(),
-                // Russian titles in Cyrillic (the font draws it); other scripts stay romanised.
-                Some(("TitleUnicode", v)) if cyrillic(v) => meta.title = v.to_owned(),
-                Some(("ArtistUnicode", v)) if cyrillic(v) => meta.artist = v.to_owned(),
+                // Kept only when it differs from the romanised one (`Title` comes first).
+                Some(("TitleUnicode", v)) if !v.is_empty() && v != meta.title => {
+                    meta.original.get_or_insert_default().title = v.to_owned();
+                }
+                Some(("ArtistUnicode", v)) if !v.is_empty() && v != meta.artist => {
+                    meta.original.get_or_insert_default().artist = v.to_owned();
+                }
                 Some(("Creator", v)) => meta.creator = v.to_owned(),
                 Some(("Version", v)) => meta.version = v.to_owned(),
                 Some(("Tags", v)) => {
@@ -1049,6 +1075,24 @@ SliderTickRate:1
 
     pub(crate) fn parse(text: &str) -> Beatmap {
         parse_raw(text)
+    }
+
+    /// The romanised names and the ones in their own script are kept apart, whatever the script.
+    #[test]
+    fn names_in_their_own_script_are_kept_apart() {
+        let text = "osu file format v14\n\n[Metadata]\nTitle:Tolko zvyozdy\nTitleUnicode:только звёзды\nArtist:Kameria\nArtistUnicode:かめりあ\n";
+        let m = read_meta(text);
+        assert_eq!(
+            (m.title.as_str(), m.artist.as_str()),
+            ("Tolko zvyozdy", "Kameria")
+        );
+        assert_eq!(m.original_title(), "только звёзды");
+        assert_eq!(m.original_artist(), "かめりあ");
+        // The same as the romanised ones: nothing kept.
+        let plain = read_meta(
+            "[Metadata]\nTitle:Ghost\nTitleUnicode:Ghost\nArtist:Camellia\nArtistUnicode:Camellia\n",
+        );
+        assert!(plain.original.is_none());
     }
 
     #[test]

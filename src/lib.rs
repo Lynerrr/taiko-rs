@@ -3351,6 +3351,7 @@ impl State {
             }
             Item::ShowFps => on(c.show_fps),
             Item::SelectInfo => on(c.select_info),
+            Item::OriginalNames => on(c.original_names),
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
             Item::EpilepsyWarning => on(c.epilepsy_warning),
@@ -3705,6 +3706,7 @@ impl State {
             }
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
             Item::SelectInfo => self.cfg.select_info = !self.cfg.select_info,
+            Item::OriginalNames => self.cfg.original_names = !self.cfg.original_names,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Splash => self.cfg.splash = !self.cfg.splash,
             Item::EpilepsyWarning => self.cfg.epilepsy_warning = !self.cfg.epilepsy_warning,
@@ -13291,6 +13293,7 @@ impl State {
         self.drop_finished_play();
         // Here too, so a new choice (or a test's) shows from the next frame on.
         lang::set(self.cfg.language);
+        library::set_original_names(self.cfg.original_names);
         system_font::select(&self.cfg.ui_font);
         system_font::begin_frame();
         // What this frame is drawn with; the beat carries on from the last frame until
