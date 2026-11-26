@@ -2433,15 +2433,13 @@ impl Renderer {
         cards: &wgpu::TextureView,
         atlas: &Atlas,
     ) -> wgpu::BindGroup {
-        // The texture can't be empty: no images is one transparent pixel.
-        let (w, h, data) = if atlas.rgba.len() == (atlas.width * atlas.height * 4) as usize
-            && atlas.width > 0
-            && atlas.height > 0
-        {
-            (atlas.width, atlas.height, atlas.rgba.as_slice())
-        } else {
-            (1, 1, &[0u8; 4][..])
-        };
+        // The texture can't be empty or exceed the GPU's 2D texture limit.
+        let (w, h, data) = fit_atlas_rgba(
+            atlas.width,
+            atlas.height,
+            atlas.rgba.as_slice(),
+            device.limits().max_texture_dimension_2d,
+        );
         let size = wgpu::Extent3d {
             width: w,
             height: h,
@@ -2459,7 +2457,7 @@ impl Renderer {
         });
         queue.write_texture(
             texture.as_image_copy(),
-            data,
+            &data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * w),
@@ -3868,6 +3866,34 @@ fn clamp_shapes_and_capacity(shapes: &[Shape], limit: usize, capacity: usize) ->
         capacity
     };
     (shapes, capacity)
+}
+
+/// Validates and, if needed, scales a skin atlas down to fit within `max_dim`.
+/// Sprite UVs are normalized (0..1), so scaling the full atlas preserves every sprite rect.
+fn fit_atlas_rgba<'a>(
+    width: u32,
+    height: u32,
+    rgba: &'a [u8],
+    max_dim: u32,
+) -> (u32, u32, std::borrow::Cow<'a, [u8]>) {
+    const EMPTY: [u8; 4] = [0; 4];
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4));
+    if width == 0 || height == 0 || max_dim == 0 || expected != Some(rgba.len()) {
+        return (1, 1, std::borrow::Cow::Borrowed(&EMPTY));
+    }
+    if width <= max_dim && height <= max_dim {
+        return (width, height, std::borrow::Cow::Borrowed(rgba));
+    }
+    let scale = max_dim as f64 / width.max(height) as f64;
+    let nw = ((width as f64 * scale).round() as u32).clamp(1, max_dim);
+    let nh = ((height as f64 * scale).round() as u32).clamp(1, max_dim);
+    if let Some(src) = image::RgbaImage::from_raw(width, height, rgba.to_vec()) {
+        let resized = image::imageops::resize(&src, nw, nh, image::imageops::FilterType::Triangle);
+        return (nw, nh, std::borrow::Cow::Owned(resized.into_raw()));
+    }
+    (1, 1, std::borrow::Cow::Borrowed(&EMPTY))
 }
 
 thread_local! {
@@ -6567,6 +6593,24 @@ mod shape_limit_tests {
             custom_font_height(base_h, 8192),
             crate::system_font::HEIGHT as u32
         );
+    }
+
+    #[test]
+    fn oversized_skin_atlas_is_scaled_within_gpu_texture_limit() {
+        let rgba = vec![128u8; 64 * 120 * 4];
+        // Fits within limit: zero-copy, unchanged dimensions.
+        let (w, h, data) = fit_atlas_rgba(64, 120, &rgba, 256);
+        assert_eq!((w, h), (64, 120));
+        assert!(matches!(data, std::borrow::Cow::Borrowed(_)));
+        // Exceeds limit: scaled down proportionally so both sides <= max_dim.
+        let (w, h, data) = fit_atlas_rgba(64, 120, &rgba, 60);
+        assert!(w <= 60 && h <= 60 && w > 0 && h > 0);
+        assert_eq!((w, h), (32, 60));
+        assert_eq!(data.len(), (w * h * 4) as usize);
+        // Empty or mismatched input falls back to a 1x1 transparent pixel.
+        let (w, h, data) = fit_atlas_rgba(0, 0, &[], 2048);
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(data.as_ref(), &[0u8; 4]);
     }
 }
 
