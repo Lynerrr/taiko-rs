@@ -2290,6 +2290,7 @@ impl Renderer {
 
     /// `shapes` into the instance buffer as `drawn_shapes` makes them.
     fn upload_shapes(&mut self, shapes: &[Shape], hide: Option<usize>) {
+        let shapes = &shapes[..shapes.len().min(self.capacity)];
         let mut out = std::mem::take(&mut self.trimmed);
         let drawn = if drawn_shapes(shapes, &self.sprite_trims, hide, &mut out) {
             &out[..]
@@ -2891,6 +2892,8 @@ impl Renderer {
         // What the shapes are drawn at: the game's size, or half of it to be scaled up after. Either
         // goes through an image of its own to get to its place on a black screen.
         self.upload_font();
+        let (shapes, new_capacity) =
+            clamp_shapes_and_capacity(shapes, self.shape_limit(), self.capacity);
         let place = self.placed();
         let scaled = self.pixel_scale > 1 || place.is_some();
         let (gw, gh) = self.size();
@@ -2925,8 +2928,8 @@ impl Renderer {
                 (range, scissor([ax, ay, aw, ah], r, [w, h]))
             })
             .collect();
-        if shapes.len() > self.capacity {
-            self.capacity = shapes.len().next_power_of_two().min(self.shape_limit());
+        if new_capacity > self.capacity {
+            self.capacity = new_capacity;
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
         let globals = Globals::new([w as f32, h as f32], ah / VIRTUAL_HEIGHT, [ax, ay]);
@@ -3214,7 +3217,8 @@ impl Renderer {
         clear: [f64; 3],
     ) -> Option<Vec<u8>> {
         self.upload_font();
-        let shapes = &shapes[..shapes.len().min(self.shape_limit())];
+        let (shapes, new_capacity) =
+            clamp_shapes_and_capacity(shapes, self.shape_limit(), self.capacity);
         let clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clips
             .iter()
             .filter(|(range, _)| range.start < range.end && range.end <= shapes.len())
@@ -3230,8 +3234,8 @@ impl Renderer {
                 (range.clone(), scissor(area, r, [w, h]))
             })
             .collect();
-        if shapes.len() > self.capacity {
-            self.capacity = shapes.len().next_power_of_two().min(self.shape_limit());
+        if new_capacity > self.capacity {
+            self.capacity = new_capacity;
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
         }
         let globals = Globals::new([w as f32, h as f32], h as f32 / VIRTUAL_HEIGHT, [0.0; 2]);
@@ -3853,6 +3857,17 @@ fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
 /// How many shapes fit in a buffer of `bytes`.
 fn limit_of(bytes: u64) -> usize {
     (bytes / std::mem::size_of::<Shape>() as u64) as usize
+}
+
+/// Clamps `shapes` to the GPU instance buffer `limit` and returns the required buffer capacity.
+fn clamp_shapes_and_capacity(shapes: &[Shape], limit: usize, capacity: usize) -> (&[Shape], usize) {
+    let shapes = &shapes[..shapes.len().min(limit)];
+    let capacity = if shapes.len() > capacity {
+        shapes.len().next_power_of_two().min(limit)
+    } else {
+        capacity
+    };
+    (shapes, capacity)
 }
 
 thread_local! {
@@ -6502,6 +6517,27 @@ mod shape_limit_tests {
         assert!((limit * std::mem::size_of::<Shape>()) as u64 <= max);
         let capacity = (limit + 1000).next_power_of_two().min(limit);
         assert!((capacity * std::mem::size_of::<Shape>()) as u64 <= max);
+    }
+
+    #[test]
+    fn frame_shapes_are_clamped_to_buffer_limit_before_upload() {
+        let shape = Shape {
+            center: [0.0; 2],
+            half: [1.0; 2],
+            fill: [1.0; 4],
+            border: [0.0; 4],
+            params: [0.0; 4],
+            angle: 0.0,
+        };
+        let shapes = vec![shape; 10];
+        let (clamped, cap) = clamp_shapes_and_capacity(&shapes, 6, 4);
+        assert_eq!(clamped.len(), 6);
+        assert_eq!(cap, 6);
+        assert!(clamped.len() <= cap);
+        // Within capacity: keeps existing buffer size and all shapes.
+        let (within, same_cap) = clamp_shapes_and_capacity(&shapes[..3], 6, 4);
+        assert_eq!(within.len(), 3);
+        assert_eq!(same_cap, 4);
     }
 
     #[test]
