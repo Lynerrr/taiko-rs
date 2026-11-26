@@ -247,6 +247,17 @@ pub struct Marathon {
     pub streak: u32,
     pub best_streak: u32,
     pub last: Option<MarathonPlay>,
+    /// The combo carried over from the maps before the one played now (0 once broken).
+    pub combo: u32,
+    /// The marathon combo as it stands now: `combo` and the map's own, or only the map's own
+    /// once the map broke it.
+    pub combo_now: u32,
+    pub best_combo: u32,
+    /// The map played now broke the carried combo (a miss, its own combo went back down, or it
+    /// isn't the player's own play).
+    map_broken: bool,
+    /// The map's own combo, last seen.
+    map_combo: u32,
 }
 
 impl Marathon {
@@ -263,7 +274,50 @@ impl Marathon {
             streak: 0,
             best_streak: 0,
             last: None,
+            combo: 0,
+            combo_now: 0,
+            best_combo: 0,
+            map_broken: false,
+            map_combo: 0,
         }
+    }
+
+    /// A map of the marathon starts (again, on a retry): the combo carried so far goes on into
+    /// it.
+    pub fn map_started(&mut self) {
+        self.map_broken = false;
+        self.map_combo = 0;
+        self.combo_now = self.combo;
+    }
+
+    /// The map played now stands at its own `combo` with `misses`; `counts`: the player's own
+    /// play (no Autoplay, no unranked mods), else it carries nothing on. The marathon combo
+    /// before and after.
+    pub fn track_combo(&mut self, combo: u32, misses: u32, counts: bool) -> (u32, u32) {
+        let before = self.combo_now;
+        if misses > 0 || combo < self.map_combo || !counts {
+            self.map_broken = true;
+        }
+        self.map_combo = combo;
+        self.combo_now = match (counts, self.map_broken) {
+            (false, _) => 0,
+            (true, true) => combo,
+            (true, false) => self.combo + combo,
+        };
+        self.best_combo = self.best_combo.max(self.combo_now);
+        (before, self.combo_now)
+    }
+
+    /// The map played now is over (played out or failed): its marathon combo carries on.
+    pub fn map_ended(&mut self) {
+        self.combo = self.combo_now;
+    }
+
+    /// The map played now was left partway (skipped): the combo breaks.
+    pub fn combo_broken(&mut self) {
+        self.combo = 0;
+        self.combo_now = 0;
+        self.map_broken = true;
     }
 
     pub fn record(&mut self, play: MarathonPlay) {

@@ -24,6 +24,9 @@ pub enum Event {
     Again,
     /// A map saved in the editor; counted each time.
     MapSave,
+    /// A combo carried through a Journey marathon's maps to step 1, 2 or 3 of
+    /// `MARATHON_COMBOS`.
+    Marathon(u8),
 }
 
 impl Event {
@@ -37,6 +40,9 @@ impl Event {
             Self::Deaf => "ura_deaf",
             Self::Again => "ura_again",
             Self::MapSave => "ura_map_save",
+            Self::Marathon(1) => "ura_marathon_1",
+            Self::Marathon(2) => "ura_marathon_2",
+            Self::Marathon(_) => "ura_marathon_3",
         }
     }
 
@@ -50,6 +56,19 @@ impl Event {
 pub const AGAIN: u32 = 50;
 /// The least accuracy of a muted play (`Event::Deaf`).
 const DEAF_ACCURACY: f64 = 0.95;
+
+/// The marathon combos that make `Event::Marathon` 1, 2 and 3.
+pub const MARATHON_COMBOS: [u32; 3] = [1000, 5000, 10000];
+
+/// A Journey marathon's combo went from `before` to `now`: each step of `MARATHON_COMBOS` it
+/// passed on the way is told.
+pub fn marathon_combo(cfg: &Config, before: u32, now: u32) {
+    for (i, &need) in MARATHON_COMBOS.iter().enumerate() {
+        if before < need && need <= now {
+            report(cfg, Event::Marathon(i as u8 + 1));
+        }
+    }
+}
 
 /// One map started again and again: which, and how many times in a row (restarts too).
 #[derive(Default)]

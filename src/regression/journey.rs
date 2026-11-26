@@ -1867,3 +1867,98 @@ fn a_marathons_wheel_holds_goes_on_and_ends_by_key() {
     assert!(s.journey.marathon.as_ref().unwrap().ended.is_some());
     assert!(!s.journey.in_play);
 }
+
+/// A marathon's combo carries on from map to map until a miss, a play that isn't the player's
+/// own, or a map left partway; its best is kept.
+#[test]
+fn a_marathon_combo_carries_from_map_to_map_until_it_breaks() {
+    use crate::journey::Marathon;
+    let mut m = Marathon::new(Instant::now());
+    m.map_started();
+    assert_eq!(m.track_combo(120, 0, true), (0, 120));
+    m.map_ended();
+    assert_eq!(m.combo, 120);
+    // The next map adds to it.
+    m.map_started();
+    assert_eq!(m.combo_now, 120);
+    assert_eq!(m.track_combo(80, 0, true), (120, 200));
+    // A miss breaks it: from there on only the map's own combo counts.
+    assert_eq!(m.track_combo(0, 1, true).1, 0);
+    assert_eq!(m.track_combo(30, 1, true).1, 30);
+    m.map_ended();
+    assert_eq!(m.combo, 30);
+    assert_eq!(m.best_combo, 200);
+    // A retry starts the map over from the combo carried into it.
+    m.map_started();
+    assert_eq!(m.track_combo(10, 0, true).1, 40);
+    m.map_started();
+    assert_eq!(m.track_combo(5, 0, true).1, 35);
+    // Not the player's own play (Autoplay, unranked mods): nothing carries on.
+    assert_eq!(m.track_combo(6, 0, false).1, 0);
+    m.map_ended();
+    assert_eq!(m.combo, 0);
+    // Left partway: broken.
+    m.map_started();
+    m.track_combo(50, 0, true);
+    m.combo_broken();
+    assert_eq!((m.combo, m.combo_now), (0, 0));
+    assert_eq!(m.best_combo, 200);
+}
+
+/// In a marathon the combo of a map played through carries onto the wheel and into the next
+/// map's corner; skipping a map breaks it. The wheel's buttons do what their keys do.
+#[test]
+fn a_marathon_shows_its_combo_on_the_wheel_and_in_the_next_map() {
+    let (mut s, _songs, mut now) = marathon("journey-marathon-combo", harness::config());
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let map = harness::game(&s).unwrap().map().clone();
+    super::flows::play_out(
+        &mut s,
+        &mut now,
+        &maps::presses(&map, maps::Player::Perfect),
+    );
+    assert_eq!(scene_name(&s), "Marathon");
+    let m = s.journey.marathon.as_ref().unwrap();
+    let carried = m.combo;
+    assert!(carried > 0, "a clean map's combo carries on");
+    assert_eq!(m.last.as_ref().unwrap().max_combo, carried);
+    let c = frame(&mut s, now);
+    assert!(shows(&c, &format!("MARATHON COMBO x{carried}")));
+    for label in ["Start now", "Hold", "Another map", "End"] {
+        assert!(shows(&c, label), "{label}");
+    }
+
+    // Start now: the next map doesn't wait out the wheel, and starts from the carried combo,
+    // shown in its corner.
+    s.click(hit::Hit::Key(KeyCode::Enter), None);
+    let start = now;
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    assert!(now.duration_since(start) < crate::screens::marathon::MARATHON_GAP);
+    assert_eq!(s.journey.marathon.as_ref().unwrap().combo_now, carried);
+    // The game's clock started on the real clock, far behind the test's by now.
+    now = Instant::now();
+    let c = frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Play");
+    assert!(shows(&c, &format!("x{carried}")));
+
+    // Skipping it from the pause menu breaks the combo.
+    press(&mut s, KeyCode::Escape, now);
+    press(&mut s, KeyCode::ArrowDown, now);
+    press(&mut s, KeyCode::Enter, now);
+    assert_eq!(scene_name(&s), "Marathon");
+    let m = s.journey.marathon.as_ref().unwrap();
+    assert_eq!((m.combo, m.best_combo), (0, carried));
+
+    // Hold keeps the wheel up past its time; its button then says Go on.
+    s.click(hit::Hit::Key(KeyCode::Space), None);
+    for _ in 0..12 {
+        now += Duration::from_millis(250);
+        frame(&mut s, now);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(scene_name(&s), "Marathon", "held");
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "Go on"));
+    s.click(hit::Hit::Key(KeyCode::Escape), None);
+    assert!(s.journey.marathon.as_ref().unwrap().ended.is_some());
+}

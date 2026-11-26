@@ -231,3 +231,26 @@ fn seven_clicks_on_an_unknown_medal_hatch_it() {
     click_at(&mut s, &mut now, mark);
     assert_eq!(ura::take_reported(), Vec::<Event>::new());
 }
+
+/// A Journey marathon's combo tells each step it reaches, once.
+#[test]
+fn a_marathon_combo_tells_its_steps() {
+    let mut cfg = harness::config();
+    cfg.online_token = "t".into();
+    ura::take_reported();
+    let [one, two, three] = ura::MARATHON_COMBOS;
+    ura::marathon_combo(&cfg, 0, one - 1);
+    assert_eq!(ura::take_reported(), Vec::<Event>::new());
+    ura::marathon_combo(&cfg, one - 1, one);
+    assert_eq!(ura::take_reported(), vec![Event::Marathon(1)]);
+    // Past two steps at once (a long map), both are told.
+    ura::marathon_combo(&cfg, one, three);
+    assert_eq!(
+        ura::take_reported(),
+        vec![Event::Marathon(2), Event::Marathon(3)]
+    );
+    assert!(one < two && two < three);
+    // Signed out: nobody to tell.
+    ura::marathon_combo(&harness::config(), 0, three);
+    assert_eq!(ura::take_reported(), Vec::<Event>::new());
+}

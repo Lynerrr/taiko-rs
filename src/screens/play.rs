@@ -507,15 +507,28 @@ impl Screen for PlayScreen {
             },
         );
         game.draw_hud_with_intro(canvas, state.touch_used || mobile::active());
-        if state.journey.active
+        let up_next = state.journey.active
             && state.journey.in_play
             && state.cfg.journey_flow != crate::config::JourneyFlow::Off
             && game.replay().is_none()
             && game.paused().is_none()
-            && crate::screens::journey::up_next_due(&game.map().notes, game.time())
-        {
+            && crate::screens::journey::up_next_due(&game.map().notes, game.time());
+        if up_next {
             let next = state.journey.queue.get(1).map(|q| &q.item);
             crate::screens::journey::draw_up_next(canvas, next);
+        }
+        // A marathon's combo goes on from map to map.
+        if marathon && let Some(m) = &mut state.journey.marathon {
+            let st = game.stats();
+            let own = game.replay().is_none()
+                && !state.auto
+                && !game.mods().has(mods::Mod::Autoplay)
+                && !game.mods().unranked();
+            let (before, now) = m.track_combo(st.combo, st.miss, own);
+            crate::ura::marathon_combo(&state.cfg, before, now);
+            if now > 0 && game.paused().is_none() {
+                crate::screens::marathon::draw_combo_chip(canvas, now, up_next);
+            }
         }
         if game.replay().is_none()
             && game.paused().is_none()

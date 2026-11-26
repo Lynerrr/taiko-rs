@@ -683,7 +683,7 @@ const PREV_ICON: [&str; 16] = [
     "................",
 ];
 
-const SKIP_ICON: [&str; 16] = [
+pub(crate) const SKIP_ICON: style::Icon = [
     "................",
     "................",
     "..##......##....",
