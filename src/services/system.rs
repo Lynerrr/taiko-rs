@@ -48,12 +48,17 @@ pub(crate) fn open_url(url: &str) -> bool {
         result as usize > 32
     }
     #[cfg(not(windows))]
-    offline::command("xdg-open")
+    offline::command(unix_url_opener(cfg!(target_os = "macos")))
         .arg(url)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .is_ok()
+}
+
+#[cfg(not(windows))]
+fn unix_url_opener(macos: bool) -> &'static str {
+    if macos { "open" } else { "xdg-open" }
 }
 
 /// Opens folder `dir` in the file manager; false if none could be started.
@@ -85,4 +90,15 @@ pub(crate) fn file_uri(path: &std::path::Path) -> String {
         }
     }
     uri
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::unix_url_opener;
+
+    #[test]
+    fn url_opener_uses_open_on_macos_and_xdg_open_elsewhere() {
+        assert_eq!(unix_url_opener(true), "open");
+        assert_eq!(unix_url_opener(false), "xdg-open");
+    }
 }
