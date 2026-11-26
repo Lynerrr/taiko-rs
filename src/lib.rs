@@ -4,6 +4,19 @@
 // First, so `tr!` is there for every module after it.
 #[macro_use]
 extern crate taiko_proto;
+
+/// Writes a diagnostic line to `stderr` without panicking if the pipe or terminal is closed
+/// (`BrokenPipe` / `EIO` on Unix). Shadows `std::eprintln!` for every module in this crate so a
+/// closed `stderr` can never abort a release build (`panic = "abort"`).
+#[allow(unused_macros)]
+macro_rules! eprintln {
+    () => {
+        $crate::app::crash::write_stderr_line(::std::format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::app::crash::write_stderr_line(::std::format_args!($($arg)*))
+    };
+}
 use taiko_proto::lang;
 mod admin;
 #[cfg(target_os = "android")]

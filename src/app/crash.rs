@@ -410,3 +410,49 @@ pub(super) fn crash_report() -> Option<String> {
     let _ = std::fs::remove_file(&file);
     Some(text).filter(|t| !t.trim().is_empty())
 }
+
+/// Writes one log line to `stderr` without panicking on I/O errors such as a closed pipe
+/// (`EPIPE`, os error 32 on Linux/macOS when a launcher closes its read end) or a disconnected
+/// terminal (`EIO`).
+pub(crate) fn write_stderr_line(args: std::fmt::Arguments<'_>) {
+    let mut err = std::io::stderr().lock();
+    write_line_ignoring_errors(&mut err, args);
+}
+
+fn write_line_ignoring_errors(w: &mut impl std::io::Write, args: std::fmt::Arguments<'_>) {
+    let _ = w.write_fmt(args);
+    let _ = w.write_all(b"\n");
+}
+
+#[cfg(test)]
+mod stderr_tests {
+    use super::*;
+
+    #[test]
+    fn write_line_formats_with_trailing_newline() {
+        let mut buf = Vec::new();
+        write_line_ignoring_errors(&mut buf, format_args!("scanned {} files", 42));
+        assert_eq!(buf, b"scanned 42 files\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_line_survives_broken_pipe() {
+        use std::io::Write;
+        use std::os::fd::FromRawFd;
+
+        let mut fds = [0 as libc::c_int; 2];
+        // SAFETY: `fds` is a valid 2-element array for `pipe(2)`.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        // Close the read end so writes to `fds[1]` fail with EPIPE.
+        // SAFETY: `fds[0]` is an open descriptor owned by this test.
+        assert_eq!(unsafe { libc::close(fds[0]) }, 0);
+        // SAFETY: `fds[1]` is an open descriptor exclusively owned by `writer`.
+        let mut writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+
+        let err = writeln!(writer, "probe").expect_err("closed pipe must return an I/O error");
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+
+        write_line_ignoring_errors(&mut writer, format_args!("scanned {} files", 12));
+    }
+}
