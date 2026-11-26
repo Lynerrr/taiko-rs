@@ -185,6 +185,135 @@ pub struct Journey {
     /// Non-stop: the current map starts by itself as soon as it's ready (set when a play's
     /// results go on by themselves; any key on the Journey screen takes over).
     pub autostart: bool,
+    /// The map about to load starts just before its first note (it was started by itself).
+    pub skip_intro_next: bool,
+    /// A marathon on: maps one after another with no results, until the player stops.
+    pub marathon: Option<Marathon>,
+}
+
+/// What became of a map in a marathon.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MarathonOutcome {
+    Passed,
+    Failed,
+    /// Left from the pause menu partway through.
+    Skipped,
+}
+
+/// A map just played in a marathon: its card on the wheel, and what its keys work on (like,
+/// save).
+#[derive(Clone, Debug)]
+pub struct MarathonPlay {
+    pub item: JourneyItem,
+    pub outcome: MarathonOutcome,
+    /// 0 to 1.
+    pub accuracy: f64,
+    pub max_combo: u32,
+    pub misses: u32,
+    pub pp: Option<f64>,
+    /// The map to like or dislike (logged in, an osu! map), and what was said of it.
+    pub vote_on: Option<online::PlayedMap>,
+    pub vote: Option<online::MapVote>,
+    /// Its folder in Journey's cache with its item, to save it to the library; None once saved
+    /// (or for a library map).
+    pub cached: Option<(PathBuf, JourneyItem)>,
+}
+
+/// Why a marathon ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MarathonEnd {
+    /// The player stopped it.
+    Quit,
+    /// Hardcore, and a map was failed.
+    Hardcore,
+    /// Nothing more to play.
+    OutOfMaps,
+}
+
+/// A marathon: Journey's maps one after another with no results in between, and what it has come
+/// to so far.
+#[derive(Debug)]
+pub struct Marathon {
+    pub started: Instant,
+    pub ended: Option<(MarathonEnd, Instant)>,
+    pub passed: u32,
+    pub failed: u32,
+    pub skipped: u32,
+    accuracy_sum: f64,
+    /// pp of the passed maps, summed.
+    pub pp: f64,
+    /// The play worth the most pp: its map's name and its pp.
+    pub best: Option<(String, f64)>,
+    pub streak: u32,
+    pub best_streak: u32,
+    pub last: Option<MarathonPlay>,
+}
+
+impl Marathon {
+    pub fn new(now: Instant) -> Marathon {
+        Marathon {
+            started: now,
+            ended: None,
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+            accuracy_sum: 0.0,
+            pp: 0.0,
+            best: None,
+            streak: 0,
+            best_streak: 0,
+            last: None,
+        }
+    }
+
+    pub fn record(&mut self, play: MarathonPlay) {
+        match play.outcome {
+            MarathonOutcome::Passed => {
+                self.passed += 1;
+                self.accuracy_sum += play.accuracy;
+                self.streak += 1;
+                self.best_streak = self.best_streak.max(self.streak);
+                if let Some(pp) = play.pp {
+                    self.pp += pp;
+                    if self.best.as_ref().is_none_or(|(_, best)| pp > *best) {
+                        let name = format!(
+                            "{} - {} [{}]",
+                            play.item.artist, play.item.title, play.item.version
+                        );
+                        self.best = Some((name, pp));
+                    }
+                }
+            }
+            MarathonOutcome::Failed => {
+                self.failed += 1;
+                self.streak = 0;
+            }
+            MarathonOutcome::Skipped => self.skipped += 1,
+        }
+        self.last = Some(play);
+    }
+
+    /// Maps played to their end, passed or failed.
+    pub fn played(&self) -> u32 {
+        self.passed + self.failed
+    }
+
+    /// The passed maps' accuracy on average (0 to 1).
+    pub fn average_accuracy(&self) -> Option<f64> {
+        (self.passed > 0).then(|| self.accuracy_sum / self.passed as f64)
+    }
+
+    /// How long it has gone on (or went on).
+    pub fn duration(&self, now: Instant) -> Duration {
+        self.ended
+            .map_or(now, |(_, at)| at)
+            .saturating_duration_since(self.started)
+    }
+
+    /// Ends it, for `why`, unless it ended already.
+    pub fn end(&mut self, why: MarathonEnd, now: Instant) {
+        self.ended.get_or_insert((why, now));
+    }
 }
 
 impl Default for Journey {
@@ -232,6 +361,8 @@ impl Journey {
             chill: false,
             settings: None,
             autostart: false,
+            skip_intro_next: false,
+            marathon: None,
         }
     }
 
@@ -283,6 +414,7 @@ impl Journey {
     pub fn stop(&mut self) {
         self.cancel_downloads();
         self.active = false;
+        self.marathon = None;
         self.in_play = false;
         self.fetching = None;
         self.playing_cached = None;

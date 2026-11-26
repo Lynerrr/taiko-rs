@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::harness::{self, *};
 use super::maps;
-use crate::config::{Config, JourneyFocus, JourneySaveTo};
+use crate::config::{Config, JourneyFlow, JourneyFocus, JourneySaveTo};
 use crate::journey::{Gate, MAX_PREFETCH_AHEAD, MapSource, OUTAGE_GRACE, PastOutcome, QueuedMap};
 use crate::*;
 
@@ -1502,7 +1502,7 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     // Non-stop changes nothing asked of the server: the queue stays.
     let queued = s.journey.queue.front().map(|q| q.item.md5.clone());
     s.click(hit::Hit::JourneySetting(2, 1), None);
-    assert!(s.cfg.journey_nonstop);
+    assert_eq!(s.cfg.journey_flow, JourneyFlow::Nonstop);
     assert_eq!(s.journey.queue.front().map(|q| q.item.md5.clone()), queued);
 
     // Esc closes the panel; Journey stays, and opened again it keeps the settings.
@@ -1561,7 +1561,7 @@ fn an_offline_chill_journey_has_no_stretch_maps() {
 fn nonstop_journey_goes_from_results_straight_into_the_next_map() {
     let songs = Songs::new("journey-nonstop", &maps::all());
     let mut cfg = harness::config();
-    cfg.journey_nonstop = true;
+    cfg.journey_flow = JourneyFlow::Nonstop;
     let mut s = state_with(cfg, songs.entries());
     let mut now = Instant::now();
     ready(&mut s, &mut now);
@@ -1651,7 +1651,7 @@ fn nonstop_shows_up_next_in_breaks_and_n_says_no_to_it() {
     assert!(up_next_due(&notes, 61_000.0), "after the last note");
 
     let mut cfg = harness::config();
-    cfg.journey_nonstop = true;
+    cfg.journey_flow = JourneyFlow::Nonstop;
     let mut s = state_with(cfg, songs.entries());
     let mut now = Instant::now();
     ready(&mut s, &mut now);
@@ -1686,4 +1686,184 @@ fn nonstop_shows_up_next_in_breaks_and_n_says_no_to_it() {
     s.journey_skip_upcoming();
     assert_eq!(s.journey.queue.len(), 1);
     assert_eq!(s.journey.queue[0].item.title, "Playing");
+}
+
+/// A marathon Journey up on the wheel, its first map loading: offline, with the library.
+fn marathon(name: &str, cfg: Config) -> (State, Songs, Instant) {
+    let songs = Songs::new(name, &maps::all());
+    let mut cfg = cfg;
+    cfg.journey_flow = JourneyFlow::Marathon;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    press(&mut s, KeyCode::Enter, now);
+    assert_eq!(
+        scene_name(&s),
+        "Marathon",
+        "Play starts a marathon on its wheel"
+    );
+    assert!(s.journey.marathon.is_some());
+    (s, songs, now)
+}
+
+/// The play up now ends with every note gone by unhit (a fail), its outro skipped.
+fn miss_the_rest(s: &mut State, now: &mut Instant) {
+    let game = s.play.as_deref_mut().expect("a play");
+    game.run_out_of_notes();
+    press(s, KeyCode::Escape, *now);
+    assert!(wait_for(s, now, |s| scene_name(s) != "Play"));
+}
+
+/// A marathon goes from map to map with no results: the wheel turns to the next map, which
+/// starts by itself past its intro, and each map is counted as Journey counts a play.
+#[test]
+fn a_marathon_goes_from_map_to_map_with_no_results() {
+    let (mut s, _songs, mut now) = marathon("journey-marathon", harness::config());
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "Up next"));
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let first = s.journey.current().unwrap().item.md5.clone();
+    let game = harness::game(&s).unwrap();
+    assert!(!game.can_skip(), "the intro is skipped");
+
+    // Played through: no results, on to the wheel and the next map.
+    let map = game.map().clone();
+    super::flows::play_out(
+        &mut s,
+        &mut now,
+        &maps::presses(&map, maps::Player::Perfect),
+    );
+    assert_eq!(scene_name(&s), "Marathon", "no results in a marathon");
+    let m = s.journey.marathon.as_ref().unwrap();
+    assert_eq!((m.passed, m.failed, m.skipped), (1, 0, 0));
+    assert_eq!(m.last.as_ref().unwrap().item.md5, first);
+    assert_eq!(s.journey.step, 1);
+    assert_eq!(
+        s.journey.history.last().unwrap().outcome,
+        PastOutcome::Passed
+    );
+    let c = frame(&mut s, now);
+    assert!(
+        c.texts.iter().any(|(_, t)| t.starts_with("PASS")),
+        "the last map's card"
+    );
+    assert!(c.texts.iter().any(|(_, t)| t.starts_with("MARATHON")));
+
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    assert_ne!(s.journey.current().unwrap().item.md5, first);
+
+    // A fail goes on too (not hardcore).
+    miss_the_rest(&mut s, &mut now);
+    assert_eq!(scene_name(&s), "Marathon");
+    let m = s.journey.marathon.as_ref().unwrap();
+    assert_eq!((m.passed, m.failed), (1, 1));
+    assert!(m.ended.is_none());
+    assert_eq!(
+        s.journey.history.last().unwrap().outcome,
+        PastOutcome::Failed
+    );
+}
+
+/// Hardcore: the first failed map ends the marathon, on its summary; Enter goes back to Journey.
+#[test]
+fn a_hardcore_marathon_ends_on_its_first_fail() {
+    let mut cfg = harness::config();
+    cfg.journey_hardcore = true;
+    let (mut s, _songs, mut now) = marathon("journey-hardcore", cfg);
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    miss_the_rest(&mut s, &mut now);
+    assert_eq!(scene_name(&s), "Marathon");
+    let m = s.journey.marathon.as_ref().unwrap();
+    assert_eq!(
+        m.ended.map(|(why, _)| why),
+        Some(crate::journey::MarathonEnd::Hardcore)
+    );
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "HARDCORE: A FAIL ENDS IT"));
+    // It stays on the summary.
+    for _ in 0..10 {
+        now += Duration::from_millis(500);
+        frame(&mut s, now);
+    }
+    assert_eq!(scene_name(&s), "Marathon");
+    press(&mut s, KeyCode::Enter, now);
+    assert_eq!(scene_name(&s), "Journey");
+    assert!(s.journey.marathon.is_none());
+    assert!(s.journey.active);
+}
+
+/// A marathon's pause menu skips the map being played (no score, a skip for Journey) or ends
+/// the marathon, which shows what it came to.
+#[test]
+fn a_marathons_pause_menu_skips_the_map_or_ends_the_marathon() {
+    let (mut s, _songs, mut now) = marathon("journey-marathon-pause", harness::config());
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let first = s.journey.current().unwrap().item.md5.clone();
+    let scores = s.scores.len();
+
+    press(&mut s, KeyCode::Escape, now);
+    now += Duration::from_millis(400);
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "Skip this map"));
+    assert!(shows(&c, "End the marathon"));
+    press(&mut s, KeyCode::ArrowDown, now);
+    press(&mut s, KeyCode::Enter, now);
+    assert_eq!(scene_name(&s), "Marathon");
+    let m = s.journey.marathon.as_ref().unwrap();
+    assert_eq!((m.passed, m.failed, m.skipped), (0, 0, 1));
+    assert_eq!(
+        s.journey.history.last().unwrap().outcome,
+        PastOutcome::Skipped
+    );
+    assert_eq!(s.scores.len(), scores, "a skipped map keeps no score");
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "SKIPPED"));
+
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    assert_ne!(s.journey.current().unwrap().item.md5, first);
+    // Up from Continue is the last item: End the marathon.
+    press(&mut s, KeyCode::Escape, now);
+    press(&mut s, KeyCode::ArrowUp, now);
+    press(&mut s, KeyCode::Enter, now);
+    assert_eq!(scene_name(&s), "Marathon");
+    assert!(!s.journey.in_play);
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "MARATHON OVER"));
+    assert!(shows(&c, "Maps played"));
+    press(&mut s, KeyCode::Escape, now);
+    assert_eq!(scene_name(&s), "Journey");
+    assert!(s.journey.marathon.is_none());
+}
+
+/// Between two maps, Space holds the marathon and Enter starts the next map at once; Esc
+/// ends it there.
+#[test]
+fn a_marathons_wheel_holds_goes_on_and_ends_by_key() {
+    let (mut s, _songs, mut now) = marathon("journey-marathon-wheel", harness::config());
+    press(&mut s, KeyCode::Space, now);
+    for _ in 0..20 {
+        now += Duration::from_millis(250);
+        frame(&mut s, now);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(scene_name(&s), "Marathon", "held");
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "Held: Space to go on"));
+    press(&mut s, KeyCode::Space, now);
+    press(&mut s, KeyCode::Enter, now);
+    // Enter doesn't wait out the wheel: it starts once loaded.
+    let start = now;
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    assert!(now.duration_since(start) < crate::screens::marathon::MARATHON_GAP);
+
+    miss_the_rest(&mut s, &mut now);
+    press(&mut s, KeyCode::Escape, now);
+    assert_eq!(scene_name(&s), "Marathon");
+    assert!(s.journey.marathon.as_ref().unwrap().ended.is_some());
+    assert!(!s.journey.in_play);
 }

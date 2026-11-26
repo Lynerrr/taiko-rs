@@ -226,8 +226,12 @@ journey_save_on_like = true
 journey_focus = any
 # Journey plays it easy: maps below your level, no stretch maps
 journey_chill = false
-# Journey goes from one map straight into the next
-journey_nonstop = false
+# how Journey goes from map to map: off, nonstop (results count down) or marathon (no results)
+journey_flow = off
+# a Journey marathon ends on the first failed map
+journey_hardcore = false
+# maps Journey starts by itself start just before their first note
+journey_skip_intro = true
 # folder of TJA charts (empty = Tja beside Custom)
 tja_folder =
 # extra song folders / .osz files, one per line

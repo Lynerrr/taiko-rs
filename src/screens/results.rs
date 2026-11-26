@@ -188,7 +188,8 @@ impl Screen for ResultsScreen {
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 if state.playing_journey() {
                     state.journey_next_from_results(results.failed);
-                    state.journey.autostart = state.cfg.journey_nonstop;
+                    state.journey.autostart =
+                        state.cfg.journey_flow == crate::config::JourneyFlow::Nonstop;
                 } else {
                     state.retry_from(self.entry, self.from);
                 }
@@ -222,7 +223,11 @@ impl Screen for ResultsScreen {
         results.journey = state.playing_journey();
         results.journey_save = state.journey.playing_cached.is_some();
         results.draw(canvas);
-        if results.journey && state.cfg.journey_nonstop && !self.held && results.opened.is_none() {
+        if results.journey
+            && state.cfg.journey_flow == crate::config::JourneyFlow::Nonstop
+            && !self.held
+            && results.opened.is_none()
+        {
             let left =
                 NONSTOP_RESULTS.saturating_sub(frame.now.saturating_duration_since(results.shown));
             if left.is_zero() {

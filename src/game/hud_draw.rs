@@ -193,8 +193,12 @@ impl Play {
             let colours = crate::game::note_colours();
             let (rx, rw) = (px + 12.0, pw - 24.0);
             let test = self.view.test_play;
+            let marathon = self.view.marathon;
             let items = (0..PAUSE_ITEMS).map(|i| match i {
                 4 if test => tr!("Back to the editor", "エディターに戻る", "Назад в редактор"),
+                1 if marathon => tr!("Skip this map", "この譜面をスキップ", "Пропустить карту"),
+                2 if marathon => tr!("Retry", "やり直す", "Заново"),
+                4 if marathon => tr!("End the marathon", "マラソンを終える", "Закончить марафон"),
                 _ => pause_item(i),
             });
             for (i, item) in items.enumerate() {
