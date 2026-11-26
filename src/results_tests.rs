@@ -536,3 +536,48 @@ fn a_player_logged_out_has_nobody_to_tell_what_they_think_of_the_map() {
     };
     assert!(s.vote_request(map, None).is_none());
 }
+
+#[test]
+fn changing_library_from_settings_over_results_re_resolves_or_guards_entry() {
+    let mut s = crate::layout_tests::state();
+    let e0 = crate::layout_tests::entry(0, 0, false);
+    let e1 = crate::layout_tests::entry(1, 0, false);
+    let target_path = e1.path.clone();
+    s.use_library(vec![e0, e1], None);
+    let r = Box::new(ui::Results::new(
+        "A - T [Oni]".into(),
+        game::Stats::default(),
+        game::Windows::new(5.0),
+    ));
+    s.scene = crate::screens::results::ResultsScreen::scene(r, 1, None);
+    s.open_settings();
+
+    // Case 1: map shifts from index 1 to index 0 after use_library.
+    let shifted = crate::layout_tests::entry(1, 0, false);
+    assert_eq!(shifted.path, target_path);
+    s.use_library(vec![shifted], None);
+    s.close_settings();
+    let rs = s
+        .scene
+        .screen_as::<crate::screens::results::ResultsScreen>()
+        .expect("back on results");
+    assert_eq!(rs.entry, 0);
+
+    // Case 2: map disappears from the library completely (e.g. switched Songs folder).
+    s.open_settings();
+    s.use_library(Vec::new(), None);
+    s.close_settings();
+
+    // Ctrl+R does not panic OOB.
+    s.modifiers_ctrl = true;
+    s.key(KeyCode::KeyR, false, None, Instant::now(), None);
+    s.modifiers_ctrl = false;
+    assert!(
+        s.scene
+            .screen_is::<crate::screens::results::ResultsScreen>()
+    );
+
+    // Esc does not panic OOB and returns cleanly to Song Select.
+    s.key(KeyCode::Escape, false, None, Instant::now(), None);
+    assert!(s.scene.is_select());
+}

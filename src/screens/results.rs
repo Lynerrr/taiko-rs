@@ -10,6 +10,8 @@ pub(crate) struct ResultsScreen {
     pub(crate) results: Box<Results>,
     /// The map played.
     pub(crate) entry: usize,
+    /// The map is no longer in the library (e.g. Songs folder changed in Settings).
+    pub(crate) gone: bool,
     /// The map time the play started from (played again from there).
     pub(crate) from: Option<f64>,
     /// Journey's Non-stop holds on these results: the player is reading them.
@@ -21,6 +23,7 @@ impl ResultsScreen {
         Scene::Other(Box::new(ResultsScreen {
             results,
             entry,
+            gone: false,
             from,
             held: false,
         }))
@@ -38,6 +41,9 @@ impl Screen for ResultsScreen {
     }
 
     fn presence(&self, state: &State) -> Option<(String, String)> {
+        if self.gone {
+            return None;
+        }
         Some((
             state.library.get(self.entry)?.label(),
             super::play::journey_presence(
@@ -81,7 +87,7 @@ impl Screen for ResultsScreen {
     }
 
     fn map_entry(&self) -> Option<usize> {
-        Some(self.entry)
+        (!self.gone).then_some(self.entry)
     }
 
     fn key_place(&self) -> Option<keys::Place> {
@@ -143,7 +149,11 @@ impl Screen for ResultsScreen {
                     KeyCode::ArrowDown | KeyCode::PageDown | KeyCode::End
                 ));
             }
-            KeyCode::KeyR if state.modifiers_ctrl => state.retry_from(self.entry, self.from),
+            KeyCode::KeyR if state.modifiers_ctrl => {
+                if !self.gone && self.entry < state.library.len() {
+                    state.retry_from(self.entry, self.from);
+                }
+            }
             KeyCode::KeyL | KeyCode::KeyN if results.vote_on.is_some() => {
                 let vote = if code == KeyCode::KeyL {
                     online::MapVote::Like
@@ -190,8 +200,10 @@ impl Screen for ResultsScreen {
                     state.journey_next_from_results(results.failed);
                     state.journey.autostart =
                         state.cfg.journey_flow == crate::config::JourneyFlow::Nonstop;
-                } else {
+                } else if !self.gone && self.entry < state.library.len() {
                     state.retry_from(self.entry, self.from);
+                } else {
+                    state.show_select();
                 }
             }
             KeyCode::Escape => {
@@ -200,9 +212,13 @@ impl Screen for ResultsScreen {
                 if state.playing_journey() {
                     state.journey_next_from_results(results.failed);
                 } else {
-                    let path = state.library[self.entry].path.clone();
+                    let path = (!self.gone)
+                        .then(|| state.library.get(self.entry).map(|e| e.path.clone()))
+                        .flatten();
                     state.show_select();
-                    state.select.select_path(&state.library, &path);
+                    if let Some(path) = path {
+                        state.select.select_path(&state.library, &path);
+                    }
                 }
             }
             _ => {}

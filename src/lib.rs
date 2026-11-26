@@ -9660,9 +9660,38 @@ impl State {
 
     /// `library` in place of the list, on `selected` if that's still there, else a random song.
     fn use_library(&mut self, library: Vec<Entry>, selected: Option<PathBuf>) {
+        let results_path = self
+            .scene
+            .screen_as::<ResultsScreen>()
+            .or_else(|| {
+                self.behind
+                    .as_deref()
+                    .and_then(|s| s.screen_as::<ResultsScreen>())
+            })
+            .filter(|r| !r.gone)
+            .and_then(|r| self.library.get(r.entry))
+            .map(|e| e.path.clone());
         self.stars.clear();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
+        if let Some(r) = self.scene.screen_mut::<ResultsScreen>().or_else(|| {
+            self.behind
+                .as_deref_mut()
+                .and_then(|s| s.screen_mut::<ResultsScreen>())
+        }) {
+            match results_path
+                .as_deref()
+                .and_then(|path| self.library.iter().position(|e| e.path == path))
+            {
+                Some(i) => {
+                    r.entry = i;
+                    r.gone = false;
+                }
+                None => {
+                    r.gone = true;
+                }
+            }
+        }
         self.rebuild_library_indices();
         // Song select's cards show every set's background: small copies made ahead read fast.
         // 1.0's look has no cards.
