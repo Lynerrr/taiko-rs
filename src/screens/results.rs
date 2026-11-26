@@ -16,6 +16,9 @@ pub(crate) struct ResultsScreen {
     pub(crate) from: Option<f64>,
     /// Journey's Non-stop holds on these results: the player is reading them.
     pub(crate) held: bool,
+    /// When Non-stop's countdown last started over: a medal being shown holds it, and it
+    /// counts from the medal's going (else from when the results came up).
+    pub(crate) count_from: Option<Instant>,
 }
 
 impl ResultsScreen {
@@ -26,6 +29,7 @@ impl ResultsScreen {
             gone: false,
             from,
             held: false,
+            count_from: None,
         }))
     }
 }
@@ -244,8 +248,13 @@ impl Screen for ResultsScreen {
             && !self.held
             && results.opened.is_none()
         {
-            let left =
-                NONSTOP_RESULTS.saturating_sub(frame.now.saturating_duration_since(results.shown));
+            // A medal earned by the play is shown whole before the next map: started over it,
+            // the map had it hiding the notes and taking the drum keys.
+            if state.unlock.busy() {
+                self.count_from = Some(frame.now);
+            }
+            let from = self.count_from.unwrap_or(results.shown);
+            let left = NONSTOP_RESULTS.saturating_sub(frame.now.saturating_duration_since(from));
             if left.is_zero() {
                 let failed = results.failed;
                 state.journey_next_from_results(failed);
