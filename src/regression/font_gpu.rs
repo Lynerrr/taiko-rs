@@ -19,6 +19,7 @@ struct Gpu {
     globals: wgpu::Buffer,
     group: wgpu::BindGroup,
     font: wgpu::Texture,
+    font_custom_height: u32,
     cards: wgpu::Texture,
     revision: u64,
 }
@@ -32,9 +33,10 @@ impl Gpu {
         eprintln!("font GPU regression: {:?}", adapter.get_info());
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let (view, font, font_custom_height) = make_font_texture(&device, &queue);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("production shapes"),
-            source: wgpu::ShaderSource::Wgsl(shape_shader().into()),
+            source: wgpu::ShaderSource::Wgsl(shape_shader(font_custom_height).into()),
         });
         let attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -86,7 +88,6 @@ impl Gpu {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let (view, font) = make_font_texture(&device, &queue);
         let cards = card_texture(&device);
         let group = Renderer::shape_bind_group(
             &device,
@@ -107,13 +108,19 @@ impl Gpu {
             globals,
             group,
             font,
+            font_custom_height,
             cards,
             revision: 0,
         }
     }
 
     fn draw(&mut self, shapes: &[Shape], scale: f32) -> (u32, u32, Vec<u8>) {
-        upload_font_glyphs(&self.queue, &self.font, &mut self.revision);
+        upload_font_glyphs(
+            &self.queue,
+            &self.font,
+            self.font_custom_height,
+            &mut self.revision,
+        );
         let (w, h) = ((256.0 * scale) as u32, (128.0 * scale) as u32);
         let size = wgpu::Extent3d {
             width: w,
