@@ -527,6 +527,8 @@ struct State {
     custom_dir: PathBuf,
     /// Where TJA charts are read from and imported to (`tja_maps`).
     tja_dir: Option<PathBuf>,
+    /// TJA charts being copied into the TJA folder (`import_tja`), each with its name.
+    tja_imports: Vec<Job<(String, Result<PathBuf, String>)>>,
     /// Beatmap set IDs in the library (built when first needed).
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
@@ -5402,12 +5404,33 @@ impl State {
         let Some(root) = self.tja_dir.clone() else {
             return;
         };
-        match crate::tja_maps::import(from, &root) {
-            Ok(_) => {
-                self.toast(tr!("{name} added to the TJA charts", "{name}をTJA譜面に追加しました", "{name} добавлен в TJA-чарты"; [] [name]));
-                self.refresh_library(false);
+        // Copying a pack of charts and their audio takes a while: not on the frame's thread.
+        let (from, name) = (from.to_path_buf(), name.to_string());
+        self.tja_imports.push(Job::spawn(move || {
+            let result = crate::tja_maps::import(&from, &root);
+            (name, result)
+        }));
+    }
+
+    /// Takes the TJA imports that have finished: the list is looked through again for what
+    /// they brought, and the player is told how each went.
+    fn poll_tja_imports(&mut self) {
+        let mut done = Vec::new();
+        self.tja_imports.retain_mut(|job| match job.poll_ended() {
+            None => true,
+            Some(result) => {
+                done.extend(result);
+                false
             }
-            Err(e) => self.toast(tr!("can't add {name}: {e}", "{name}を追加できません: {e}", "не получилось добавить {name}: {e}"; [] [name, e])),
+        });
+        for (name, result) in done {
+            match result {
+                Ok(_) => {
+                    self.toast(tr!("{name} added to the TJA charts", "{name}をTJA譜面に追加しました", "{name} добавлен в TJA-чарты"; [] [name]));
+                    self.refresh_library(false);
+                }
+                Err(e) => self.toast(tr!("can't add {name}: {e}", "{name}を追加できません: {e}", "не получилось добавить {name}: {e}"; [] [name, e])),
+            }
         }
     }
 
@@ -9591,6 +9614,7 @@ impl State {
                 .selected()
                 .and_then(|i| self.library.get(i))
                 .map(|e| e.path.clone());
+            let player_path = self.active_player_path();
             let (mut added, mut changed) = (0, 0);
             for e in &checked {
                 match index.get(e.path.as_os_str()).map(|&i| &self.library[i]) {
@@ -9607,7 +9631,7 @@ impl State {
                     .filter(|(i, e)| !seen[*i] && e.path.is_file())
                     .map(|(_, e)| e),
             );
-            self.use_library(checked, selected);
+            self.use_library_with_player(checked, selected, player_path);
             self.report_refresh(refreshing, added, changed, gone.len());
             return;
         }
@@ -9658,11 +9682,66 @@ impl State {
         self.report_refresh(refreshing, added, edited, gone.len());
     }
 
+    /// The library path of the music player's active track, if the player is open.
+    fn active_player_path(&self) -> Option<PathBuf> {
+        self.player
+            .as_ref()
+            .and_then(|p| p.list.entry())
+            .and_then(|i| self.library.get(i))
+            .map(|e| e.path.clone())
+    }
+
     /// `library` in place of the list, on `selected` if that's still there, else a random song.
     fn use_library(&mut self, library: Vec<Entry>, selected: Option<PathBuf>) {
+        let player_path = self.active_player_path();
+        self.use_library_with_player(library, selected, player_path);
+    }
+
+    fn use_library_with_player(
+        &mut self,
+        library: Vec<Entry>,
+        selected: Option<PathBuf>,
+        player_path: Option<PathBuf>,
+    ) {
+        let results_path = self
+            .scene
+            .screen_as::<ResultsScreen>()
+            .or_else(|| {
+                self.behind
+                    .as_deref()
+                    .and_then(|s| s.screen_as::<ResultsScreen>())
+            })
+            .filter(|r| !r.gone)
+            .and_then(|r| self.library.get(r.entry))
+            .map(|e| e.path.clone());
         self.stars.clear();
+        self.preview.forget();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
+        if let Some(p) = &mut self.player {
+            let entry = player_path
+                .as_deref()
+                .and_then(|path| self.library.iter().position(|e| e.path == path));
+            p.rebuild(&self.library, entry, fresh_seed());
+        }
+        if let Some(r) = self.scene.screen_mut::<ResultsScreen>().or_else(|| {
+            self.behind
+                .as_deref_mut()
+                .and_then(|s| s.screen_mut::<ResultsScreen>())
+        }) {
+            match results_path
+                .as_deref()
+                .and_then(|path| self.library.iter().position(|e| e.path == path))
+            {
+                Some(i) => {
+                    r.entry = i;
+                    r.gone = false;
+                }
+                None => {
+                    r.gone = true;
+                }
+            }
+        }
         self.rebuild_library_indices();
         // Song select's cards show every set's background: small copies made ahead read fast.
         // 1.0's look has no cards.
@@ -13532,6 +13611,7 @@ impl State {
             self.toast_download(&name);
         }
         self.poll_downloads();
+        self.poll_tja_imports();
         self.poll_score_link();
         self.poll_set_check(now);
         self.poll_sorting();
@@ -13764,12 +13844,12 @@ impl State {
         }
         if let Some(p) = self
             .player
-            .as_ref()
+            .as_mut()
             .filter(|p| p.library_len != self.library.len())
         {
             // The library changed under the list: same song on, if it's still there.
             let entry = p.list.entry();
-            self.player = Some(Box::new(player::Player::new(&self.library, entry)));
+            p.rebuild(&self.library, entry, fresh_seed());
         }
         self.poll_media();
         if let Some(item) = self.main_menu.as_mut().and_then(menu::Menu::ready) {

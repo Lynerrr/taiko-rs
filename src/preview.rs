@@ -487,6 +487,10 @@ impl Preview {
         self.seen = None;
         self.requested = None;
         self.map = None;
+        self.left_out = None;
+        self.shown_for = None;
+        self.ready_for = None;
+        self.entered = None;
         self.game = None;
         self.map_rx.cancel();
         self.map_ticket.cancel();

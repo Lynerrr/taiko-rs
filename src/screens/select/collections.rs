@@ -353,12 +353,28 @@ impl State {
             .collect()
     }
 
+    fn unreadable_maps_notice(&self, maps: &[usize]) -> String {
+        if maps
+            .iter()
+            .any(|&i| self.library.get(i).is_some_and(Entry::is_tja))
+        {
+            "TJA charts can't be put in collections".into()
+        } else {
+            "the map's file can't be read".into()
+        }
+    }
+
     fn new_collection(&mut self, name: &str, maps: &[usize]) -> Result<(), BadName> {
-        let refs = self.map_refs(maps).into_iter().map(|(_, m)| m).collect();
+        let refs: Vec<MapRef> = self.map_refs(maps).into_iter().map(|(_, m)| m).collect();
+        if !maps.is_empty() && refs.is_empty() {
+            self.toast(self.unreadable_maps_notice(maps));
+            return Ok(());
+        }
+        let added = refs.len();
         Own(&mut self.collections).add(name, refs)?;
         let name = name.trim();
         self.collections_changed();
-        self.toast(match maps.len() {
+        self.toast(match added {
             0 => format!("collection {name} made"),
             1 => format!("put in {name}, a new collection"),
             n => format!("{n} difficulties put in {name}, a new collection"),
@@ -509,7 +525,7 @@ impl State {
         };
         let refs = self.map_refs(maps);
         if refs.is_empty() {
-            self.toast("the map's file can't be read".into());
+            self.toast(self.unreadable_maps_notice(maps));
             return;
         }
         let finder = Finder::new(&self.library);
@@ -662,4 +678,43 @@ fn kept_collection(kept: &str) -> Option<(String, bool)> {
         _ => return None,
     };
     (!name.is_empty()).then(|| (name.to_string(), own))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adding_a_tja_chart_to_a_new_collection_does_not_create_empty_or_toast_success() {
+        let mut s = crate::layout_tests::state();
+        let mut e = crate::layout_tests::entry(0, 0, false);
+        e.path = PathBuf::from("/maps/Song/song.tja#oni");
+        let tja = Entry::from_parts(e.path, e.meta, e.size, e.modified);
+        assert!(tja.is_tja());
+        s.use_library(vec![tja], None);
+        s.collections.clear();
+
+        // Creating a new collection from a TJA chart must not create an empty collection
+        // or show a misleading "put in ..., a new collection" toast.
+        assert!(s.new_collection("My TJA", &[0]).is_ok());
+        assert!(
+            s.collections.is_empty(),
+            "must not create an empty collection for TJA"
+        );
+        let toast = s.toast.as_ref().map(|t| t.text.as_str()).unwrap_or("");
+        assert!(
+            toast.contains("TJA"),
+            "expected clear TJA notice toast, got: {toast:?}"
+        );
+
+        // Existing collection: toggling a TJA chart also gives the clear TJA notice.
+        assert!(s.new_collection("Existing", &[]).is_ok());
+        assert_eq!(s.collections.len(), 1);
+        s.collect(0, &[0]);
+        let toast = s.toast.as_ref().map(|t| t.text.as_str()).unwrap_or("");
+        assert!(
+            toast.contains("TJA"),
+            "expected clear TJA notice toast on collect, got: {toast:?}"
+        );
+    }
 }

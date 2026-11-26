@@ -536,3 +536,114 @@ fn a_player_logged_out_has_nobody_to_tell_what_they_think_of_the_map() {
     };
     assert!(s.vote_request(map, None).is_none());
 }
+
+#[test]
+fn the_music_player_keeps_its_song_when_the_library_is_reordered_to_the_same_length() {
+    let mut s = crate::layout_tests::state();
+    let (a, b) = (
+        crate::layout_tests::entry(0, 0, false),
+        crate::layout_tests::entry(1, 0, false),
+    );
+    let (pa, pb) = (a.path.clone(), b.path.clone());
+    s.use_library(vec![a, b], None);
+    s.player = Some(Box::new(crate::player::Player::new(&s.library, Some(1))));
+    let playing = |s: &State| {
+        let i = s.player.as_ref().and_then(|p| p.list.entry()).unwrap();
+        s.library[i].path.clone()
+    };
+    assert_eq!(playing(&s), pb);
+    // Same length, other order: the index 1 now names the other map.
+    s.use_library(
+        vec![
+            crate::layout_tests::entry(1, 0, false),
+            crate::layout_tests::entry(0, 0, false),
+        ],
+        None,
+    );
+    assert_eq!(playing(&s), pb, "still the same song");
+    assert_ne!(playing(&s), pa);
+}
+
+#[test]
+fn check_library_deletion_keeps_music_player_track_and_playback_settings() {
+    let mut s = crate::layout_tests::state();
+    s.play_when_scanned = false;
+    let a = crate::layout_tests::entry(0, 0, false);
+    let b = crate::layout_tests::entry(1, 0, false);
+    let c = crate::layout_tests::entry(2, 0, false);
+    let pc = c.path.clone();
+    s.use_library(vec![a, b, c], None);
+    s.scene = SongSelect::scene();
+    s.mp = None;
+
+    let mut player = crate::player::Player::new(&s.library, Some(2));
+    player.list.repeat = crate::playlist::Repeat::One;
+    player.list.toggle_shuffle(42);
+    player.set_custom_rate(1.15, false);
+    player.daycore = true;
+    s.player = Some(Box::new(player));
+
+    // Delete map 0 (its path is /nonexistent/..., so !is_file() triggers the !gone.is_empty()
+    // branch in check_library that takes self.library before calling use_library).
+    let remaining = vec![
+        crate::layout_tests::entry(1, 0, false),
+        crate::layout_tests::entry(2, 0, false),
+    ];
+    s.check_library(remaining);
+    assert_eq!(s.library.len(), 2, "check_library replaced the library");
+
+    let p = s.player.as_ref().expect("player stays open");
+    let i = p.list.entry().expect("active track");
+    assert_eq!(
+        s.library[i].path, pc,
+        "player must keep its active song across check_library deletion refresh"
+    );
+    assert_eq!(p.list.repeat, crate::playlist::Repeat::One);
+    assert!(p.list.is_shuffled());
+    assert!(p.daycore);
+}
+
+#[test]
+fn changing_library_from_settings_over_results_re_resolves_or_guards_entry() {
+    let mut s = crate::layout_tests::state();
+    let e0 = crate::layout_tests::entry(0, 0, false);
+    let e1 = crate::layout_tests::entry(1, 0, false);
+    let target_path = e1.path.clone();
+    s.use_library(vec![e0, e1], None);
+    let r = Box::new(ui::Results::new(
+        "A - T [Oni]".into(),
+        game::Stats::default(),
+        game::Windows::new(5.0),
+    ));
+    s.scene = crate::screens::results::ResultsScreen::scene(r, 1, None);
+    s.open_settings();
+
+    // Case 1: map shifts from index 1 to index 0 after use_library.
+    let shifted = crate::layout_tests::entry(1, 0, false);
+    assert_eq!(shifted.path, target_path);
+    s.use_library(vec![shifted], None);
+    s.close_settings();
+    let rs = s
+        .scene
+        .screen_as::<crate::screens::results::ResultsScreen>()
+        .expect("back on results");
+    assert_eq!(rs.entry, 0);
+
+    // Case 2: map disappears from the library completely (e.g. switched Songs folder).
+    s.open_settings();
+    s.use_library(Vec::new(), None);
+    s.close_settings();
+
+    // Ctrl+R does not panic OOB.
+    s.modifiers_ctrl = true;
+    s.key(KeyCode::KeyR, false, None, Instant::now(), None);
+    s.modifiers_ctrl = false;
+    assert!(
+        s.scene
+            .screen_is::<crate::screens::results::ResultsScreen>()
+    );
+
+    // Esc does not panic OOB and returns cleanly to Song Select.
+    s.key(KeyCode::Escape, false, None, Instant::now(), None);
+    assert!(s.scene.is_select());
+}
