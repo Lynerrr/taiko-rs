@@ -439,8 +439,20 @@ impl Screen for PlayScreen {
         let area_backdrop = state.area_backdrop(state.bg_brightness > 0.0);
         let marathon = state.journey.marathon.is_some() && state.journey.in_play;
         if marathon {
-            // The maps after this one keep coming in (and downloading) meanwhile.
+            // The maps after this one keep coming in (and downloading) meanwhile, and the next
+            // one loads towards the end of this one.
             state.journey_tick_quiet();
+            let near = state
+                .play
+                .as_deref()
+                .filter(|g| g.replay().is_none())
+                .and_then(|g| {
+                    let last = g.map().notes.last()?;
+                    Some((g.time(), last.end_time.max(last.time)))
+                });
+            if let Some((time, last)) = near {
+                state.marathon_preload(time, last);
+            }
         }
         let game = state.play.as_deref_mut()?;
         // A marathon doesn't wait out a song past its last note.

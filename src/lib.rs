@@ -1833,10 +1833,31 @@ impl State {
         from: Option<f64>,
         keep_audio: bool,
     ) -> (Job<Loaded>, String) {
-        self.pending_replay = None;
-        // A test play from the editor plays the editor's map and isn't counted.
+        let mut label = self.play_begins(entry, from, keep_audio);
+        // A test play from the editor plays the editor's map.
         let test = self.editor_back.as_ref().map(|v| v.ed.chart.to_text());
-        if test.is_none() {
+        let rx = match test {
+            Some(text) => {
+                label = format!("TEST  {label}");
+                self.load_text(entry, text)
+            }
+            None => self.load_with(entry, self.cfg.rate, self.cfg.mods),
+        };
+        (rx, label)
+    }
+
+    /// What starting to play `entry` does before its chart and song are read (`begin_load`, or
+    /// a marathon's map loaded ahead of time): it's counted, its background comes up, and what
+    /// plays now stops unless `keep_audio`. The label to show while it loads.
+    pub(crate) fn play_begins(
+        &mut self,
+        entry: usize,
+        from: Option<f64>,
+        keep_audio: bool,
+    ) -> String {
+        self.pending_replay = None;
+        // A test play from the editor isn't counted.
+        if self.editor_back.is_none() {
             self.record_play(entry);
             if self.again.start(&self.library[entry].path) {
                 ura::report(&self.cfg, ura::Event::Again);
@@ -1862,14 +1883,7 @@ impl State {
             let at = fmt_time(t);
             label.push_str(&tr!("  (from {at})", "  ({at}から)", "  (с {at})"; [] [at]));
         }
-        let rx = match test {
-            Some(text) => {
-                label = format!("TEST  {label}");
-                self.load_text(entry, text)
-            }
-            None => self.load_with(entry, self.cfg.rate, self.cfg.mods),
-        };
-        (rx, label)
+        label
     }
 
     /// Plays the map again, like starting it except that the intro is skipped.
@@ -2107,6 +2121,19 @@ impl State {
         text: Option<String>,
     ) -> Job<Loaded> {
         let path = self.library[entry].path.clone();
+        self.spawn_loader_at(path, (speed, keep_pitch), mods, cached, may_stream, text)
+    }
+
+    /// `spawn_loader` for the chart at `path`, in the library or not.
+    fn spawn_loader_at(
+        &self,
+        path: PathBuf,
+        (speed, keep_pitch): (f64, bool),
+        mods: Mods,
+        cached: Option<Arc<Track>>,
+        may_stream: bool,
+        text: Option<String>,
+    ) -> Job<Loaded> {
         let rate = self.audio.as_ref().map(|a| a.rate);
         Job::spawn(move || {
             (|| {

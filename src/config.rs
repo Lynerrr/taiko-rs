@@ -265,6 +265,57 @@ pub enum JourneyFlow {
     Marathon,
 }
 
+/// What a Journey marathon shows between two maps.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MarathonGap {
+    /// The wheel of maps turns for a couple of seconds.
+    #[default]
+    Wheel,
+    /// The wheel, for under a second.
+    Short,
+    /// Nothing: the next map (loaded during this one) starts on this one's last note, its song
+    /// fading in over this one's.
+    Seamless,
+}
+
+impl MarathonGap {
+    pub const ALL: [MarathonGap; 3] = [
+        MarathonGap::Wheel,
+        MarathonGap::Short,
+        MarathonGap::Seamless,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            MarathonGap::Wheel => tr!("Wheel", "ホイール", "Колесо"),
+            MarathonGap::Short => tr!("Short", "短め", "Короткое"),
+            MarathonGap::Seamless => tr!("Seamless", "シームレス", "Бесшовно"),
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            MarathonGap::Wheel => "wheel",
+            MarathonGap::Short => "short",
+            MarathonGap::Seamless => "seamless",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<MarathonGap> {
+        MarathonGap::ALL
+            .into_iter()
+            .find(|v| v.key().eq_ignore_ascii_case(s))
+    }
+
+    pub fn step(self, dir: i32) -> MarathonGap {
+        let i = MarathonGap::ALL
+            .iter()
+            .position(|&v| v == self)
+            .unwrap_or(0) as i32;
+        MarathonGap::ALL[(i + dir).rem_euclid(MarathonGap::ALL.len() as i32) as usize]
+    }
+}
+
 impl JourneyFlow {
     pub const ALL: [JourneyFlow; 3] = [
         JourneyFlow::Off,
@@ -414,6 +465,8 @@ pub struct Config {
     pub journey_hardcore: bool,
     /// A map Journey starts by itself (non-stop, marathon) starts just before its first note.
     pub journey_skip_intro: bool,
+    /// What a marathon shows between two maps: its wheel, briefly, or nothing at all.
+    pub journey_gap: MarathonGap,
     /// The interface's language.
     pub language: crate::lang::Lang,
     /// Empty selects the original pixel font; otherwise an installed family name.
@@ -742,6 +795,7 @@ impl Default for Config {
             journey_flow: JourneyFlow::Off,
             journey_hardcore: false,
             journey_skip_intro: true,
+            journey_gap: MarathonGap::Wheel,
             language: crate::lang::Lang::En,
             ui_font: String::new(),
             // osu!'s default: a new player starts where an osu! player does.
@@ -1676,6 +1730,7 @@ impl Config {
                 }
                 "journey_hardcore" => cfg.journey_hardcore = v == "true",
                 "journey_skip_intro" => cfg.journey_skip_intro = v != "false",
+                "journey_gap" => cfg.journey_gap = MarathonGap::parse(v).unwrap_or(cfg.journey_gap),
                 "ui_font" => cfg.ui_font = v.to_string(),
                 "language" => cfg.language = crate::lang::Lang::parse(v).unwrap_or(cfg.language),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
@@ -2339,6 +2394,10 @@ impl Config {
         out.push_str(&format!(
             "# maps Journey starts by itself start just before their first note\njourney_skip_intro = {}\n",
             self.journey_skip_intro
+        ));
+        out.push_str(&format!(
+            "# between a marathon's maps: wheel, short (a brief wheel) or seamless (none)\njourney_gap = {}\n",
+            self.journey_gap.key()
         ));
         let tja = self
             .tja_folder

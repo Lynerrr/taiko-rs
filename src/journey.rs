@@ -230,6 +230,26 @@ pub enum MarathonEnd {
     OutOfMaps,
 }
 
+/// The map up next in a marathon, loading during the one played now so that it can start the
+/// moment that one ends.
+pub(crate) struct Preload {
+    /// Its chart file (a cached map isn't in the library yet: it joins when it's up).
+    pub path: std::path::PathBuf,
+    /// The mods and speed it was loaded for.
+    pub mods: crate::mods::Mods,
+    pub rate: f64,
+    pub job: crate::Job<crate::Loaded>,
+}
+
+impl std::fmt::Debug for Preload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Preload")
+            .field("path", &self.path)
+            .field("busy", &self.job.is_busy())
+            .finish()
+    }
+}
+
 /// A marathon: Journey's maps one after another with no results in between, and what it has come
 /// to so far.
 #[derive(Debug)]
@@ -258,6 +278,8 @@ pub struct Marathon {
     map_broken: bool,
     /// The map's own combo, last seen.
     map_combo: u32,
+    /// The map up next, loading ahead of time.
+    pub(crate) preload: Option<Preload>,
 }
 
 impl Marathon {
@@ -279,6 +301,7 @@ impl Marathon {
             best_combo: 0,
             map_broken: false,
             map_combo: 0,
+            preload: None,
         }
     }
 

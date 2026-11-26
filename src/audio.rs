@@ -113,6 +113,9 @@ enum Cmd {
     SfxAt(i64, Sfx, f32),
     /// Replaces the hitsounds (indexed by `Sfx`).
     Sounds(Arc<Sounds>),
+    /// The next Play fades the song playing out over the first count of frames, and its own
+    /// song in over the second, instead of cutting from one to the other.
+    Crossfade(u32, u32),
 }
 
 /// What the callback replaced, sent back so deallocation stays off the audio thread.
@@ -275,6 +278,13 @@ impl Engine {
 
     pub fn stop(&self) {
         let _ = self.tx.send(Cmd::Stop);
+    }
+
+    /// The next song played fades in over `in_ms` while the one playing now fades out over
+    /// `out_ms` (a full decode; a streamed song is cut as usual).
+    pub fn crossfade_next(&self, out_ms: f64, in_ms: f64) {
+        let frames = |ms: f64| (ms.max(0.0) / 1000.0 * self.rate as f64).round() as u32;
+        let _ = self.tx.send(Cmd::Crossfade(frames(out_ms), frames(in_ms)));
     }
 
     /// Freezes the song where it is (output goes silent; hitsounds still play).
@@ -482,6 +492,21 @@ struct Mixer {
     limiter: Limiter,
     /// The focus's share of the volume as heard now, on its way to `volume[2]`.
     focus: f32,
+    /// Frames the next Play fades the old song out and the new one in over (`Cmd::Crossfade`).
+    fade_next: Option<(u32, u32)>,
+    /// The song before the playing one, fading out.
+    outgoing: Option<Outgoing>,
+    /// Frames left of the playing song's fade in, and their whole count.
+    fade_in: (u32, u32),
+}
+
+/// A song fading out under the next one (`Cmd::Crossfade`).
+struct Outgoing {
+    track: Arc<Track>,
+    base: i64,
+    frame: i64,
+    left: u32,
+    total: u32,
 }
 
 /// How long the volume takes to fall all the way when the window loses the focus: slow, so
@@ -528,6 +553,9 @@ impl Mixer {
             sounds,
             limiter: Limiter::new(rate),
             focus: 1.0,
+            fade_next: None,
+            outgoing: None,
+            fade_in: (0, 0),
         }
     }
 
@@ -538,8 +566,27 @@ impl Mixer {
                 start_frame,
                 base,
             } => {
+                let fade = self.fade_next.take();
+                self.drop_outgoing();
+                self.fade_in = (0, 0);
                 if let Some(old) = self.track.replace(track) {
-                    let _ = self.gc.send(Garbage::Track(old));
+                    match fade {
+                        // A streamed song is read once a callback into one buffer: it can't
+                        // play beside another.
+                        Some((out, into)) if out > 0 && !self.paused && old.stream.is_none() => {
+                            self.outgoing = Some(Outgoing {
+                                track: old,
+                                base: self.base,
+                                frame: self.frame,
+                                left: out,
+                                total: out,
+                            });
+                            self.fade_in = (into, into);
+                        }
+                        _ => {
+                            let _ = self.gc.send(Garbage::Track(old));
+                        }
+                    }
                 }
                 self.base = base;
                 self.frame = start_frame;
@@ -565,6 +612,9 @@ impl Mixer {
             }
             Cmd::Stop => {
                 self.pending.clear();
+                self.fade_next = None;
+                self.fade_in = (0, 0);
+                self.drop_outgoing();
                 if let Some(old) = self.track.take() {
                     let _ = self.gc.send(Garbage::Track(old));
                 }
@@ -574,6 +624,7 @@ impl Mixer {
                     .gc
                     .send(Garbage::Sounds(std::mem::replace(&mut self.sounds, sounds)));
             }
+            Cmd::Crossfade(out, into) => self.fade_next = Some((out, into)),
             Cmd::Sfx(sound, volume) => start_voice(&mut self.voices, sound, volume),
             Cmd::SfxAt(frame, sound, volume) => {
                 // Nothing moving the song on (or no room to wait): now is the best there is.
@@ -592,6 +643,42 @@ impl Mixer {
                 }
             }
         }
+    }
+
+    fn drop_outgoing(&mut self) {
+        if let Some(o) = self.outgoing.take() {
+            let _ = self.gc.send(Garbage::Track(o.track));
+        }
+    }
+
+    /// The playing song's share of the volume this frame, as it fades in.
+    fn fade_in_gain(&mut self) -> f32 {
+        let (left, total) = self.fade_in;
+        if left == 0 {
+            return 1.0;
+        }
+        self.fade_in.0 -= 1;
+        1.0 - left as f32 / total as f32
+    }
+
+    /// This frame of the song fading out (silence once it's gone).
+    fn outgoing_frame(&mut self, music_vol: f32) -> (f32, f32) {
+        let Some(o) = &mut self.outgoing else {
+            return (0.0, 0.0);
+        };
+        let gain = o.left as f32 / o.total as f32 * music_vol;
+        let at = o.frame - o.base;
+        let mut out = (0.0, 0.0);
+        if at >= 0 && (at as usize) < o.track.frames() {
+            let i = at as usize * 2;
+            out = (o.track.samples[i] * gain, o.track.samples[i + 1] * gain);
+        }
+        o.frame += 1;
+        o.left -= 1;
+        if o.left == 0 {
+            self.drop_outgoing();
+        }
+        out
     }
 
     /// Starts the waiting sounds whose song frame the stream is at.
@@ -650,6 +737,7 @@ impl Mixer {
         let secs = (out.len() / ch.max(1)) as f32 / self.rate.max(1) as f32;
         self.focus = focus_step(self.focus, focus_to, secs);
         let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed)) * self.focus;
+        let music_vol_all = music_vol;
         let fx_vol = f32::from_bits(self.volume[1].load(Ordering::Relaxed)) * self.focus;
         // A stream's frames for this callback. Where they run out inside the song, the position
         // holds, so that the music comes back still on the notes.
@@ -672,6 +760,7 @@ impl Mixer {
                 self.start_due();
             }
             let (mut l, mut r) = (0.0f32, 0.0f32);
+            let music_vol = music_vol * self.fade_in_gain();
             if let Some(track) = self.track.as_ref().filter(|_| !self.paused) {
                 let at = self.frame - self.base;
                 if let Some(s) = &track.stream {
@@ -692,6 +781,11 @@ impl Mixer {
                     }
                     self.frame += 1;
                 }
+            }
+            if self.outgoing.is_some() {
+                let (ol, or) = self.outgoing_frame(music_vol_all);
+                l += ol;
+                r += or;
             }
             for v in &mut self.voices {
                 let buf = &self.sounds[v.sound as usize];
@@ -996,6 +1090,64 @@ mod tests {
             m.frame += 1;
         }
         started
+    }
+
+    fn constant(frames: usize, level: f32) -> Arc<Track> {
+        Arc::new(Track {
+            samples: vec![level; frames * 2],
+            rate: 1.0,
+            stream: None,
+        })
+    }
+
+    /// A crossfade: the song playing goes on under the next one, fading out, while the next
+    /// fades in; then it's gone. Without one, the next song cuts in.
+    #[test]
+    fn a_crossfade_fades_the_old_song_out_under_the_new_one() {
+        let mut m = mixer();
+        m.apply(Cmd::Play {
+            track: constant(48_000, 0.5),
+            start_frame: 100,
+            base: 0,
+        });
+        m.apply(Cmd::Crossfade(4, 2));
+        m.apply(Cmd::Play {
+            track: constant(48_000, 0.25),
+            start_frame: 0,
+            base: 0,
+        });
+        let old: Vec<f32> = (0..5).map(|_| m.outgoing_frame(1.0).0).collect();
+        assert_eq!(old, vec![0.5, 0.375, 0.25, 0.125, 0.0]);
+        assert!(m.outgoing.is_none());
+        let new: Vec<f32> = (0..3).map(|_| m.fade_in_gain()).collect();
+        assert_eq!(new, vec![0.0, 0.5, 1.0]);
+
+        // Once only: the next Play cuts.
+        m.apply(Cmd::Play {
+            track: constant(48_000, 0.5),
+            start_frame: 0,
+            base: 0,
+        });
+        assert!(m.outgoing.is_none());
+        assert_eq!(m.fade_in_gain(), 1.0);
+
+        // Stop drops a fade waiting and one under way.
+        m.apply(Cmd::Crossfade(4, 2));
+        m.apply(Cmd::Stop);
+        m.apply(Cmd::Play {
+            track: constant(48_000, 0.5),
+            start_frame: 0,
+            base: 0,
+        });
+        m.apply(Cmd::Crossfade(4, 2));
+        m.apply(Cmd::Play {
+            track: constant(48_000, 0.5),
+            start_frame: 0,
+            base: 0,
+        });
+        assert!(m.outgoing.is_some());
+        m.apply(Cmd::Stop);
+        assert!(m.outgoing.is_none());
     }
 
     #[test]
