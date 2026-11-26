@@ -2147,37 +2147,53 @@ pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
     decode_part(path, rate, None).map(|(track, _)| track)
 }
 
+type SharedSlot = Arc<std::sync::OnceLock<Result<Arc<Track>, String>>>;
+type InFlight = Mutex<Vec<(std::path::PathBuf, u32, SharedSlot)>>;
+
+fn decode_shared_with(
+    in_flight: &InFlight,
+    path: &Path,
+    rate: u32,
+    mut work: impl FnMut(&Path, u32) -> Result<Arc<Track>, String>,
+) -> Result<Arc<Track>, String> {
+    loop {
+        let (slot, mine) = {
+            let mut v = in_flight.lock().unwrap();
+            match v.iter().find(|(p, r, _)| p == path && *r == rate) {
+                Some((_, _, s)) => (s.clone(), false),
+                None => {
+                    let s: SharedSlot = Arc::default();
+                    v.push((path.to_path_buf(), rate, s.clone()));
+                    (s, true)
+                }
+            }
+        };
+        let result = slot.get_or_init(|| work(path, rate)).clone();
+        if mine {
+            in_flight
+                .lock()
+                .unwrap()
+                .retain(|(_, _, s)| !Arc::ptr_eq(s, &slot));
+        }
+        // Whoever it was that was decoding it no longer wanted it. We do.
+        if !mine && result.as_ref().is_err_and(|e| e == CANCELLED) {
+            in_flight
+                .lock()
+                .unwrap()
+                .retain(|(_, _, s)| !Arc::ptr_eq(s, &slot));
+            std::thread::yield_now();
+            continue;
+        }
+        return result;
+    }
+}
+
 /// Full decode like `decode`, but when another thread is already decoding the same file at the
 /// same rate it waits for that result instead of decoding it again (starting a song while its
 /// preview is still being decoded).
 pub fn decode_shared(path: &Path, rate: u32) -> Result<Arc<Track>, String> {
-    type Slot = Arc<std::sync::OnceLock<Result<Arc<Track>, String>>>;
-    static IN_FLIGHT: Mutex<Vec<(std::path::PathBuf, u32, Slot)>> = Mutex::new(Vec::new());
-    let (slot, mine) = {
-        let mut v = IN_FLIGHT.lock().unwrap();
-        match v.iter().find(|(p, r, _)| p == path && *r == rate) {
-            Some((_, _, s)) => (s.clone(), false),
-            None => {
-                let s: Slot = Arc::default();
-                v.push((path.to_path_buf(), rate, s.clone()));
-                (s, true)
-            }
-        }
-    };
-    let result = slot
-        .get_or_init(|| decode(path, rate).map(Arc::new))
-        .clone();
-    if mine {
-        IN_FLIGHT
-            .lock()
-            .unwrap()
-            .retain(|(_, _, s)| !Arc::ptr_eq(s, &slot));
-    }
-    // Whoever it was that was decoding it no longer wanted it. We do.
-    if !mine && result.as_ref().is_err_and(|e| e == CANCELLED) {
-        return decode_shared(path, rate);
-    }
-    result
+    static IN_FLIGHT: InFlight = Mutex::new(Vec::new());
+    decode_shared_with(&IN_FLIGHT, path, rate, |p, r| decode(p, r).map(Arc::new))
 }
 
 /// `track` for a speed modifier (see `change_rate`); the same track at normal speed.
@@ -2786,5 +2802,39 @@ mod stretch_end_tests {
                 let _ = time_stretch(&samples, rate, |t| t * speed, out_frames);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod decode_shared_tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_slot_still_in_flight_does_not_spin_or_recurse() {
+        let in_flight: InFlight = Mutex::new(Vec::new());
+        let path = Path::new("song.ogg");
+        // Simulate the race where the owner resolved its slot to Err(CANCELLED) but has not
+        // yet acquired IN_FLIGHT to remove it before a waiter wakes up.
+        let cancelled: SharedSlot = Arc::default();
+        let _ = cancelled.set(Err(CANCELLED.into()));
+        in_flight
+            .lock()
+            .unwrap()
+            .push((path.to_path_buf(), 48_000, cancelled));
+
+        let mut calls = 0usize;
+        let track = decode_shared_with(&in_flight, path, 48_000, |_, _| {
+            calls += 1;
+            Ok(Arc::new(Track {
+                samples: vec![0.25, -0.25],
+                rate: 1.0,
+                stream: None,
+            }))
+        })
+        .expect("waiter should recover and decode the track itself");
+
+        assert_eq!(calls, 1);
+        assert_eq!(track.samples, vec![0.25, -0.25]);
+        assert!(in_flight.lock().unwrap().is_empty());
     }
 }

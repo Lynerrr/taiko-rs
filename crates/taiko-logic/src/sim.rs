@@ -2234,6 +2234,9 @@ impl Game {
         self.cracks.clear();
         self.crumbs.clear();
         self.next_scare = 0;
+        if let Some(tko) = &mut self.tko {
+            tko.reset();
+        }
         if let Some((_, next)) = &mut self.replay {
             *next = 0;
         }
