@@ -554,6 +554,9 @@ pub struct Config {
     pub journey_hardcore: bool,
     /// A map Journey starts by itself (non-stop, marathon) starts just before its first note.
     pub journey_skip_intro: bool,
+    /// Non-stop and Marathon show the "Up next" card in a play (towards a map's end and in its
+    /// breaks), where N says no to that map.
+    pub journey_up_next: bool,
     /// What a marathon shows between two maps: its wheel, briefly, or nothing at all.
     pub journey_gap: MarathonGap,
     /// Automatically save cached maps played in a Journey marathon to the player's library.
@@ -889,6 +892,7 @@ impl Default for Config {
             journey_flow: JourneyFlow::Off,
             journey_hardcore: false,
             journey_skip_intro: true,
+            journey_up_next: true,
             journey_gap: MarathonGap::Wheel,
             journey_marathon_save: false,
             language: crate::lang::Lang::En,
@@ -1829,6 +1833,7 @@ impl Config {
                 }
                 "journey_hardcore" => cfg.journey_hardcore = v == "true",
                 "journey_skip_intro" => cfg.journey_skip_intro = v != "false",
+                "journey_up_next" => cfg.journey_up_next = v != "false",
                 "journey_gap" => cfg.journey_gap = MarathonGap::parse(v).unwrap_or(cfg.journey_gap),
                 "journey_marathon_save" => cfg.journey_marathon_save = v == "true",
                 "ui_font" => cfg.ui_font = v.to_string(),
@@ -2503,6 +2508,10 @@ impl Config {
         out.push_str(&format!(
             "# maps Journey starts by itself start just before their first note\njourney_skip_intro = {}\n",
             self.journey_skip_intro
+        ));
+        out.push_str(&format!(
+            "# Non-stop and Marathon show the map up next in a play (N says no to it)\njourney_up_next = {}\n",
+            self.journey_up_next
         ));
         out.push_str(&format!(
             "# between a marathon's maps: wheel, short (a brief wheel) or seamless (none)\njourney_gap = {}\n",

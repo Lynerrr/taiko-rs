@@ -242,10 +242,19 @@ pub fn strain_curve(map: &[u8], rate: f64, first_object_ms: f64) -> Option<(Vec<
     let combined = (0..n)
         .map(|i| at(&s.color, i) + at(&s.rhythm, i) + at(&s.stamina, i) + at(&s.reading, i))
         .collect();
-    // lazer's first section ends at the first multiple of the section length after the first
-    // object (times divided by the clock rate).
-    let first_end = (first_object_ms / rate / SECTION_MS).ceil() * SECTION_MS;
-    Some((combined, (first_end - SECTION_MS) * rate, SECTION_MS * rate))
+    // lazer's skills start at the first difficulty object, the third hit object (the first two
+    // give no strain), their first section ending at the first multiple of the section length
+    // after it (times divided by the clock rate). Counted from the first object, a map with a
+    // sparse start had its whole curve drawn early: 1.6 s early with its third note at 2 s.
+    let (first, third) = (map.hit_objects.first()?, map.hit_objects.get(2)?);
+    let first_end = (third.start_time / rate / SECTION_MS).ceil() * SECTION_MS;
+    // The game's map times can sit apart from rosu-pp's (a .osu loads `OSU_TIMING_MS` later).
+    let shift = first_object_ms - first.start_time;
+    Some((
+        combined,
+        (first_end - SECTION_MS) * rate + shift,
+        SECTION_MS * rate,
+    ))
 }
 
 fn rate_key(rate: f64) -> u32 {
@@ -376,6 +385,36 @@ pub fn color(stars: f32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The song select graph's strain sections sit where their notes are: a note a second to
+    /// 60 s with a 4 s burst at 30 s, its third note 2 s in. Counted from the first note, the
+    /// burst's strain rose 1.6 s before its first note.
+    #[test]
+    fn the_strain_curve_lines_up_with_the_notes_after_a_sparse_start() {
+        let mut osu = String::from(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nHPDrainRate:5\nCircleSize:5\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n",
+        );
+        let mut times: Vec<i64> = (0..=60).map(|i| i * 1000).collect();
+        times.extend((0..=53).map(|i| 30_000 + i * 75));
+        times.sort_unstable();
+        times.dedup();
+        for (k, at) in times.iter().enumerate() {
+            let sound = if k % 3 == 0 { 2 } else { 0 };
+            osu.push_str(&format!("256,192,{at},1,{sound},0:0:0:0:\n"));
+        }
+        for rate in [1.0, 1.5] {
+            // As the game loads it: 23 ms later than written.
+            let shift = crate::beatmap::OSU_TIMING_MS;
+            let (peaks, start, section) = strain_curve(osu.as_bytes(), rate, shift).unwrap();
+            let at = |i: usize| start + i as f64 * section;
+            let max = peaks.iter().copied().fold(0.0, f64::max);
+            let rise = peaks.iter().position(|&p| p > max / 2.0).unwrap();
+            let top = peaks.iter().position(|&p| p == max).unwrap();
+            let burst = 30_000.0 + shift..34_000.0 + shift + section;
+            assert!(burst.contains(&at(rise)), "{rate}x rises at {}", at(rise));
+            assert!(burst.contains(&at(top)), "{rate}x peaks at {}", at(top));
+        }
+    }
 
     #[test]
     fn hard_rock_and_easy_change_the_star_rating_like_in_osu() {

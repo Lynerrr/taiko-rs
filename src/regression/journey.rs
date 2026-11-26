@@ -1538,13 +1538,14 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     );
 
     // Non-stop changes nothing asked of the server when length is explicit: the queue stays,
-    // and only Skip intros appears (not Hardcore / Between maps).
+    // and only Skip intros and the Up next card appear (not Hardcore / Between maps).
     let queued = s.journey.queue.front().map(|q| q.item.md5.clone());
     s.click(hit::Hit::JourneyFlow(JourneyFlow::Nonstop), None);
     assert_eq!(s.cfg.journey_flow, JourneyFlow::Nonstop);
     assert_eq!(s.journey.queue.front().map(|q| q.item.md5.clone()), queued);
     let c = frame(&mut s, now);
     assert!(shows(&c, "Skip intros"));
+    assert!(shows(&c, "Up next card"));
     assert!(!shows(&c, "Hardcore"));
     assert!(!shows(&c, "Between maps"));
     assert!(!shows(&c, "Save maps"));
@@ -1560,10 +1561,17 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     assert!(shows(&c, "Hardcore"));
     assert!(shows(&c, "Between maps"));
     assert!(shows(&c, "Save maps"));
+    assert!(shows(&c, "Up next card"));
+    // Rows: Focus, Length, Chill, Flow, Between maps, Skip intros, Up next card, Hardcore, Save.
+    assert!(s.cfg.journey_up_next);
+    s.click(hit::Hit::JourneySetting(6, 1), None);
+    assert!(!s.cfg.journey_up_next);
+    s.click(hit::Hit::JourneySetting(6, 1), None);
+    assert!(s.cfg.journey_up_next);
     assert!(!s.cfg.journey_marathon_save);
-    s.click(hit::Hit::JourneySetting(7, 1), None);
+    s.click(hit::Hit::JourneySetting(8, 1), None);
     assert!(s.cfg.journey_marathon_save);
-    s.click(hit::Hit::JourneySetting(7, 1), None);
+    s.click(hit::Hit::JourneySetting(8, 1), None);
     assert!(!s.cfg.journey_marathon_save);
     frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
     assert!(
@@ -1693,6 +1701,56 @@ fn nonstop_journey_goes_from_results_straight_into_the_next_map() {
     now += Duration::from_secs(10);
     frame(&mut s, now);
     assert_eq!(scene_name(&s), "Results");
+}
+
+/// Non-stop: a medal earned on the results holds the countdown until it has gone, so the next
+/// map doesn't start under it.
+#[test]
+fn nonstop_waits_for_a_medal_on_the_results() {
+    let songs = Songs::new("journey-nonstop-medal", &maps::all());
+    let mut cfg = harness::config();
+    cfg.journey_flow = JourneyFlow::Nonstop;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let step = s.journey.step;
+
+    s.journey.in_play = true;
+    let mut r = ui::Results::new(
+        s.library[0].label(),
+        game::Stats::default(),
+        game::Windows::new(5.0),
+    );
+    r.shown = now - Duration::from_secs(1);
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
+    s.unlock.add(vec![online::MedalNote::default()]);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert!(s.unlock.showing(), "the medal is up on the results");
+
+    // Long past the countdown: still the results while the medal is up.
+    now += Duration::from_secs(10);
+    frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Results");
+    assert_eq!(s.journey.step, step);
+
+    // The medal gone, the countdown starts over from its whole length.
+    s.unlock = Default::default();
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Results");
+    assert!(c.texts.iter().any(|(_, t)| t.starts_with("Next map in 5")));
+    now += Duration::from_secs(4);
+    frame(&mut s, now);
+    assert_eq!(s.journey.step, step, "not a moment early");
+    now += Duration::from_secs(1);
+    frame(&mut s, now);
+    assert_eq!(s.journey.step, step + 1);
 }
 
 /// Non-stop shows what's up next near a map's end and in its breaks, and N in a play says no
@@ -2210,6 +2268,38 @@ fn marathon_combo_chip_stays_visible_at_zero_and_blind_n_does_not_skip() {
         assert_eq!(
             s.journey.queue[1].item.md5, upcoming,
             "blind N mid-map must not veto an unseen upcoming map"
+        );
+    }
+}
+
+/// The "Up next" card is a setting of its own: off, a play near its end shows no card, and N
+/// there no longer says no to the map up next.
+#[test]
+fn the_up_next_card_can_be_turned_off() {
+    for on in [true, false] {
+        let mut cfg = harness::config();
+        cfg.journey_up_next = on;
+        let (mut s, _songs, mut now) = marathon(&format!("journey-up-next-{on}"), cfg);
+        assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+        let upcoming = s.journey.queue[1].item.md5.clone();
+        // A second before the last note: the end is near.
+        let g = s.play.as_deref_mut().unwrap();
+        let to = g.map().notes.last().unwrap().time - 1000.0;
+        g.seek(to, None, 0.0);
+        now += Duration::from_millis(16);
+        let c = frame(&mut s, now);
+        assert_eq!(scene_name(&s), "Play");
+        let g = harness::game(&s).unwrap();
+        assert!(crate::screens::journey::up_next_due(
+            &g.map().notes,
+            g.time()
+        ));
+        assert_eq!(shows(&c, "UP NEXT"), on, "the card, with the setting {on}");
+        press(&mut s, KeyCode::KeyN, now);
+        assert_eq!(
+            s.journey.queue[1].item.md5 != upcoming,
+            on,
+            "N swaps the map up next only with the card shown"
         );
     }
 }
