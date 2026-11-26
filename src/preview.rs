@@ -2286,8 +2286,8 @@ impl Preview {
             Canvas::text_height(9.0),
             Canvas::text_height(8.0),
         );
-        let title = wrap(12.0, iw - self.title_room, &e.meta.title, 2);
-        let artist = wrap(9.0, iw, &e.meta.artist, 2);
+        let title = wrap(12.0, iw - self.title_room, e.title(), 2);
+        let artist = wrap(9.0, iw, e.artist(), 2);
         // The star pill is about this wide; the difficulty name wraps beside it.
         let pill_w = Canvas::text_width(9.0, "0.00") + 9.0 * 1.6 + 6.0;
         let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
@@ -3038,15 +3038,15 @@ impl Bare {
 
     fn new(e: &Entry, iw: f32, left_out: bool, sim: bool, compact: bool) -> Bare {
         use crate::style::text::{BODY, HEADING, TITLE};
-        let (title_size, title, artist_size) = if Canvas::text_width(TITLE, &e.meta.title) <= iw {
-            (TITLE, vec![e.meta.title.clone()], HEADING)
+        let (title_size, title, artist_size) = if Canvas::text_width(TITLE, e.title()) <= iw {
+            (TITLE, vec![e.title().to_string()], HEADING)
         } else if compact {
             // Compact, the title keeps to one line, a step smaller and cut short if need be.
-            (HEADING, vec![Canvas::fit(HEADING, iw, &e.meta.title)], BODY)
+            (HEADING, vec![Canvas::fit(HEADING, iw, e.title())], BODY)
         } else {
-            (HEADING, wrap(HEADING, iw, &e.meta.title, 2), BODY)
+            (HEADING, wrap(HEADING, iw, e.title(), 2), BODY)
         };
-        let artist = Canvas::fit(artist_size, iw, &e.meta.artist);
+        let artist = Canvas::fit(artist_size, iw, e.artist());
         if compact {
             return Bare {
                 title_size,

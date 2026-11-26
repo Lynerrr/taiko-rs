@@ -4067,3 +4067,30 @@ fn a_rows_letter_and_the_board_wait_for_the_maps_hash_worked_out_off_the_frame()
     );
     assert_eq!(s.grades.get(hash), Some("SS"));
 }
+
+/// Song names show romanised, as osu! lists them, and in their own script with Settings >
+/// Original names. Russian ones used to show in Cyrillic whatever the setting, while Japanese
+/// ones always showed romanised.
+#[test]
+fn song_names_show_romanised_unless_original_names_is_on() {
+    let songs = Songs::new("original-names", &maps::all()[..1]);
+    let mut entries = songs.entries();
+    for e in &mut entries {
+        e.meta.title_unicode = "только звёзды".into();
+        e.meta.artist_unicode = "かめりあ".into();
+    }
+    let title = entries[0].meta.title.clone();
+    let mut s = state_with(harness::config(), entries);
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    assert!(!s.cfg.original_names, "off by default");
+    let c = harness::frame(&mut s, now);
+    assert!(shows(&c, &title));
+    assert!(!shows(&c, "звёзды") && !shows(&c, "かめりあ"));
+
+    s.cfg.original_names = true;
+    now += Duration::from_millis(16);
+    let c = harness::frame(&mut s, now);
+    assert!(shows(&c, "только звёзды"), "the title in its own script");
+    assert!(shows(&c, "かめりあ"), "the artist in its own script");
+}

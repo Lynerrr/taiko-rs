@@ -338,6 +338,9 @@ pub struct Text {
     creator: String,
     pub artist: String,
     pub title: String,
+    /// The artist and title in their own script, found as well as the romanised ones.
+    artist_unicode: String,
+    title_unicode: String,
     version: String,
     tags: String,
     source: String,
@@ -350,6 +353,8 @@ impl Text {
             creator: meta.creator.to_lowercase(),
             artist: meta.artist.to_lowercase(),
             title: meta.title.to_lowercase(),
+            artist_unicode: meta.artist_unicode.to_lowercase(),
+            title_unicode: meta.title_unicode.to_lowercase(),
             version: meta.version.to_lowercase(),
             tags: meta.tags.to_lowercase(),
             source: meta.source.to_lowercase(),
@@ -445,6 +450,8 @@ impl Query {
         let words = self.words.iter().all(|w| {
             let w = w.as_str();
             text.label.contains(w)
+                || text.artist_unicode.contains(w)
+                || text.title_unicode.contains(w)
                 || text.creator.contains(w)
                 || text.tags.contains(w)
                 || text.source.contains(w)
@@ -476,15 +483,17 @@ impl Query {
                     negated,
                     value,
                 } => {
-                    let have = match field {
-                        Field::Creator => &text.creator,
-                        Field::Artist => &text.artist,
-                        Field::Title => &text.title,
-                        Field::Version => &text.version,
-                        Field::Tags => &text.tags,
-                        Field::Source => &text.source,
+                    let (have, also) = match field {
+                        Field::Creator => (&text.creator, None),
+                        Field::Artist => (&text.artist, Some(&text.artist_unicode)),
+                        Field::Title => (&text.title, Some(&text.title_unicode)),
+                        Field::Version => (&text.version, None),
+                        Field::Tags => (&text.tags, None),
+                        Field::Source => (&text.source, None),
                     };
-                    have.contains(value.as_str()) != *negated
+                    let v = value.as_str();
+                    (have.contains(v) || also.is_some_and(|a| !a.is_empty() && a.contains(v)))
+                        != *negated
                 }
                 Cond::Status { op, codes } => match op {
                     Op::Eq => codes.contains(&facts.status),
@@ -777,6 +786,30 @@ mod tests {
         let m: Meta = serde_json::from_str(old).unwrap();
         assert!(m.tags.is_empty() && m.source.is_empty());
         assert!(Query::parse("7").matches(&m, "A - T [V]", &facts()));
+    }
+
+    /// A map is found by its names in their own script as well as by the romanised ones.
+    #[test]
+    fn names_in_their_own_script_are_found_too() {
+        let m = Meta {
+            title: "Tolko zvyozdy nad nami".into(),
+            artist: "hxvvxn".into(),
+            title_unicode: "только звёзды над нами".into(),
+            artist_unicode: "хввхн".into(),
+            ..meta()
+        };
+        let label = "hxvvxn - Tolko zvyozdy nad nami [Oni]";
+        for q in [
+            "звёзды",
+            "tolko",
+            "title=звёзды",
+            "title=tolko",
+            "artist=хввхн",
+        ] {
+            assert!(Query::parse(q).matches(&m, label, &facts()), "{q}");
+        }
+        assert!(!Query::parse("title!=звёзды").matches(&m, label, &facts()));
+        assert!(!Query::parse("artist=звёзды").matches(&m, label, &facts()));
     }
 
     #[test]

@@ -607,6 +607,8 @@ pub struct Config {
     pub show_converts: bool,
     /// Song select lists songs under headings (`ui::Select::headings`).
     pub song_headings: bool,
+    /// Songs' titles and artists in their own script (`TitleUnicode`), else romanised.
+    pub original_names: bool,
     /// Song select in the main menu's look shows the library's counts by the search row and the
     /// device line at the bottom (as the classic look always does).
     pub select_info: bool,
@@ -912,6 +914,7 @@ impl Default for Config {
             wheel_resizes_playfield: false,
             show_converts: false,
             song_headings: false,
+            original_names: false,
             select_info: false,
             card_fade: CardFade::Off,
             custom_move_asked: false,
@@ -1835,6 +1838,7 @@ impl Config {
                 "custom_move_asked" => cfg.custom_move_asked = v == "true",
                 "show_converts" => cfg.show_converts = v == "true",
                 "song_headings" => cfg.song_headings = v == "true",
+                "original_names" => cfg.original_names = v == "true",
                 "select_info" => cfg.select_info = v == "true",
                 "card_fade" => cfg.card_fade = CardFade::parse(v).unwrap_or(cfg.card_fade),
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
@@ -2382,6 +2386,10 @@ impl Config {
             self.show_converts
         ));
         out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
+        out.push_str(&format!(
+            "# songs' titles and artists in their own script (false: romanised)\noriginal_names = {}\n",
+            self.original_names
+        ));
         out.push_str(&format!("# song select (main menu look) shows the library's counts and the device line\nselect_info = {}\n", self.select_info));
         out.push_str(&format!(
             "# song select's cards: their picture's colour fades to grey: off, right (towards the right) or left\ncard_fade = {}\n",

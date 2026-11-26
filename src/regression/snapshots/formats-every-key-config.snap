@@ -176,6 +176,8 @@ custom_move_asked = true
 show_converts = true
 # song select groups songs under headings (false: one list, by difficulty each difficulty on its own)
 song_headings = true
+# songs' titles and artists in their own script (false: romanised)
+original_names = true
 # song select (main menu look) shows the library's counts and the device line
 select_info = true
 # song select's cards: their picture's colour fades to grey: off, right (towards the right) or left

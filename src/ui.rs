@@ -3458,7 +3458,7 @@ impl Select {
                     };
                     let ladder_w: f32 = ladder.iter().map(|l| l.2 + 2.0).sum();
                     let title_room = (rw - 110.0).min(rw - 12.0 - ladder_w - 28.0);
-                    let title = fit(e.meta.title.clone(), 10.0, title_room);
+                    let title = fit(e.title().to_string(), 10.0, title_room);
                     if epic {
                         crate::epic::stripe(c, x0, y + 3.0, rh - 10.0, 1.0);
                         crate::epic::text(c, tx, y + 6.0 * sk, 10.0, &title, 1.0);
@@ -3470,12 +3470,12 @@ impl Select {
                     }
                     // A row per difficulty: which one it is, rather than who mapped the set.
                     let sub = if one {
-                        format!("{}  |  {}", e.meta.artist, e.meta.version)
+                        format!("{}  |  {}", e.artist(), e.meta.version)
                     } else if e.meta.creator.trim().is_empty() {
                         // No mapper given (a TJA chart without MAKER): no empty "mapped by".
-                        e.meta.artist.clone()
+                        e.artist().to_string()
                     } else {
-                        format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator)
+                        format!("{}  |  mapped by {}", e.artist(), e.meta.creator)
                     };
                     // Centred at y + 23.5, in what's left between the title (taller on a text
                     // grid) and the bottom of the box, so the two never touch.
@@ -4843,9 +4843,9 @@ impl Select {
         // The map's name, once for every row under it.
         let e = &library[i];
         let (title, sub) = if m.header {
-            (e.meta.title.clone(), e.meta.artist.clone())
+            (e.title().to_string(), e.artist().to_string())
         } else {
-            (e.meta.title.clone(), format!("[{}]", e.meta.version))
+            (e.title().to_string(), format!("[{}]", e.meta.version))
         };
         let tw = bw - 24.0;
         let top = y + if phone { 8.0 } else { 6.0 };

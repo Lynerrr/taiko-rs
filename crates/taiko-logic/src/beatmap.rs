@@ -140,8 +140,17 @@ impl ControlPoint {
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Meta {
+    /// The title and artist in plain Latin letters (`Title`, `Artist`): what lists, sorts and
+    /// names the map, whatever the setting for names in their own script.
     pub title: String,
     pub artist: String,
+    /// The title and artist in their own script (`TitleUnicode`, `ArtistUnicode`), shown
+    /// instead with Settings > Original names. Empty when the map has none, and in a cache
+    /// from before they were kept.
+    #[serde(default)]
+    pub title_unicode: String,
+    #[serde(default)]
+    pub artist_unicode: String,
     pub creator: String,
     pub version: String,
     pub audio_file: String,
@@ -304,11 +313,6 @@ pub fn map_hash(bytes: &[u8]) -> u64 {
 fn kv(line: &str) -> Option<(&str, &str)> {
     let (k, v) = line.split_once(':')?;
     Some((k.trim(), v.trim()))
-}
-
-/// Has Cyrillic and nothing the font can't draw.
-fn cyrillic(s: &str) -> bool {
-    s.chars().any(|c| matches!(c, 'А'..='я' | 'Ё' | 'ё')) && s.chars().all(crate::font::drawable)
 }
 
 fn num<T: std::str::FromStr>(s: Option<&str>) -> Option<T> {
@@ -563,9 +567,8 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
             "Metadata" => match kv(trimmed) {
                 Some(("Title", v)) => meta.title = v.to_owned(),
                 Some(("Artist", v)) => meta.artist = v.to_owned(),
-                // Russian titles in Cyrillic (the font draws it); other scripts stay romanised.
-                Some(("TitleUnicode", v)) if cyrillic(v) => meta.title = v.to_owned(),
-                Some(("ArtistUnicode", v)) if cyrillic(v) => meta.artist = v.to_owned(),
+                Some(("TitleUnicode", v)) => meta.title_unicode = v.to_owned(),
+                Some(("ArtistUnicode", v)) => meta.artist_unicode = v.to_owned(),
                 Some(("Creator", v)) => meta.creator = v.to_owned(),
                 Some(("Version", v)) => meta.version = v.to_owned(),
                 Some(("Tags", v)) => {
@@ -1049,6 +1052,19 @@ SliderTickRate:1
 
     pub(crate) fn parse(text: &str) -> Beatmap {
         parse_raw(text)
+    }
+
+    /// The romanised names and the ones in their own script are kept apart, whatever the script.
+    #[test]
+    fn names_in_their_own_script_are_kept_apart() {
+        let text = "osu file format v14\n\n[Metadata]\nTitle:Tolko zvyozdy\nTitleUnicode:только звёзды\nArtist:Kameria\nArtistUnicode:かめりあ\n";
+        let m = read_meta(text);
+        assert_eq!(
+            (m.title.as_str(), m.artist.as_str()),
+            ("Tolko zvyozdy", "Kameria")
+        );
+        assert_eq!(m.title_unicode, "только звёзды");
+        assert_eq!(m.artist_unicode, "かめりあ");
     }
 
     #[test]

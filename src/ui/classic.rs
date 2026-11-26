@@ -628,7 +628,7 @@ impl Select {
                     };
                     let ladder_w: f32 = ladder.iter().map(|l| l.2 + 2.0).sum();
                     let title_room = (lw - 110.0).min(lw - 12.0 - ladder_w - 28.0);
-                    let title = fit(e.meta.title.clone(), 10.0, title_room);
+                    let title = fit(e.title().to_string(), 10.0, title_room);
                     if epic {
                         crate::epic::stripe(c, 24.0, y + 3.0, rh - 10.0, 1.0);
                         crate::epic::text(c, 44.0, y + 6.0, 10.0, &title, 1.0);
@@ -640,9 +640,9 @@ impl Select {
                     }
                     // A row per difficulty: which one it is, rather than who mapped the set.
                     let sub = if one {
-                        format!("{}  |  {}", e.meta.artist, e.meta.version)
+                        format!("{}  |  {}", e.artist(), e.meta.version)
                     } else {
-                        format!("{}  |  mapped by {}", e.meta.artist, e.meta.creator)
+                        format!("{}  |  mapped by {}", e.artist(), e.meta.creator)
                     };
                     // Centred at y + 23.5, in what's left between the title (taller on a text
                     // grid) and the bottom of the box, so the two never touch.

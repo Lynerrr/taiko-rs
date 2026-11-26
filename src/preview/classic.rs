@@ -88,8 +88,8 @@ impl Preview {
             Canvas::text_height(9.0),
             Canvas::text_height(8.0),
         );
-        let title = wrap(12.0, iw - self.title_room, &e.meta.title, 2);
-        let artist = wrap(9.0, iw, &e.meta.artist, 2);
+        let title = wrap(12.0, iw - self.title_room, e.title(), 2);
+        let artist = wrap(9.0, iw, e.artist(), 2);
         // The star pill is about this wide; the difficulty name wraps beside it.
         let pill_w = Canvas::text_width(9.0, "0.00") + 9.0 * 1.6 + 6.0;
         let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
