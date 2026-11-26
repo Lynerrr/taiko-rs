@@ -248,6 +248,8 @@ journey_flow = marathon
 journey_hardcore = true
 # maps Journey starts by itself start just before their first note
 journey_skip_intro = false
+# between a marathon's maps: wheel, short (a brief wheel) or seamless (none)
+journey_gap = seamless
 # folder of TJA charts (empty = Tja beside Custom)
 tja_folder = /games/tja
 # extra song folders / .osz files, one per line

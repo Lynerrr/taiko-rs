@@ -3,7 +3,7 @@
 //! in the middle, and a Song-Select-style action bar along the bottom.
 
 use super::screen::{Frame, Key, Screen};
-use crate::config::JourneyFlow;
+use crate::config::{JourneyFlow, MarathonGap};
 use crate::journey::{Gate, LEVEL_CHOICES, MapSource, PastOutcome};
 use crate::*;
 
@@ -205,8 +205,9 @@ impl Screen for JourneyScreen {
     }
 }
 
-/// Rows of Journey's settings panel: focus, chill, flow, hardcore, skipping intros.
-pub(crate) const SETTINGS_ROWS: usize = 5;
+/// Rows of Journey's settings panel: focus, chill, flow, hardcore, skipping intros, and what a
+/// marathon shows between maps.
+pub(crate) const SETTINGS_ROWS: usize = 6;
 
 /// Journey's settings panel (its gear): what kind of maps to pick, how hard to go, and how to go
 /// from map to map.
@@ -275,6 +276,27 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
                 "自動で始まる譜面は最初のノーツの直前から始まります。",
                 "Карты, что стартуют сами (без перерывов, марафон), начинаются прямо перед первой нотой."
             ),
+        ),
+        (
+            tr!("Between maps", "譜面の間", "Между картами"),
+            state.cfg.journey_gap.name(),
+            match state.cfg.journey_gap {
+                MarathonGap::Wheel => tr!(
+                    "Marathon: the wheel of maps turns for a couple of seconds.",
+                    "マラソン: 譜面のホイールが数秒回ります。",
+                    "Марафон: пару секунд крутится колесо карт."
+                ),
+                MarathonGap::Short => tr!(
+                    "Marathon: the wheel, for under a second.",
+                    "マラソン: ホイールは1秒未満。",
+                    "Марафон: колесо меньше секунды."
+                ),
+                MarathonGap::Seamless => tr!(
+                    "Marathon: no wheel. The next map loads during this one and starts as it ends.",
+                    "マラソン: ホイールなし。次の譜面はプレイ中に読み込まれ、終わるとすぐ始まります。",
+                    "Марафон: без колеса. Следующая карта грузится заранее и стартует сразу."
+                ),
+            },
         ),
     ];
 
@@ -1932,7 +1954,8 @@ impl State {
             1 => self.cfg.journey_chill = !self.cfg.journey_chill,
             2 => self.cfg.journey_flow = self.cfg.journey_flow.step(dir),
             3 => self.cfg.journey_hardcore = !self.cfg.journey_hardcore,
-            _ => self.cfg.journey_skip_intro = !self.cfg.journey_skip_intro,
+            4 => self.cfg.journey_skip_intro = !self.cfg.journey_skip_intro,
+            _ => self.cfg.journey_gap = self.cfg.journey_gap.step(dir),
         }
         self.cfg.save();
         if self

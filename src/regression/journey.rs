@@ -1962,3 +1962,97 @@ fn a_marathon_shows_its_combo_on_the_wheel_and_in_the_next_map() {
     s.click(hit::Hit::Key(KeyCode::Escape), None);
     assert!(s.journey.marathon.as_ref().unwrap().ended.is_some());
 }
+
+/// Plays the map up through (every note hit) until the marathon has counted it, the next map
+/// loading meanwhile (given the moment its thread needs). `before_end`: done once, 10 s before
+/// the last note.
+fn play_marathon_map(s: &mut State, now: &mut Instant, mut before_end: impl FnMut(&mut State)) {
+    let map = harness::game(s).unwrap().map().clone();
+    let last = map.notes.last().map_or(0.0, |n| n.end_time.max(n.time));
+    let presses = maps::presses(&map, maps::Player::Perfect);
+    let keys = s.cfg.keys;
+    let played = s.journey.marathon.as_ref().unwrap().played();
+    let (mut next, mut waited, mut done) = (0, false, false);
+    for _ in 0..200_000 {
+        if s.journey.marathon.as_ref().unwrap().played() > played {
+            return;
+        }
+        let horizon = *now + Duration::from_millis(16);
+        while let Some(&(t, k)) = presses.get(next) {
+            let at = instant_of(s, *now, t);
+            if at > horizon {
+                break;
+            }
+            press(s, keys[k as usize], at.max(*now));
+            next += 1;
+        }
+        if !waited && s.journey.marathon.as_ref().unwrap().preload.is_some() {
+            waited = true;
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        if !done && harness::game(s).is_some_and(|g| g.time() >= last - 10_000.0) {
+            done = true;
+            before_end(s);
+        }
+        *now = horizon;
+        frame(s, *now);
+    }
+    panic!("the map never ended");
+}
+
+/// Seamless: the next map loads during the last one and starts on its last note, with no wheel
+/// in between, past its intro.
+#[test]
+fn a_seamless_marathon_goes_from_the_last_note_straight_into_the_next_map() {
+    let mut cfg = harness::config();
+    cfg.journey_gap = crate::config::MarathonGap::Seamless;
+    let (mut s, _songs, mut now) = marathon("journey-marathon-seamless", cfg);
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let first = s.journey.current().unwrap().item.md5.clone();
+    let upcoming = s.journey.queue[1].item.md5.clone();
+    play_marathon_map(&mut s, &mut now, |s| {
+        assert!(
+            s.journey.marathon.as_ref().unwrap().preload.is_some(),
+            "the next map loads before this one ends"
+        );
+    });
+    assert_eq!(scene_name(&s), "Play", "no wheel");
+    assert_eq!(s.journey.current().unwrap().item.md5, upcoming);
+    assert_ne!(upcoming, first);
+    let m = s.journey.marathon.as_ref().unwrap();
+    assert_eq!((m.passed, m.combo > 0), (1, true));
+    assert!(m.preload.is_none());
+    assert!(!harness::game(&s).unwrap().can_skip(), "past its intro");
+}
+
+/// A map loaded ahead of time that is no longer up next (N said no to it) isn't played: the
+/// wheel comes up and loads the one that is.
+#[test]
+fn a_seamless_marathon_never_starts_a_map_no_longer_up_next() {
+    let mut cfg = harness::config();
+    cfg.journey_gap = crate::config::MarathonGap::Seamless;
+    let (mut s, _songs, mut now) = marathon("journey-marathon-seamless-n", cfg);
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let mut instead = String::new();
+    play_marathon_map(&mut s, &mut now, |s| {
+        let said_no = s.journey.queue[1].item.md5.clone();
+        press(s, KeyCode::KeyN, Instant::now());
+        instead = s.journey.queue[1].item.md5.clone();
+        assert_ne!(instead, said_no);
+    });
+    assert_eq!(scene_name(&s), "Marathon", "the wheel loads the one up now");
+    assert_eq!(s.journey.current().unwrap().item.md5, instead);
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    assert_eq!(s.journey.current().unwrap().item.md5, instead);
+}
+
+/// The time between maps is a setting: Short turns the wheel for under a second.
+#[test]
+fn a_short_marathon_wheel_is_brief() {
+    let mut cfg = harness::config();
+    cfg.journey_gap = crate::config::MarathonGap::Short;
+    let (mut s, _songs, mut now) = marathon("journey-marathon-short", cfg);
+    let start = now;
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    assert!(now.duration_since(start) < Duration::from_millis(1500));
+}

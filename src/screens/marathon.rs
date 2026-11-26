@@ -3,13 +3,32 @@
 //! to.
 
 use super::screen::{Frame, Key, Screen};
+use crate::config::MarathonGap;
 use crate::journey::{
-    MapSource, Marathon, MarathonEnd, MarathonOutcome, MarathonPlay, PastOutcome,
+    MapSource, Marathon, MarathonEnd, MarathonOutcome, MarathonPlay, PastOutcome, Preload,
 };
 use crate::*;
 
 /// The shortest time between two maps: the wheel turns and the next map's name can be read.
 pub(crate) const MARATHON_GAP: Duration = Duration::from_millis(2200);
+/// The time between two maps with a short wheel (`MarathonGap::Short`).
+const SHORT_GAP: Duration = Duration::from_millis(800);
+/// How long before the last note of a map the next one starts loading.
+const PRELOAD_LEAD_MS: f64 = 30_000.0;
+/// How long the last map's song takes to fade out under the next one's, and the next one's to
+/// fade in.
+const CROSSFADE_OUT_MS: f64 = 1500.0;
+const CROSSFADE_IN_MS: f64 = 400.0;
+
+/// The time between two maps: none when seamless, the next map starting once it has loaded.
+fn gap(cfg: &Config) -> Duration {
+    match cfg.journey_gap {
+        MarathonGap::Wheel => MARATHON_GAP,
+        MarathonGap::Short => SHORT_GAP,
+        MarathonGap::Seamless => Duration::ZERO,
+    }
+}
+
 /// How long the wheel takes to turn by a map.
 const WHEEL_MS: f32 = 650.0;
 /// How long the star rating takes to roll from the last map's to the next one's.
@@ -150,7 +169,14 @@ impl Screen for MarathonScreen {
             if state.journey.current().is_some() {
                 if let Some(entry) = state.journey_current_entry(true) {
                     state.journey.in_play = true;
-                    let (rx, _) = state.begin_load(entry, None, true);
+                    let rx = match state.marathon_take_preload(entry) {
+                        Some(p) => {
+                            state.play_begins(entry, None, true);
+                            state.pending_mods = p.mods;
+                            p.job
+                        }
+                        None => state.begin_load(entry, None, true).0,
+                    };
                     self.load = Some((rx, entry));
                 }
             } else if state.journey.pool_exhausted && state.journey.fetching.is_none() {
@@ -164,7 +190,7 @@ impl Screen for MarathonScreen {
         let since = now.saturating_duration_since(entered);
         draw_wheel(state, canvas, since, self.held, self.load.is_some());
 
-        let due = self.go_now || since >= MARATHON_GAP;
+        let due = self.go_now || since >= gap(&state.cfg);
         if due && !self.held {
             let Some((rx, entry)) = &mut self.load else {
                 return None;
@@ -172,10 +198,7 @@ impl Screen for MarathonScreen {
             let entry = *entry;
             match rx.poll_ended() {
                 Some(Some(Ok((map, track)))) => {
-                    let skip_intro = state.cfg.journey_skip_intro;
-                    return Some(super::loading::start_game(
-                        state, entry, None, skip_intro, map, track,
-                    ));
+                    return Some(state.marathon_start_map(entry, map, track));
                 }
                 Some(Some(Err(e))) => {
                     eprintln!(
@@ -722,7 +745,99 @@ impl State {
                 m.end(MarathonEnd::Hardcore, Instant::now());
             }
         }
+        if self.cfg.journey_gap == MarathonGap::Seamless
+            && let Some(next) = self.marathon_seamless_next()
+        {
+            return next;
+        }
         MarathonScreen::scene()
+    }
+
+    /// The next map, already loaded when the last one ends: it starts at once (seamless).
+    /// None when it isn't ready, for the wheel to wait for it.
+    fn marathon_seamless_next(&mut self) -> Option<Scene> {
+        if self.journey.marathon.as_ref()?.ended.is_some() {
+            return None;
+        }
+        let entry = self.journey_current_entry(true)?;
+        let mut p = self.marathon_take_preload(entry)?;
+        match p.job.poll_ended() {
+            Some(Some(Ok((map, track)))) => {
+                self.journey.in_play = true;
+                self.play_begins(entry, None, true);
+                self.pending_mods = p.mods;
+                Some(self.marathon_start_map(entry, map, track))
+            }
+            // Still loading: the wheel waits for it.
+            None => {
+                if let Some(m) = &mut self.journey.marathon {
+                    m.preload = Some(p);
+                }
+                None
+            }
+            // It can't be: the wheel loads it again, and says so.
+            Some(_) => None,
+        }
+    }
+
+    /// A marathon's next map, loaded: it starts (past its intro, if so set), its song fading in
+    /// over the last one's.
+    fn marathon_start_map(&mut self, entry: usize, map: Beatmap, track: Arc<Track>) -> Scene {
+        if let Some(a) = &self.audio {
+            a.crossfade_next(CROSSFADE_OUT_MS, CROSSFADE_IN_MS);
+        }
+        let skip_intro = self.cfg.journey_skip_intro;
+        super::loading::start_game(self, entry, None, skip_intro, map, track)
+    }
+
+    /// In a marathon's play at map time `time`, its last note at `last_note`: once the end is
+    /// near, the map up next starts loading, to start the moment this one ends.
+    pub(crate) fn marathon_preload(&mut self, time: f64, last_note: f64) {
+        if time < last_note - PRELOAD_LEAD_MS {
+            return;
+        }
+        if self
+            .journey
+            .marathon
+            .as_ref()
+            .is_none_or(|m| m.preload.is_some() || m.ended.is_some())
+        {
+            return;
+        }
+        let Some(path) = self.marathon_upcoming_path() else {
+            return;
+        };
+        let mods = self.cfg.mods;
+        let rate = self.cfg.rate;
+        let speed = mods.speed(rate, self.cfg.rate_keep_pitch);
+        let job = self.spawn_loader_at(path.clone(), speed, mods, None, true, None);
+        if let Some(m) = &mut self.journey.marathon {
+            m.preload = Some(Preload {
+                path,
+                mods,
+                rate,
+                job,
+            });
+        }
+    }
+
+    /// The chart of the map up after the one played now, when it's here to be read.
+    fn marathon_upcoming_path(&self) -> Option<std::path::PathBuf> {
+        let q = self.journey.queue.get(1)?;
+        match &q.source {
+            MapSource::Local(path) | MapSource::Saved(path) => Some(path.clone()),
+            MapSource::Cached { entry, .. } => Some(entry.path.clone()).filter(|p| p.is_file()),
+            _ => None,
+        }
+    }
+
+    /// The map loaded ahead of time, if it is `entry`'s, for the mods and speed set now.
+    fn marathon_take_preload(&mut self, entry: usize) -> Option<Preload> {
+        let p = self.journey.marathon.as_mut()?.preload.take()?;
+        let same = self.library.get(entry).is_some_and(|e| e.path == p.path)
+            && p.mods == self.cfg.mods
+            && p.rate == self.cfg.rate;
+        same.then_some(p)
     }
 
     /// The pause menu's Skip: the map being played is left (no score), the server hears of it

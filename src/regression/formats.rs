@@ -604,6 +604,7 @@ journey_chill = true
 journey_flow = marathon
 journey_hardcore = true
 journey_skip_intro = false
+journey_gap = seamless
 tja_folder = /games/tja
 songs = /games/more-songs
 songs = /games/one.osz
