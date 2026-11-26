@@ -9672,6 +9672,7 @@ impl State {
             .and_then(|r| self.library.get(r.entry))
             .map(|e| e.path.clone());
         self.stars.clear();
+        self.preview.forget();
         eprintln!("found {} playable difficulties", library.len());
         self.library = library;
         if let Some(r) = self.scene.screen_mut::<ResultsScreen>().or_else(|| {

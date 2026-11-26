@@ -125,8 +125,9 @@ impl State {
         if changed.is_empty() {
             return;
         }
-        // Ratings are kept by library index: the old ones would stay with the new map.
+        // Ratings and preview state are kept by library index: old ones would stay with the new map.
         self.stars.clear();
+        self.preview.forget();
         if let Some(info) = &self.mapinfo {
             info.extend(changed);
             self.mapinfo_sorted = false;
@@ -355,6 +356,49 @@ mod tests {
         assert!(
             Hotkey::ALL[first(&[Place::Select])..first(&[Place::Results])]
                 .contains(&Hotkey::RefreshSongs)
+        );
+    }
+
+    #[test]
+    fn preview_is_forgotten_on_use_library_and_in_place_rewrites() {
+        let (mut s, songs) = menus("preview-forget");
+        let map = put(&songs, "1 A", 5);
+        s.refresh_library(false);
+        settle(&mut s);
+
+        let now = Instant::now();
+        s.preview
+            .update(now, &s.library, Some(0), None, true, true, 0.0, (1.0, false));
+        assert_eq!(s.preview.requested(), Some(0));
+
+        // In-place rewrite (e.g. saved in the editor): preview must forget the stale map.
+        std::fs::write(&map, osu("1 A edited", 9)).unwrap();
+        s.left_editor_folder(map.parent().unwrap());
+        assert_eq!(
+            s.preview.requested(),
+            None,
+            "maps_rewritten must forget cached preview"
+        );
+        settle(&mut s);
+
+        // Reload preview at index 0, then replace library via use_library: preview must forget it.
+        s.preview.update(
+            now + Duration::from_secs(1),
+            &s.library,
+            Some(0),
+            None,
+            true,
+            true,
+            0.0,
+            (1.0, false),
+        );
+        assert_eq!(s.preview.requested(), Some(0));
+        let fresh = vec![crate::layout_tests::entry(1, 0, false)];
+        s.use_library(fresh, None);
+        assert_eq!(
+            s.preview.requested(),
+            None,
+            "use_library must forget cached preview"
         );
     }
 }
