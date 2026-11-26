@@ -224,6 +224,12 @@ songs_folder =
 journey_save_to = own
 # automatically save a Journey map to the library when you like it
 journey_save_on_like = true
+# the kind of maps Journey picks: any, streams, long-streams, tech or sv
+journey_focus = any
+# Journey plays it easy: maps below your level, no stretch maps
+journey_chill = false
+# Journey goes from one map straight into the next
+journey_nonstop = false
 # folder of TJA charts (empty = Tja beside Custom)
 tja_folder =
 # extra song folders / .osz files, one per line

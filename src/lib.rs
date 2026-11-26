@@ -15963,6 +15963,8 @@ impl State {
             Hit::JourneyLogin(register) => self.journey_login(register),
             Hit::JourneyOffline => self.journey_go_offline(),
             Hit::JourneyRetry => self.journey_retry(),
+            Hit::JourneySettings => self.journey_toggle_settings(),
+            Hit::JourneySetting(row, dir) => self.journey_change_setting(row, dir),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
                 self.toggle_mod(mods::ALL[i]);

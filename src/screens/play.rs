@@ -421,6 +421,10 @@ impl Screen for PlayScreen {
             }
             KeyCode::Backquote => state.hold_retry(),
             KeyCode::KeyR if state.modifiers_ctrl => state.restart_map(),
+            // Journey's Non-stop: no to the map up next.
+            KeyCode::KeyN if state.playing_journey() && state.cfg.journey_nonstop => {
+                state.journey_skip_upcoming()
+            }
             _ => {}
         }
     }
@@ -480,6 +484,16 @@ impl Screen for PlayScreen {
             },
         );
         game.draw_hud_with_intro(canvas, state.touch_used || mobile::active());
+        if state.journey.active
+            && state.journey.in_play
+            && state.cfg.journey_nonstop
+            && game.replay().is_none()
+            && game.paused().is_none()
+            && crate::screens::journey::up_next_due(&game.map().notes, game.time())
+        {
+            let next = state.journey.queue.get(1).map(|q| &q.item);
+            crate::screens::journey::draw_up_next(canvas, next);
+        }
         if game.replay().is_none()
             && game.paused().is_none()
             && !frame.hidden.has(hud::Part::Spectators)

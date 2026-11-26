@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use crate::config::{self, JourneySaveTo};
+use crate::config::{self, JourneyFocus, JourneySaveTo};
 use crate::download;
 use crate::library::Entry;
 use crate::online::{self, JourneyBatch, JourneyItem, JourneyProfile};
@@ -35,6 +35,10 @@ const BACK_LIMIT: usize = 16;
 const EXHAUSTED_RETRY: Duration = Duration::from_secs(60);
 /// Most maps (and sets) a session remembers to not suggest again; the oldest go first.
 const MAX_EXCLUDES: usize = 400;
+
+/// How far below the player's level a chill session picks its library maps (the server's own
+/// `CHILL_DROP` for online ones).
+const CHILL_DROP: f64 = 0.5;
 
 /// Cold-start star rating choices shown when a player has too little history.
 pub const LEVEL_CHOICES: [(&str, f64); 6] = [
@@ -172,6 +176,15 @@ pub struct Journey {
     /// What the first maps of the queue ended with when they were left before (they were gone
     /// back to), in queue order.
     revisited: Vec<PastOutcome>,
+    /// The kind of maps asked for (`Config::journey_focus`).
+    pub focus: JourneyFocus,
+    /// An easy session (`Config::journey_chill`).
+    pub chill: bool,
+    /// The settings panel is up, with this row chosen.
+    pub settings: Option<usize>,
+    /// Non-stop: the current map starts by itself as soon as it's ready (set when a play's
+    /// results go on by themselves; any key on the Journey screen takes over).
+    pub autostart: bool,
 }
 
 impl Default for Journey {
@@ -215,6 +228,10 @@ impl Journey {
             next_probe: None,
             back: Vec::new(),
             revisited: Vec::new(),
+            focus: JourneyFocus::Any,
+            chill: false,
+            settings: None,
+            autostart: false,
         }
     }
 
@@ -327,37 +344,64 @@ impl Journey {
         self.library_index = None;
     }
 
-    /// Switches the session to a manual target star rating and rebuilds the queue for it.
-    pub fn set_manual_level(&mut self, stars: f64) {
-        let clamped = ((stars * 4.0).round() / 4.0).clamp(1.0, 11.0);
+    /// Drops the queue (and what's downloading for it) to be filled again for new wishes.
+    fn rebuild(&mut self) {
         self.cancel_downloads();
         self.queue.clear();
         self.revisited.clear();
         self.fetching = None;
-        self.target_stars = Some(clamped);
-        self.comfort_stars = clamped;
-        self.needs_level = false;
         self.pool_exhausted = false;
         self.retry_after = None;
         self.error = None;
         self.shown_at = Instant::now();
     }
 
+    /// Switches the session to a manual target star rating and rebuilds the queue for it.
+    pub fn set_manual_level(&mut self, stars: f64) {
+        let clamped = ((stars * 4.0).round() / 4.0).clamp(1.0, 11.0);
+        self.rebuild();
+        self.target_stars = Some(clamped);
+        self.comfort_stars = clamped;
+        self.needs_level = false;
+    }
+
     /// Switches the session back to server-estimated comfort stars and rebuilds the queue.
     pub fn set_auto_level(&mut self) {
-        self.cancel_downloads();
-        self.queue.clear();
-        self.revisited.clear();
-        self.fetching = None;
+        self.rebuild();
         self.target_stars = None;
         if let Some(auto) = self.auto_comfort_stars {
             self.comfort_stars = auto;
         }
         self.needs_level = false;
+    }
+
+    /// Asks for maps of another kind (`focus`) or pace (`chill`): the queue is filled again
+    /// when either changed. True when it was.
+    pub fn set_style(&mut self, focus: JourneyFocus, chill: bool) -> bool {
+        if (focus, chill) == (self.focus, self.chill) {
+            return false;
+        }
+        self.focus = focus;
+        self.chill = chill;
+        self.rebuild();
+        true
+    }
+
+    /// Non-stop: says no to the map after the current one (the one played now) before it comes
+    /// up. Returns it, to tell the server it was skipped.
+    pub fn skip_upcoming(&mut self) -> Option<JourneyItem> {
+        if self.queue.len() < 2 {
+            return None;
+        }
+        let skipped = self.queue.remove(1)?;
+        if self.revisited.len() > 1 {
+            self.revisited.remove(1);
+        }
+        if let MapSource::Downloading(job) = &skipped.source {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
         self.pool_exhausted = false;
-        self.retry_after = None;
-        self.error = None;
-        self.shown_at = Instant::now();
+        Some(skipped.item)
     }
 
     /// Folders referenced by the queue, the maps to go back to or the active play (protected
@@ -653,6 +697,8 @@ impl Journey {
             exclude_sets: self.exclude_sets.clone(),
             step: self.step.saturating_add(self.queue.len() as u32),
             count: want,
+            focus: self.focus.wire(),
+            chill: self.chill,
         };
         let (tx, rx) = mpsc::channel();
         self.fetching = Some(rx);
@@ -682,7 +728,9 @@ impl Journey {
         {
             return;
         }
-        let comfort = self.target_stars.unwrap_or(self.comfort_stars);
+        // A chill session plays below the player's level, as the server picks one.
+        let comfort = self.target_stars.unwrap_or(self.comfort_stars)
+            - if self.chill { CHILL_DROP } else { 0.0 };
         let mut excluded_osu: HashSet<u32> = HashSet::new();
         let mut excluded_dirs: HashSet<String> = HashSet::new();
         for s in &self.exclude_sets {
@@ -707,7 +755,7 @@ impl Journey {
                     ),
                     comfort - 0.4,
                 )
-            } else if step % 5 == 4 {
+            } else if step % 5 == 4 && !self.chill {
                 (
                     "stretch",
                     tr!(

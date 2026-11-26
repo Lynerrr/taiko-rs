@@ -188,6 +188,71 @@ impl JourneySaveTo {
     }
 }
 
+/// The kind of maps a Journey asks for (its settings panel).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum JourneyFocus {
+    /// Whatever fits the player.
+    #[default]
+    Any,
+    Streams,
+    /// Long streams (deathstreams), not bursts.
+    LongStreams,
+    /// Rhythm changes, triplets and ultra-fast gaps.
+    Tech,
+    /// Scroll speed changes.
+    Sv,
+}
+
+impl JourneyFocus {
+    pub const ALL: [JourneyFocus; 5] = [
+        JourneyFocus::Any,
+        JourneyFocus::Streams,
+        JourneyFocus::LongStreams,
+        JourneyFocus::Tech,
+        JourneyFocus::Sv,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            JourneyFocus::Any => tr!("Anything", "おまかせ", "Любые"),
+            JourneyFocus::Streams => tr!("Streams", "連打", "Стримы"),
+            JourneyFocus::LongStreams => tr!("Long streams", "長い連打", "Длинные стримы"),
+            JourneyFocus::Tech => tr!("Tech", "テクニカル", "Техника"),
+            JourneyFocus::Sv => tr!("SV", "SV", "SV"),
+        }
+    }
+
+    /// Its name in the config file and on the wire (`Request::JourneyNext::focus`).
+    pub fn key(self) -> &'static str {
+        match self {
+            JourneyFocus::Any => "any",
+            JourneyFocus::Streams => "streams",
+            JourneyFocus::LongStreams => "long-streams",
+            JourneyFocus::Tech => "tech",
+            JourneyFocus::Sv => "sv",
+        }
+    }
+
+    /// What the server is asked for: nothing for Any.
+    pub fn wire(self) -> Option<String> {
+        (self != JourneyFocus::Any).then(|| self.key().to_string())
+    }
+
+    pub fn parse(s: &str) -> Option<JourneyFocus> {
+        JourneyFocus::ALL
+            .into_iter()
+            .find(|v| v.key().eq_ignore_ascii_case(s))
+    }
+
+    pub fn step(self, dir: i32) -> JourneyFocus {
+        let i = JourneyFocus::ALL
+            .iter()
+            .position(|&v| v == self)
+            .unwrap_or(0) as i32;
+        JourneyFocus::ALL[(i + dir).rem_euclid(JourneyFocus::ALL.len() as i32) as usize]
+    }
+}
+
 /// Where an F12 screenshot goes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ScreenshotTo {
@@ -288,6 +353,13 @@ pub struct Config {
     pub journey_save_to: JourneySaveTo,
     /// Liking a map in Journey automatically saves it from the temporary cache to the library.
     pub journey_save_on_like: bool,
+    /// The kind of maps Journey asks for.
+    pub journey_focus: JourneyFocus,
+    /// Journey plays it easy: maps below the player's level, no stretch maps.
+    pub journey_chill: bool,
+    /// Journey goes from one map straight into the next (results only for a moment), showing
+    /// what's up next towards the end of a map and in its breaks.
+    pub journey_nonstop: bool,
     /// The interface's language.
     pub language: crate::lang::Lang,
     /// Empty selects the original pixel font; otherwise an installed family name.
@@ -611,6 +683,9 @@ impl Default for Config {
             },
             journey_save_to: JourneySaveTo::Own,
             journey_save_on_like: true,
+            journey_focus: JourneyFocus::Any,
+            journey_chill: false,
+            journey_nonstop: false,
             language: crate::lang::Lang::En,
             ui_font: String::new(),
             // osu!'s default: a new player starts where an osu! player does.
@@ -1536,6 +1611,11 @@ impl Config {
                     cfg.journey_save_to = JourneySaveTo::parse(v).unwrap_or(cfg.journey_save_to)
                 }
                 "journey_save_on_like" => cfg.journey_save_on_like = v != "false",
+                "journey_focus" => {
+                    cfg.journey_focus = JourneyFocus::parse(v).unwrap_or(cfg.journey_focus)
+                }
+                "journey_chill" => cfg.journey_chill = v == "true",
+                "journey_nonstop" => cfg.journey_nonstop = v == "true",
                 "ui_font" => cfg.ui_font = v.to_string(),
                 "language" => cfg.language = crate::lang::Lang::parse(v).unwrap_or(cfg.language),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
@@ -2179,6 +2259,18 @@ impl Config {
         out.push_str(&format!(
             "# automatically save a Journey map to the library when you like it\njourney_save_on_like = {}\n",
             self.journey_save_on_like
+        ));
+        out.push_str(&format!(
+            "# the kind of maps Journey picks: any, streams, long-streams, tech or sv\njourney_focus = {}\n",
+            self.journey_focus.key()
+        ));
+        out.push_str(&format!(
+            "# Journey plays it easy: maps below your level, no stretch maps\njourney_chill = {}\n",
+            self.journey_chill
+        ));
+        out.push_str(&format!(
+            "# Journey goes from one map straight into the next\njourney_nonstop = {}\n",
+            self.journey_nonstop
         ));
         let tja = self
             .tja_folder

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::harness::{self, *};
 use super::maps;
-use crate::config::{Config, JourneySaveTo};
+use crate::config::{Config, JourneyFocus, JourneySaveTo};
 use crate::journey::{Gate, MAX_PREFETCH_AHEAD, MapSource, OUTAGE_GRACE, PastOutcome, QueuedMap};
 use crate::*;
 
@@ -1391,4 +1391,299 @@ fn discord_status_shows_journey_maps_as_journey() {
     s.journey.in_play = false;
     s.scene = results(&s);
     assert_eq!(s.presence_text().unwrap().1, "Looking at the results");
+}
+
+/// The fields of the `JourneyNext` request somewhere in a message as sent.
+fn journey_next_of(val: &serde_json::Value) -> Option<&serde_json::Value> {
+    match val {
+        serde_json::Value::Object(m) => m
+            .get("JourneyNext")
+            .or_else(|| m.values().find_map(journey_next_of)),
+        _ => None,
+    }
+}
+
+/// Journey's gear opens its settings: a focus or a chill session is kept in the config and asks
+/// the server again with it, the queue filled anew; Esc closes the panel, not Journey.
+#[test]
+fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
+    let songs = Songs::new("journey-settings", &maps::all());
+    let local_hash = beatmap::map_hash(&std::fs::read(&songs.paths[0]).unwrap());
+    let mut local_item = item("Settings Test", "Oni", 8500);
+    local_item.map_hash = Some(local_hash);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<(Option<String>, bool)>::new()));
+    let seen_srv = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() || !line.contains("JourneyNext") {
+                continue;
+            }
+            let val: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+            let val = journey_next_of(&val).cloned().unwrap_or_default();
+            let focus = val
+                .get("focus")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let chill = val.get("chill").and_then(|v| v.as_bool()).unwrap_or(false);
+            seen_srv.lock().unwrap().push((focus, chill));
+            let reply = online::Reply::Journey(online::JourneyBatch {
+                needs_level: false,
+                comfort_stars: 6.0,
+                items: vec![local_item.clone()],
+                ..Default::default()
+            });
+            let mut w = stream;
+            let _ = writeln!(w, "{}", serde_json::to_string(&reply).unwrap());
+            let _ = w.flush();
+        }
+    });
+
+    let mut cfg = harness::config();
+    cfg.online_server = format!("127.0.0.1:{}", addr.port());
+    cfg.online_token = "tok".into();
+    let mut s = state_with(cfg, songs.entries());
+    s.journey_supported = true;
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    s.open_journey();
+    frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
+    assert_eq!(
+        seen.lock().unwrap().last().cloned(),
+        Some((None, false)),
+        "a plain Journey asks for no focus and no chill"
+    );
+
+    // The gear sits on the action bar and opens the panel.
+    let c = frame(&mut s, now);
+    assert!(s.hits.iter().any(|h| h.hit == hit::Hit::JourneySettings));
+    drop(c);
+    s.click(hit::Hit::JourneySettings, None);
+    assert_eq!(s.journey.settings, Some(0));
+    let c = frame(&mut s, now);
+    assert!(c.texts.iter().any(|(_, t)| t == "JOURNEY SETTINGS"));
+    assert!(
+        s.hits
+            .iter()
+            .any(|h| h.hit == hit::Hit::JourneySetting(1, 1))
+    );
+
+    // Focus on streams: kept, and the queue is filled again with it. (An answer still on its
+    // way from before can reach the server after the new ask, and is thrown away.)
+    let asked = seen.lock().unwrap().len();
+    s.click(hit::Hit::JourneySetting(0, 1), None);
+    assert_eq!(s.cfg.journey_focus, JourneyFocus::Streams);
+    assert_eq!(s.journey.focus, JourneyFocus::Streams);
+    frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
+    assert!(
+        seen.lock().unwrap()[asked..].contains(&(Some("streams".into()), false)),
+        "{:?}",
+        seen.lock().unwrap()
+    );
+
+    // Arrow keys work the panel: down to Chill, right turns it on.
+    let asked = seen.lock().unwrap().len();
+    press(&mut s, KeyCode::ArrowDown, now);
+    press(&mut s, KeyCode::ArrowRight, now);
+    assert!(s.cfg.journey_chill);
+    assert!(s.journey.chill);
+    frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
+    assert!(
+        seen.lock().unwrap()[asked..].contains(&(Some("streams".into()), true)),
+        "{:?}",
+        seen.lock().unwrap()
+    );
+
+    // Non-stop changes nothing asked of the server: the queue stays.
+    let queued = s.journey.queue.front().map(|q| q.item.md5.clone());
+    s.click(hit::Hit::JourneySetting(2, 1), None);
+    assert!(s.cfg.journey_nonstop);
+    assert_eq!(s.journey.queue.front().map(|q| q.item.md5.clone()), queued);
+
+    // Esc closes the panel; Journey stays, and opened again it keeps the settings.
+    press(&mut s, KeyCode::Escape, now);
+    assert_eq!(s.journey.settings, None);
+    assert!(s.journey.active);
+    assert_eq!(scene_name(&s), "Journey");
+    s.open_journey();
+    assert_eq!(s.journey.focus, JourneyFocus::Streams);
+    assert!(s.journey.chill);
+}
+
+/// Offline, a chill session goes without the stretch maps, and the level asked for stays.
+#[test]
+fn an_offline_chill_journey_has_no_stretch_maps() {
+    let songs = Songs::new("journey-chill", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    let roles = |s: &State| -> Vec<String> {
+        s.journey
+            .queue
+            .iter()
+            .map(|q| q.item.role.clone())
+            .collect()
+    };
+    let mut seen = Vec::new();
+    for _ in 0..6 {
+        seen.extend(roles(&s));
+        s.journey_skip_current();
+    }
+    assert!(
+        seen.iter().any(|r| r == "stretch"),
+        "a plain session stretches: {seen:?}"
+    );
+
+    let level = s.journey.comfort_stars;
+    s.journey_change_setting(1, 1);
+    assert!(s.journey.chill);
+    assert_eq!(s.journey.comfort_stars, level);
+    let mut seen = Vec::new();
+    for _ in 0..6 {
+        seen.extend(roles(&s));
+        s.journey_skip_current();
+    }
+    assert!(!seen.is_empty());
+    assert!(!seen.iter().any(|r| r == "stretch"), "chill: {seen:?}");
+}
+
+/// Non-stop: a Journey play's results go on to the next map by themselves, which starts as
+/// soon as it's ready; Esc on the results stops there instead.
+#[test]
+fn nonstop_journey_goes_from_results_straight_into_the_next_map() {
+    let songs = Songs::new("journey-nonstop", &maps::all());
+    let mut cfg = harness::config();
+    cfg.journey_nonstop = true;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let step = s.journey.step;
+
+    let results_up = |s: &mut State, now: Instant, shown_ago: u64| {
+        s.journey.in_play = true;
+        let mut r = ui::Results::new(
+            s.library[0].label(),
+            game::Stats::default(),
+            game::Windows::new(5.0),
+        );
+        r.shown = now - Duration::from_secs(shown_ago);
+        s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
+    };
+
+    // Fresh results count down, and stay.
+    results_up(&mut s, now, 1);
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Results");
+    assert!(c.texts.iter().any(|(_, t)| t.starts_with("Next map in")));
+
+    // Past the countdown, on to the next map, which starts by itself.
+    now += Duration::from_secs(5);
+    frame(&mut s, now);
+    assert_eq!(s.journey.step, step + 1);
+    assert_eq!(
+        s.journey.history.last().unwrap().outcome,
+        PastOutcome::Passed
+    );
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert!(s.journey.in_play, "the next map starts without a key");
+    assert_ne!(scene_name(&s), "Journey");
+
+    // Esc on the results: the next map is up, waiting.
+    s.scene = crate::screens::journey::JourneyScreen::scene();
+    results_up(&mut s, now, 1);
+    press(&mut s, KeyCode::Escape, now);
+    for _ in 0..3 {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    assert_eq!(scene_name(&s), "Journey");
+    assert!(!s.journey.in_play);
+
+    // Reading the results (scrolling them) holds the countdown.
+    results_up(&mut s, now, 1);
+    press(&mut s, KeyCode::ArrowDown, now);
+    now += Duration::from_secs(10);
+    frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Results");
+}
+
+/// Non-stop shows what's up next near a map's end and in its breaks, and N in a play says no
+/// to it: it leaves the queue and the server hears of it as a skip.
+#[test]
+fn nonstop_shows_up_next_in_breaks_and_n_says_no_to_it() {
+    let songs = Songs::new("journey-up-next", &maps::all());
+    let text = std::fs::read_to_string(&songs.paths[0]).unwrap();
+    let map = beatmap::from_text(&text).unwrap();
+    let note_at = |t: f64| {
+        let mut n = map.notes[0].clone();
+        n.time = t;
+        n.end_time = t;
+        n
+    };
+    // Notes every 200 ms to 10 s, a 10 s break, then on to 60 s.
+    let mut notes: Vec<_> = (0..=50).map(|i| note_at(i as f64 * 200.0)).collect();
+    notes.extend((0..=200).map(|i| note_at(20_000.0 + i as f64 * 200.0)));
+    use crate::screens::journey::up_next_due;
+    assert!(!up_next_due(&notes, 5_000.0), "mid-stream");
+    assert!(!up_next_due(&notes, 10_100.0), "right as the break starts");
+    assert!(up_next_due(&notes, 14_000.0), "in the break");
+    assert!(
+        !up_next_due(&notes, 19_000.0),
+        "right before the break ends"
+    );
+    assert!(!up_next_due(&notes, 40_000.0), "mid-map");
+    assert!(up_next_due(&notes, 50_000.0), "towards the end");
+    assert!(up_next_due(&notes, 61_000.0), "after the last note");
+
+    let mut cfg = harness::config();
+    cfg.journey_nonstop = true;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    journey_with(
+        &mut s,
+        vec![
+            QueuedMap {
+                item: item("Playing", "Oni", 9201),
+                source: MapSource::Pending,
+            },
+            QueuedMap {
+                item: item("Not This", "Oni", 9202),
+                source: MapSource::Pending,
+            },
+            QueuedMap {
+                item: item("This One", "Oni", 9203),
+                source: MapSource::Pending,
+            },
+        ],
+    );
+    s.journey.in_play = true;
+    s.journey_skip_upcoming();
+    let titles: Vec<_> = s
+        .journey
+        .queue
+        .iter()
+        .map(|q| q.item.title.as_str())
+        .collect();
+    assert_eq!(titles, ["Playing", "This One"]);
+    // The map played isn't touched: with nothing after it, N does nothing.
+    s.journey_skip_upcoming();
+    s.journey_skip_upcoming();
+    assert_eq!(s.journey.queue.len(), 1);
+    assert_eq!(s.journey.queue[0].item.title, "Playing");
 }

@@ -12,6 +12,8 @@ pub(crate) struct ResultsScreen {
     pub(crate) entry: usize,
     /// The map time the play started from (played again from there).
     pub(crate) from: Option<f64>,
+    /// Journey's Non-stop holds on these results: the player is reading them.
+    pub(crate) held: bool,
 }
 
 impl ResultsScreen {
@@ -20,6 +22,7 @@ impl ResultsScreen {
             results,
             entry,
             from,
+            held: false,
         }))
     }
 }
@@ -116,6 +119,18 @@ impl Screen for ResultsScreen {
             return;
         }
         let results = &mut self.results;
+        // Non-stop: looking through the results holds them up; Esc stops the run of maps.
+        if !matches!(
+            code,
+            KeyCode::Enter
+                | KeyCode::NumpadEnter
+                | KeyCode::Escape
+                | KeyCode::KeyL
+                | KeyCode::KeyN
+                | KeyCode::KeyS
+        ) {
+            self.held = true;
+        }
         match code {
             KeyCode::ArrowDown
             | KeyCode::ArrowUp
@@ -173,6 +188,7 @@ impl Screen for ResultsScreen {
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 if state.playing_journey() {
                     state.journey_next_from_results(results.failed);
+                    state.journey.autostart = state.cfg.journey_nonstop;
                 } else {
                     state.retry_from(self.entry, self.from);
                 }
@@ -206,9 +222,36 @@ impl Screen for ResultsScreen {
         results.journey = state.playing_journey();
         results.journey_save = state.journey.playing_cached.is_some();
         results.draw(canvas);
+        if results.journey && state.cfg.journey_nonstop && !self.held && results.opened.is_none() {
+            let left =
+                NONSTOP_RESULTS.saturating_sub(frame.now.saturating_duration_since(results.shown));
+            if left.is_zero() {
+                let failed = results.failed;
+                state.journey_next_from_results(failed);
+                state.journey.autostart = true;
+                return None;
+            }
+            let secs = left.as_secs_f32().ceil() as u32;
+            let line = tr!(
+                "Next map in {secs}...   Enter: now   Esc: stop",
+                "{secs}秒後に次の譜面...   Enter: 今すぐ   Esc: 止める",
+                "Следующая карта через {secs}...   Enter: сейчас   Esc: стоп";
+                [] [secs]
+            );
+            canvas.text_centered(
+                canvas.width / 2.0,
+                canvas.height - 16.0,
+                8.0,
+                crate::render::rgba(0x22d4c0, 1.0),
+                &line,
+            );
+        }
         None
     }
 }
+
+/// How long Journey's Non-stop shows a play's results before the next map.
+const NONSTOP_RESULTS: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A play sent to the online leaderboards: what the server answered, or, when it never did or
 /// said to try later (`online::try_later`), the play to send again (`score_outbox`).
