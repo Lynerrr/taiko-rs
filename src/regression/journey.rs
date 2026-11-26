@@ -1414,7 +1414,8 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    let seen = Arc::new(std::sync::Mutex::new(Vec::<(Option<String>, bool)>::new()));
+    type SeenQuery = (Option<String>, bool, Option<u64>, Option<u64>);
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<SeenQuery>::new()));
     let seen_srv = seen.clone();
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
@@ -1430,7 +1431,12 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
             let chill = val.get("chill").and_then(|v| v.as_bool()).unwrap_or(false);
-            seen_srv.lock().unwrap().push((focus, chill));
+            let min_len = val.get("min_length_ms").and_then(|v| v.as_u64());
+            let max_len = val.get("max_length_ms").and_then(|v| v.as_u64());
+            seen_srv
+                .lock()
+                .unwrap()
+                .push((focus, chill, min_len, max_len));
             let reply = online::Reply::Journey(online::JourneyBatch {
                 needs_level: false,
                 comfort_stars: 6.0,
@@ -1455,11 +1461,11 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
     assert_eq!(
         seen.lock().unwrap().last().cloned(),
-        Some((None, false)),
-        "a plain Journey asks for no focus and no chill"
+        Some((None, false, None, None)),
+        "a plain Journey asks for no focus, no chill, and no length bounds"
     );
 
-    // The gear sits on the action bar and opens the panel.
+    // The gear sits on the action bar and opens the modal panel.
     let c = frame(&mut s, now);
     assert!(s.hits.iter().any(|h| h.hit == hit::Hit::JourneySettings));
     drop(c);
@@ -1467,26 +1473,49 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     assert_eq!(s.journey.settings, Some(0));
     let c = frame(&mut s, now);
     assert!(c.texts.iter().any(|(_, t)| t == "JOURNEY SETTINGS"));
+    // Modal blocks underlying Journey controls and hides marathon-only options in Manual mode.
+    assert!(!s.hits.iter().any(|h| h.hit == hit::Hit::ModsButton));
+    assert!(!shows(&c, "Hardcore"));
+    assert!(!shows(&c, "Between maps"));
+    assert!(!shows(&c, "Skip intros"));
     assert!(
         s.hits
             .iter()
-            .any(|h| h.hit == hit::Hit::JourneySetting(1, 1))
+            .any(|h| h.hit == hit::Hit::JourneyFocus(JourneyFocus::Streams))
     );
 
-    // Focus on streams: kept, and the queue is filled again with it. (An answer still on its
-    // way from before can reach the server after the new ask, and is thrown away.)
+    // Focus on streams: kept, and the queue is filled again with it.
     let asked = seen.lock().unwrap().len();
-    s.click(hit::Hit::JourneySetting(0, 1), None);
+    s.click(hit::Hit::JourneyFocus(JourneyFocus::Streams), None);
     assert_eq!(s.cfg.journey_focus, JourneyFocus::Streams);
     assert_eq!(s.journey.focus, JourneyFocus::Streams);
     frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
     assert!(
-        seen.lock().unwrap()[asked..].contains(&(Some("streams".into()), false)),
+        seen.lock().unwrap()[asked..].contains(&(Some("streams".into()), false, None, None)),
         "{:?}",
         seen.lock().unwrap()
     );
 
-    // Arrow keys work the panel: down to Chill, right turns it on.
+    // Arrow keys work the panel: down to Length -> Standard (1-4m), down to Chill -> On.
+    let asked = seen.lock().unwrap().len();
+    press(&mut s, KeyCode::ArrowDown, now);
+    s.click(
+        hit::Hit::JourneyLength(crate::config::JourneyLength::Standard),
+        None,
+    );
+    assert_eq!(s.cfg.journey_length, crate::config::JourneyLength::Standard);
+    frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
+    assert!(
+        seen.lock().unwrap()[asked..].contains(&(
+            Some("streams".into()),
+            false,
+            Some(60_000),
+            Some(240_000)
+        )),
+        "{:?}",
+        seen.lock().unwrap()
+    );
+
     let asked = seen.lock().unwrap().len();
     press(&mut s, KeyCode::ArrowDown, now);
     press(&mut s, KeyCode::ArrowRight, now);
@@ -1494,16 +1523,48 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     assert!(s.journey.chill);
     frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
     assert!(
-        seen.lock().unwrap()[asked..].contains(&(Some("streams".into()), true)),
+        seen.lock().unwrap()[asked..].contains(&(
+            Some("streams".into()),
+            true,
+            Some(60_000),
+            Some(240_000)
+        )),
         "{:?}",
         seen.lock().unwrap()
     );
 
-    // Non-stop changes nothing asked of the server: the queue stays.
+    // Non-stop changes nothing asked of the server when length is explicit: the queue stays,
+    // and only Skip intros appears (not Hardcore / Between maps).
     let queued = s.journey.queue.front().map(|q| q.item.md5.clone());
-    s.click(hit::Hit::JourneySetting(2, 1), None);
+    s.click(hit::Hit::JourneyFlow(JourneyFlow::Nonstop), None);
     assert_eq!(s.cfg.journey_flow, JourneyFlow::Nonstop);
     assert_eq!(s.journey.queue.front().map(|q| q.item.md5.clone()), queued);
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "Skip intros"));
+    assert!(!shows(&c, "Hardcore"));
+    assert!(!shows(&c, "Between maps"));
+
+    // Marathon reveals Hardcore and Between maps, and caps Length::Any at 5 minutes.
+    s.click(
+        hit::Hit::JourneyLength(crate::config::JourneyLength::Any),
+        None,
+    );
+    let asked = seen.lock().unwrap().len();
+    s.click(hit::Hit::JourneyFlow(JourneyFlow::Marathon), None);
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "Hardcore"));
+    assert!(shows(&c, "Between maps"));
+    frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
+    assert!(
+        seen.lock().unwrap()[asked..].contains(&(
+            Some("streams".into()),
+            true,
+            None,
+            Some(crate::config::MARATHON_DEFAULT_MAX_LENGTH_MS)
+        )),
+        "{:?}",
+        seen.lock().unwrap()
+    );
 
     // Esc closes the panel; Journey stays, and opened again it keeps the settings.
     press(&mut s, KeyCode::Escape, now);
@@ -1513,6 +1574,7 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     s.open_journey();
     assert_eq!(s.journey.focus, JourneyFocus::Streams);
     assert!(s.journey.chill);
+    assert!(s.journey.marathon_cap);
 }
 
 /// Offline, a chill session goes without the stretch maps, and the level asked for stays.
@@ -1543,7 +1605,7 @@ fn an_offline_chill_journey_has_no_stretch_maps() {
     );
 
     let level = s.journey.comfort_stars;
-    s.journey_change_setting(1, 1);
+    s.journey_change_setting(2, 1);
     assert!(s.journey.chill);
     assert_eq!(s.journey.comfort_stars, level);
     let mut seen = Vec::new();
@@ -2025,25 +2087,167 @@ fn a_seamless_marathon_goes_from_the_last_note_straight_into_the_next_map() {
     assert!(!harness::game(&s).unwrap().can_skip(), "past its intro");
 }
 
-/// A map loaded ahead of time that is no longer up next (N said no to it) isn't played: the
-/// wheel comes up and loads the one that is.
+/// A map loaded ahead of time that is no longer up next (N said no to it) is dropped so the
+/// replacement map preloads and starts instead — never the vetoed map.
 #[test]
 fn a_seamless_marathon_never_starts_a_map_no_longer_up_next() {
     let mut cfg = harness::config();
     cfg.journey_gap = crate::config::MarathonGap::Seamless;
     let (mut s, _songs, mut now) = marathon("journey-marathon-seamless-n", cfg);
     assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let mut said_no = String::new();
     let mut instead = String::new();
     play_marathon_map(&mut s, &mut now, |s| {
-        let said_no = s.journey.queue[1].item.md5.clone();
+        said_no = s.journey.queue[1].item.md5.clone();
         press(s, KeyCode::KeyN, Instant::now());
+        assert!(
+            s.journey.marathon.as_ref().unwrap().preload.is_none(),
+            "vetoing the upcoming map clears the stale preload"
+        );
         instead = s.journey.queue[1].item.md5.clone();
         assert_ne!(instead, said_no);
     });
-    assert_eq!(scene_name(&s), "Marathon", "the wheel loads the one up now");
     assert_eq!(s.journey.current().unwrap().item.md5, instead);
+    assert_ne!(s.journey.current().unwrap().item.md5, said_no);
+    if scene_name(&s) != "Play" {
+        assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    }
+    assert_eq!(s.journey.current().unwrap().item.md5, instead);
+}
+
+/// Hardcore marathon closes both bypasses: Pause menu hides Skip & Retry, Ctrl+R / Backquote do
+/// nothing, and calling `marathon_skip_map` ends Hardcore instead of continuing. In a normal
+/// marathon, retrying breaks the carried combo so misses cannot be undone.
+#[test]
+fn hardcore_blocks_skip_and_retry_and_normal_retry_breaks_marathon_combo() {
+    // 1. Hardcore marathon: pause menu has only Continue, Settings, End the marathon.
+    let mut hc_cfg = harness::config();
+    hc_cfg.journey_hardcore = true;
+    let (mut s, _songs, mut now) = marathon("journey-hc-no-bypass", hc_cfg);
     assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
-    assert_eq!(s.journey.current().unwrap().item.md5, instead);
+
+    // Ctrl+R and Backquote are blocked in Hardcore play.
+    s.modifiers_ctrl = true;
+    press(&mut s, KeyCode::KeyR, now);
+    s.modifiers_ctrl = false;
+    assert_eq!(scene_name(&s), "Play");
+    press(&mut s, KeyCode::Backquote, now);
+    assert_eq!(scene_name(&s), "Play");
+
+    // Pause menu hides Skip this map and Retry; only Continue, Settings, End the marathon show.
+    press(&mut s, KeyCode::Escape, now);
+    now += Duration::from_millis(400);
+    let c = frame(&mut s, now);
+    assert!(!shows(&c, "Skip this map"), "Hardcore must hide Skip");
+    assert!(!shows(&c, "Retry"), "Hardcore must hide Retry");
+    assert!(shows(&c, "Continue"));
+    assert!(shows(&c, "Settings"));
+    assert!(shows(&c, "End the marathon"));
+
+    // Safety belt: even if marathon_skip_map is invoked directly in Hardcore, it ends Hardcore.
+    s.marathon_skip_map();
+    assert_eq!(
+        s.journey
+            .marathon
+            .as_ref()
+            .and_then(|m| m.ended.map(|(w, _)| w)),
+        Some(crate::journey::MarathonEnd::Hardcore)
+    );
+
+    // 2. Normal marathon: retrying breaks the carried marathon combo.
+    let (mut s, _songs, mut now) = marathon("journey-retry-breaks-combo", harness::config());
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let map = harness::game(&s).unwrap().map().clone();
+    super::flows::play_out(
+        &mut s,
+        &mut now,
+        &maps::presses(&map, maps::Player::Perfect),
+    );
+    let carried = s.journey.marathon.as_ref().unwrap().combo;
+    assert!(carried > 0);
+    s.click(hit::Hit::Key(KeyCode::Enter), None);
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    assert_eq!(s.journey.marathon.as_ref().unwrap().combo, carried);
+
+    // Pause -> Retry breaks the carried combo instead of letting misses be save-scummed.
+    press(&mut s, KeyCode::Escape, now);
+    press(&mut s, KeyCode::ArrowDown, now);
+    press(&mut s, KeyCode::ArrowDown, now);
+    press(&mut s, KeyCode::Enter, now);
+    assert_eq!(s.journey.marathon.as_ref().unwrap().combo, 0);
+    assert_eq!(s.journey.marathon.as_ref().unwrap().combo_now, 0);
+}
+
+/// Marathon combo chip stays anchored at `x0` after a miss (never flickers away), and pressing N
+/// blindly mid-map (when the up-next card is hidden) does not veto the next map.
+#[test]
+fn marathon_combo_chip_stays_visible_at_zero_and_blind_n_does_not_skip() {
+    let (mut s, _songs, mut now) = marathon("journey-combo-stable", harness::config());
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    now = Instant::now();
+    // At combo 0 on map 1, the chip is already steadily visible with x0.
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "MARATHON"));
+    assert!(shows(&c, "x0"));
+
+    // Mid-map with up_next hidden (time < last - 12s): build a map with >20s span check via queue.
+    let upcoming = s.journey.queue[1].item.md5.clone();
+    if let Some(g) = harness::game(&s)
+        && !crate::screens::journey::up_next_due(&g.map().notes, g.time())
+    {
+        press(&mut s, KeyCode::KeyN, now);
+        assert_eq!(
+            s.journey.queue[1].item.md5, upcoming,
+            "blind N mid-map must not veto an unseen upcoming map"
+        );
+    }
+}
+
+/// Clicking the mouse "Next map" button on a failed Journey results screen records Failed (not
+/// Passed) and enables Non-stop autostart just like pressing Enter.
+#[test]
+fn results_next_button_preserves_failed_outcome_and_nonstop_autostart() {
+    let songs = Songs::new("journey-results-next-hit", &maps::all());
+    let mut cfg = harness::config();
+    cfg.journey_flow = JourneyFlow::Nonstop;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    s.journey.in_play = true;
+
+    let mut r = ui::Results::new(
+        s.library[0].label(),
+        game::Stats::default(),
+        game::Windows::new(5.0),
+    );
+    r.failed = true;
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
+    frame(&mut s, now);
+    s.click(hit::Hit::JourneyNext, None);
+    assert_eq!(
+        s.journey.history.last().unwrap().outcome,
+        PastOutcome::Failed
+    );
+    assert!(s.journey.autostart);
+}
+
+/// Marathon summary renders Play again and clicking it starts a fresh marathon immediately.
+#[test]
+fn marathon_summary_play_again_starts_a_fresh_run() {
+    let (mut s, _songs, now) = marathon("journey-summary-again", harness::config());
+    press(&mut s, KeyCode::Escape, now);
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "MARATHON OVER"));
+    assert!(shows(&c, "Play again"));
+    assert!(shows(&c, "Back to Journey"));
+    assert!(s.hits.iter().any(|h| h.hit == hit::Hit::MarathonRestart));
+
+    s.click(hit::Hit::MarathonRestart, None);
+    assert!(s.journey.marathon.as_ref().unwrap().ended.is_none());
+    assert_eq!(scene_name(&s), "Marathon");
 }
 
 /// The time between maps is a setting: Short turns the wheel for under a second.

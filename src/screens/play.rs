@@ -422,12 +422,32 @@ impl Screen for PlayScreen {
                     }
                 }
             }
-            KeyCode::Backquote => state.hold_retry(),
-            KeyCode::KeyR if state.modifiers_ctrl => state.restart_map(),
-            // Journey's Non-stop: no to the map up next.
+            KeyCode::Backquote => {
+                if !(state.journey.marathon.is_some()
+                    && state.journey.in_play
+                    && state.cfg.journey_hardcore)
+                {
+                    state.hold_retry();
+                }
+            }
+            KeyCode::KeyR if state.modifiers_ctrl => {
+                if !(state.journey.marathon.is_some()
+                    && state.journey.in_play
+                    && state.cfg.journey_hardcore)
+                {
+                    state.restart_map();
+                }
+            }
+            // Journey's Non-stop / Marathon: veto the map up next, only while the up-next card is
+            // actually visible (during breaks or near the end of the map).
             KeyCode::KeyN
                 if state.playing_journey()
-                    && state.cfg.journey_flow != crate::config::JourneyFlow::Off =>
+                    && state.cfg.journey_flow != crate::config::JourneyFlow::Off
+                    && state.play.as_deref().is_some_and(|g| {
+                        g.replay().is_none()
+                            && g.paused().is_none()
+                            && crate::screens::journey::up_next_due(&g.map().notes, g.time())
+                    }) =>
             {
                 state.journey_skip_upcoming()
             }
@@ -519,17 +539,37 @@ impl Screen for PlayScreen {
             },
         );
         game.draw_hud_with_intro(canvas, state.touch_used || mobile::active());
-        let up_next = state.journey.active
+        let up_next_target = if state.journey.active
             && state.journey.in_play
             && state.cfg.journey_flow != crate::config::JourneyFlow::Off
             && game.replay().is_none()
             && game.paused().is_none()
-            && crate::screens::journey::up_next_due(&game.map().notes, game.time());
-        if up_next {
-            let next = state.journey.queue.get(1).map(|q| &q.item);
-            crate::screens::journey::draw_up_next(canvas, next);
+            && crate::screens::journey::up_next_due(&game.map().notes, game.time())
+        {
+            1.0
+        } else {
+            0.0
+        };
+        if render::animations() {
+            render::approach(
+                &mut state.journey.up_next_alpha,
+                up_next_target,
+                canvas.dt_ms,
+                65.0,
+            );
+            if (state.journey.up_next_alpha - up_next_target).abs() < 0.01 {
+                state.journey.up_next_alpha = up_next_target;
+            }
+        } else {
+            state.journey.up_next_alpha = up_next_target;
         }
-        // A marathon's combo goes on from map to map.
+        let up_next_alpha = state.journey.up_next_alpha;
+        if up_next_alpha > 0.01 && game.paused().is_none() {
+            let next = state.journey.queue.get(1).map(|q| &q.item);
+            crate::screens::journey::draw_up_next(canvas, next, up_next_alpha);
+        }
+        // A marathon's combo goes on from map to map. Keep the chip steadily visible during live
+        // play (even at x0 after a miss) so it never flickers in and out.
         if marathon && let Some(m) = &mut state.journey.marathon {
             let st = game.stats();
             let own = game.replay().is_none()
@@ -538,8 +578,8 @@ impl Screen for PlayScreen {
                 && !game.mods().unranked();
             let (before, now) = m.track_combo(st.combo, st.miss, own);
             crate::ura::marathon_combo(&state.cfg, before, now);
-            if now > 0 && game.paused().is_none() {
-                crate::screens::marathon::draw_combo_chip(canvas, now, up_next);
+            if own && game.paused().is_none() {
+                crate::screens::marathon::draw_combo_chip(canvas, now, up_next_alpha);
             }
         }
         if game.replay().is_none()

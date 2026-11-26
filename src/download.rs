@@ -1394,31 +1394,12 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     let (d, t) = (done.clone(), total.clone());
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
-    let name = set.folder_name();
-    // A custom set the preview fetched already is unpacked from there.
-    let cached = set
-        .custom
-        .is_some()
-        .then(|| crate::custom::cached_archive(&set));
-    let sources = match &set.custom {
-        Some(_) => vec![("taiko.rs", crate::custom::download_url(set.id))],
-        None => mirror_sources(set.id),
-    };
-    // An osu! set is checked against osu!'s MD5s; a taiko.rs custom set has none.
-    let mut check = set.custom.is_none().then(|| Check::set(set.id));
     let old_version = Arc::new(AtomicBool::new(false));
     let old = old_version.clone();
+    let set_for_thread = set.clone();
     std::thread::spawn(move || {
-        let result = match cached.flatten() {
-            Some(archive) => std::fs::create_dir_all(&songs)
-                .map_err(|e| format!("{}: {e}", songs.display()))
-                .and_then(|()| {
-                    let dest = songs.join(&name);
-                    extract(&archive, &dest).map(|()| dest)
-                }),
-            None => fetch(&sources, &name, &songs, &d, &t, &stop, check.as_mut()),
-        };
-        old.store(check.is_some_and(|c| c.older), Ordering::Relaxed);
+        let (result, is_old) = fetch_set(&set_for_thread, &songs, &d, &t, &stop);
+        old.store(is_old, Ordering::Relaxed);
         let _ = tx.send(result);
     });
     Job {
@@ -1431,6 +1412,40 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
         cancel,
         old_version,
     }
+}
+
+/// Synchronously downloads/extracts `set` into `songs`, updating `done`/`total` and respecting
+/// `cancel`. Intended to be called from a background worker thread. Returns `(folder, old_version)`.
+pub(crate) fn fetch_set(
+    set: &SetInfo,
+    songs: &Path,
+    done: &Arc<AtomicU64>,
+    total: &Arc<AtomicU64>,
+    cancel: &Arc<AtomicBool>,
+) -> (Result<PathBuf, String>, bool) {
+    let name = set.folder_name();
+    // A custom set the preview fetched already is unpacked from there.
+    let cached = set
+        .custom
+        .is_some()
+        .then(|| crate::custom::cached_archive(set));
+    let sources = match &set.custom {
+        Some(_) => vec![("taiko.rs", crate::custom::download_url(set.id))],
+        None => mirror_sources(set.id),
+    };
+    // An osu! set is checked against osu!'s MD5s; a taiko.rs custom set has none.
+    let mut check = set.custom.is_none().then(|| Check::set(set.id));
+    let result = match cached.flatten() {
+        Some(archive) => std::fs::create_dir_all(songs)
+            .map_err(|e| format!("{}: {e}", songs.display()))
+            .and_then(|()| {
+                let dest = songs.join(&name);
+                extract(&archive, &dest).map(|()| dest)
+            }),
+        None => fetch(&sources, &name, songs, done, total, cancel, check.as_mut()),
+    };
+    let is_old = check.is_some_and(|c| c.older);
+    (result, is_old)
 }
 
 /// A difficulty in a set's folder, for an update: its beatmap ID, its [Version] and its file.

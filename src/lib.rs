@@ -1912,6 +1912,16 @@ impl State {
     }
 
     fn retry_now(&mut self, entry: usize, from: Option<f64>) {
+        if self.journey.marathon.is_some() && self.journey.in_play {
+            // Hardcore cannot dodge a failing run via retry; normal marathons break the carried
+            // combo so misses cannot be undone by restarting.
+            if self.cfg.journey_hardcore {
+                return;
+            }
+            if let Some(m) = &mut self.journey.marathon {
+                m.combo_broken();
+            }
+        }
         self.pending_restart = None;
         self.start_loading_from(entry, from);
         if let Some(l) = self.scene.screen_mut::<Loading>() {
@@ -6382,19 +6392,24 @@ impl State {
     }
 
     fn pause_key(&mut self, code: KeyCode) {
+        let marathon = self.journey.marathon.is_some() && self.journey.in_play;
+        let hardcore_marathon = marathon && self.cfg.journey_hardcore;
         if code == KeyCode::KeyO {
             self.apply_live_offset();
             return;
         }
         if code == KeyCode::Backquote {
-            self.hold_retry();
+            if !hardcore_marathon {
+                self.hold_retry();
+            }
             return;
         }
         if code == KeyCode::KeyR && self.modifiers_ctrl {
-            self.restart_map();
+            if !hardcore_marathon {
+                self.restart_map();
+            }
             return;
         }
-        let marathon = self.journey.marathon.is_some() && self.journey.in_play;
         let (Some((entry, from)), Some(game)) = (self.scene.song_play(), self.play.as_deref_mut())
         else {
             return;
@@ -6407,15 +6422,19 @@ impl State {
             return;
         }
         let delay = Duration::from_millis(self.cfg.resume_delay_ms as u64);
-        let cursor = game.paused().unwrap_or(0);
+        let item_count = if hardcore_marathon { 3 } else { PAUSE_ITEMS };
+        let cursor = game.paused().unwrap_or(0).min(item_count - 1);
         match code {
             // Wrapping: Up from Continue is Quit, so pause, Up, Enter leaves at once.
-            KeyCode::ArrowUp => game.set_pause_cursor((cursor + PAUSE_ITEMS - 1) % PAUSE_ITEMS),
-            KeyCode::ArrowDown => game.set_pause_cursor((cursor + 1) % PAUSE_ITEMS),
+            KeyCode::ArrowUp => game.set_pause_cursor((cursor + item_count - 1) % item_count),
+            KeyCode::ArrowDown => game.set_pause_cursor((cursor + 1) % item_count),
             KeyCode::Escape => game.resume_after(delay, sound(&self.audio)),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
                 0 => game.resume_after(delay, sound(&self.audio)),
-                // A marathon's pause: skip this map, retry, settings, end the marathon.
+                // Hardcore marathon: Continue, Settings, End the marathon (no Skip or Retry).
+                1 if hardcore_marathon => self.open_settings(),
+                2 if hardcore_marathon => self.marathon_end(),
+                // Normal marathon: skip this map, retry, settings, end the marathon.
                 1 if marathon => self.marathon_skip_map(),
                 2 if marathon => self.retry_now(entry, from),
                 4 if marathon => self.marathon_end(),
@@ -16012,12 +16031,26 @@ impl State {
             Hit::JourneyLevelStep(d) => self.journey_step_level(d),
             Hit::JourneyLevelOpen => self.journey_open_level_picker(),
             Hit::JourneySave => self.journey_save_current(),
-            Hit::JourneyNext => self.journey_next_from_results(false),
+            Hit::JourneyNext => {
+                let failed = self
+                    .scene
+                    .screen_as::<ResultsScreen>()
+                    .is_some_and(|r| r.results.failed);
+                self.journey_next_from_results(failed);
+                self.journey.autostart =
+                    self.cfg.journey_flow == crate::config::JourneyFlow::Nonstop;
+            }
             Hit::JourneyLogin(register) => self.journey_login(register),
             Hit::JourneyOffline => self.journey_go_offline(),
             Hit::JourneyRetry => self.journey_retry(),
             Hit::JourneySettings => self.journey_toggle_settings(),
+            Hit::JourneySettingsBody => {}
             Hit::JourneySetting(row, dir) => self.journey_change_setting(row, dir),
+            Hit::JourneyFocus(focus) => self.journey_set_focus(focus),
+            Hit::JourneyLength(length) => self.journey_set_length(length),
+            Hit::JourneyFlow(flow) => self.journey_set_flow(flow),
+            Hit::MarathonGap(gap) => self.journey_set_gap(gap),
+            Hit::MarathonRestart => self.marathon_start(),
             Hit::ModToggle(i) => {
                 self.mod_select = Some(i);
                 self.toggle_mod(mods::ALL[i]);

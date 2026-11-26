@@ -210,6 +210,7 @@ pub(crate) fn start_game(
         }
     }
     game.view.marathon = state.journey.marathon.is_some();
+    game.view.hardcore = state.journey.marathon.is_some() && state.cfg.journey_hardcore;
     if let Some(m) = &mut state.journey.marathon {
         m.map_started();
     }

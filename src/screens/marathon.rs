@@ -121,11 +121,12 @@ impl Screen for MarathonScreen {
             .as_ref()
             .is_none_or(|m| m.ended.is_some());
         if over {
-            if matches!(
-                code,
-                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape | KeyCode::Space
-            ) {
-                state.marathon_close();
+            match code {
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape | KeyCode::Space => {
+                    state.marathon_close();
+                }
+                KeyCode::KeyR => state.marathon_start(),
+                _ => {}
             }
             return;
         }
@@ -161,7 +162,7 @@ impl Screen for MarathonScreen {
             return Some(super::journey::JourneyScreen::scene());
         };
         if m.ended.is_some() {
-            draw_summary(m, canvas);
+            draw_summary(state, m, canvas, now);
             return None;
         }
         // The next map loads as soon as it's here.
@@ -181,20 +182,18 @@ impl Screen for MarathonScreen {
                 }
             } else if state.journey.pool_exhausted && state.journey.fetching.is_none() {
                 if let Some(m) = &mut state.journey.marathon {
-                    m.end(MarathonEnd::OutOfMaps, Instant::now());
+                    m.end(MarathonEnd::OutOfMaps, now);
                 }
                 return None;
             }
         }
         let entered = *self.entered.get_or_insert(now);
         let since = now.saturating_duration_since(entered);
-        draw_wheel(state, canvas, since, self.held, self.load.is_some());
-
         let due = self.go_now || since >= gap(&state.cfg);
-        if due && !self.held {
-            let Some((rx, entry)) = &mut self.load else {
-                return None;
-            };
+        if due
+            && !self.held
+            && let Some((rx, entry)) = &mut self.load
+        {
             let entry = *entry;
             match rx.poll_ended() {
                 Some(Some(Ok((map, track)))) => {
@@ -213,30 +212,49 @@ impl Screen for MarathonScreen {
                 None => {}
             }
         }
+        let loading = self.load.as_ref().is_some_and(|(rx, _)| rx.is_busy());
+        draw_wheel(state, canvas, now, since, self.held, loading);
         None
     }
 }
 
-/// A marathon's combo in a play's bottom-right corner (over Non-stop's "up next" card while it
-/// shows).
-pub(crate) fn draw_combo_chip(c: &mut Canvas, combo: u32, over_card: bool) {
+/// A marathon's combo in a play's bottom-right corner. Always stays anchored during live play
+/// (showing muted `x0` after a miss) with a stable minimum width and smooth vertical lift when
+/// the "Up next" card slides in underneath (`up_next_alpha` 0..=1).
+pub(crate) fn draw_combo_chip(c: &mut Canvas, combo: u32, up_next_alpha: f32) {
     let text = format!("x{combo}");
     let label = tr!("MARATHON", "マラソン", "МАРАФОН");
-    let w = Canvas::text_width(7.0, label) + 8.0 + Canvas::text_width(11.0, &text) + 20.0;
+    let val_w = Canvas::text_width(11.0, &text).max(Canvas::text_width(11.0, "x9999"));
+    let w = Canvas::text_width(7.0, label) + 10.0 + val_w + 20.0;
     let h = 22.0;
     let x = c.width - 12.0 - w;
-    let y = if over_card {
-        c.height - 62.0 - 6.0 - h
-    } else {
-        c.height - 12.0 - h
-    };
+    let lift = up_next_alpha.clamp(0.0, 1.0) * 60.0;
+    let y = c.height - 12.0 - h - lift;
+    let active = combo > 0;
     style::cold_panel(c, [x, y, w, h]);
-    c.text(x + 10.0, y + 8.0, 7.0, rgba(0x22d4c0, 1.0), label);
+    c.round_rect(
+        [x, y],
+        [w, h],
+        style::radius::CARD,
+        rgba(0, 0.0),
+        rgba(
+            if active { 0xffd24a } else { style::tone::EDGE },
+            if active { 0.35 } else { 0.45 },
+        ),
+        1.0,
+    );
+    c.text(
+        x + 10.0,
+        y + 8.0,
+        7.0,
+        rgba(if active { 0x22d4c0 } else { 0x5c7c82 }, 1.0),
+        label,
+    );
     c.text(
         x + w - 10.0 - Canvas::text_width(11.0, &text),
         y + 5.0,
         11.0,
-        rgba(0xffd24a, 1.0),
+        rgba(if active { 0xffd24a } else { 0x6c6c82 }, 1.0),
         &text,
     );
 }
@@ -325,7 +343,7 @@ fn draw_buttons(c: &mut Canvas, held: bool) {
         .collect();
     let total = widths.iter().sum::<f32>() + gap * (buttons.len() - 1) as f32;
     let mut x = (c.width - total) / 2.0 + 6.0;
-    let mid = c.height - 52.0;
+    let mid = c.height - 72.0;
     for ((icon, label, key, code), w) in buttons.iter().zip(&widths) {
         style::block_button(
             c,
@@ -359,57 +377,98 @@ fn clock(d: Duration) -> String {
     }
 }
 
-/// A map's card on the wheel.
-struct Card<'a> {
-    item: &'a online::JourneyItem,
-    stars: f64,
-    /// Under the name: what became of it, or where it is.
-    line: Option<(String, u32)>,
-    lit: bool,
+fn format_len(ms: u64) -> String {
+    if ms == 0 {
+        return "-".into();
+    }
+    let s = ms / 1000;
+    format!("{}:{:02}", s / 60, s % 60)
 }
 
-fn draw_card(c: &mut Canvas, [x, y, w, h]: [f32; 4], card: &Card, alpha: f32) {
-    let start = c.shapes.len();
-    if card.lit {
-        style::panel(c, x, y, w, h);
-    } else {
-        style::cold_panel(c, [x, y, w, h]);
+struct SideCard<'a> {
+    eyebrow: &'a str,
+    stripe_col: u32,
+    item: &'a online::JourneyItem,
+    line: Option<(String, u32)>,
+    footer: Option<&'a str>,
+    alpha: f32,
+}
+
+/// Side card on the marathon carousel (last played map on the left, map after next on the right).
+fn draw_side_card(c: &mut Canvas, [x, y, w, h]: [f32; 4], card: &SideCard<'_>) {
+    if card.alpha <= 0.01 {
+        return;
     }
-    let item = card.item;
-    let title = format!("{} - {}", item.artist, item.title);
-    c.text(
-        x + 12.0,
-        y + 10.0,
-        9.0,
-        rgba(if card.lit { 0xffffff } else { 0xc8c8d8 }, 1.0),
-        &Canvas::fit(9.0, w - 24.0, &title),
+    let start = c.shapes.len();
+    style::cold_panel(c, [x, y, w, h]);
+    c.round_rect(
+        [x, y],
+        [w, h],
+        style::radius::CARD,
+        rgba(0, 0.0),
+        rgba(card.stripe_col, 0.30),
+        1.0,
     );
-    let stars = format!("{:.2}*", card.stars);
-    let sw = Canvas::text_width(9.0, &stars);
+    c.round_rect(
+        [x + 6.0, y + 1.5],
+        [w - 12.0, 2.5],
+        1.2,
+        rgba(card.stripe_col, 0.85),
+        rgba(0, 0.0),
+        0.0,
+    );
+    c.text(x + 10.0, y + 10.0, 6.5, rgba(0x8888a4, 1.0), card.eyebrow);
+    let stars = format!("{:.2}*", card.item.stars);
+    let sw = Canvas::text_width(7.5, &stars);
     c.text(
-        x + w - 12.0 - sw,
-        y + 26.0,
-        9.0,
-        rgba(0xffd24a, 1.0),
+        x + w - 10.0 - sw,
+        y + 9.5,
+        7.5,
+        rgba(0xffd24a, 0.95),
         &stars,
     );
+
     c.text(
-        x + 12.0,
-        y + 27.0,
-        8.0,
-        rgba(0x9a9ab0, 1.0),
-        &Canvas::fit(8.0, w - 36.0 - sw, &format!("[{}]", item.version)),
+        x + 10.0,
+        y + 26.0,
+        9.0,
+        rgba(0xe0e0ec, 1.0),
+        &Canvas::fit(9.0, w - 20.0, &card.item.title),
     );
-    if let Some((line, col)) = &card.line {
+    c.text(
+        x + 10.0,
+        y + 40.0,
+        7.5,
+        rgba(0x9a9ab0, 1.0),
+        &Canvas::fit(7.5, w - 20.0, &card.item.artist),
+    );
+    let diff = format!("[{}]", card.item.version);
+    c.text(
+        x + 10.0,
+        y + 53.0,
+        7.0,
+        rgba(0x787892, 1.0),
+        &Canvas::fit(7.0, w - 20.0, &diff),
+    );
+    if let Some((text, col)) = &card.line {
         c.text(
-            x + 12.0,
-            y + h - 20.0,
-            8.0,
+            x + 10.0,
+            y + h - 32.0,
+            7.5,
             rgba(*col, 1.0),
-            &Canvas::fit(8.0, w - 24.0, line),
+            &Canvas::fit(7.5, w - 20.0, text),
         );
     }
-    c.fade_since(start, alpha, 1.0);
+    if let Some(foot) = card.footer {
+        c.text(
+            x + 10.0,
+            y + h - 16.0,
+            6.5,
+            rgba(0x787890, 1.0),
+            &Canvas::fit(6.5, w - 20.0, foot),
+        );
+    }
+    c.fade_since(start, card.alpha, 1.0);
 }
 
 /// What became of a map: its card's line.
@@ -465,65 +524,201 @@ fn source_line(source: &MapSource, loading: bool) -> (String, u32) {
     }
 }
 
-/// The wheel: the map just played slides off to the left as the next one comes to the middle,
-/// with the one after it on the right; and under it, the marathon so far and what the keys do.
-fn draw_wheel(state: &State, c: &mut Canvas, since: Duration, held: bool, loading: bool) {
+/// Background image path for a queued Journey map if its files are already on disk.
+fn queued_background(state: &State, q: &crate::journey::QueuedMap) -> Option<std::path::PathBuf> {
+    match &q.source {
+        MapSource::Cached { entry, .. } => crate::preview::background_path(entry),
+        MapSource::Local(path) | MapSource::Saved(path) => state
+            .library
+            .iter()
+            .find(|e| e.path == *path)
+            .and_then(crate::preview::background_path),
+        _ => None,
+    }
+}
+
+/// The marathon intermission screen: top status bar, focused hero card for the upcoming map
+/// flanked by compact previous/upcoming cards, countdown bar, and action buttons.
+fn draw_wheel(
+    state: &State,
+    c: &mut Canvas,
+    now: Instant,
+    since: Duration,
+    held: bool,
+    loading: bool,
+) {
     let Some(m) = &state.journey.marathon else {
         return;
     };
-    let ms = since.as_secs_f32() * 1000.0;
     let w = c.width;
-    let cw = (w * 0.3).clamp(180.0, 280.0);
-    let ch = 62.0;
-    let gap = 14.0;
-    let y = 24.0;
-    let turn = ease(ms, WHEEL_MS);
-    let mid = (w - cw) / 2.0 + (1.0 - turn) * (cw + gap);
+    let h = c.height;
     let last = m.last.as_ref();
     let current = state.journey.current();
+    let wait_gap = gap(&state.cfg);
 
+    // Seamless first-map launch: avoid flashing the full wheel for a few frames while the first
+    // map loads synchronously from disk.
+    if wait_gap.is_zero()
+        && last.is_none()
+        && !held
+        && let Some(q) = current
+    {
+        let pw = 360.0_f32.min(w - 32.0);
+        let ph = 92.0;
+        let px = (w - pw) / 2.0;
+        let py = (h - ph) / 2.0;
+        style::cold_panel(c, [px, py, pw, ph]);
+        c.text_centered(
+            w / 2.0,
+            py + 16.0,
+            8.0,
+            rgba(0x22d4c0, 1.0),
+            tr!("STARTING MARATHON", "マラソン開始中", "ЗАПУСК МАРАФОНА"),
+        );
+        c.text_centered(
+            w / 2.0,
+            py + 36.0,
+            12.0,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(12.0, pw - 28.0, &q.item.title),
+        );
+        let (status, scol) = source_line(&q.source, loading);
+        c.text_centered(w / 2.0, py + 62.0, 8.0, rgba(scol, 1.0), &status);
+        return;
+    }
+
+    // 1. Top status strip (styled like Journey's top lane).
+    let bar_x = 24.0;
+    let bar_y = 22.0;
+    let bar_w = w - 48.0;
+    let bar_h = 34.0;
+    style::cold_panel(c, [bar_x, bar_y, bar_w, bar_h]);
+    let accent = if state.cfg.journey_hardcore {
+        style::DANGER
+    } else {
+        0xffd24a
+    };
+    c.rect(
+        bar_x + 1.0,
+        bar_y + 5.0,
+        2.5,
+        bar_h - 10.0,
+        rgba(accent, 0.95),
+    );
+
+    let n = m.played() + 1;
+    let time = clock(m.duration(now));
+    let mut so_far = tr!(
+        "MARATHON  ·  map {n}  ·  {time}",
+        "マラソン  ·  {n}譜面目  ·  {time}",
+        "МАРАФОН  ·  карта {n}  ·  {time}";
+        [] [n, time]
+    );
+    if let Some(acc) = m.average_accuracy() {
+        so_far.push_str(&format!("  ·  {:.2}%", acc * 100.0));
+    }
+    if m.pp > 0.0 {
+        so_far.push_str(&format!("  ·  {:.0}pp", m.pp));
+    }
+    let mut right_used = 12.0f32;
+    if state.cfg.journey_hardcore {
+        let hc = tr!("HARDCORE", "ハードコア", "ХАРДКОР");
+        let hw = Canvas::text_width(7.0, hc) + 12.0;
+        let hx = bar_x + bar_w - right_used - hw;
+        c.round_rect(
+            [hx, bar_y + 9.0],
+            [hw, 16.0],
+            style::radius::SMALL,
+            rgba(style::DANGER, 0.18),
+            rgba(style::DANGER, 0.85),
+            1.0,
+        );
+        c.text_centered(
+            hx + hw / 2.0,
+            bar_y + 13.0,
+            7.0,
+            rgba(style::DANGER, 1.0),
+            hc,
+        );
+        right_used += hw + 8.0;
+    }
+    if m.combo > 0 {
+        let combo = m.combo;
+        let combo_txt = tr!(
+            "MARATHON COMBO x{combo}",
+            "マラソンコンボ x{combo}",
+            "КОМБО МАРАФОНА x{combo}";
+            [] [combo]
+        );
+        let cw_pill = Canvas::text_width(8.0, &combo_txt) + 16.0;
+        let cx_pill = bar_x + bar_w - right_used - cw_pill;
+        c.round_rect(
+            [cx_pill, bar_y + 7.0],
+            [cw_pill, 20.0],
+            style::radius::CONTROL,
+            rgba(0xffd24a, 0.16),
+            rgba(0xffd24a, 0.72),
+            1.0,
+        );
+        c.text_centered(
+            cx_pill + cw_pill / 2.0,
+            bar_y + 13.0,
+            8.0,
+            rgba(0xffd24a, 1.0),
+            &combo_txt,
+        );
+        right_used += cw_pill + 10.0;
+    }
+    c.text(
+        bar_x + 14.0,
+        bar_y + 13.0,
+        8.5,
+        rgba(0xc8c8dc, 1.0),
+        &Canvas::fit(8.5, (bar_w - 24.0 - right_used).max(60.0), &so_far),
+    );
+
+    // 2. Center carousel: Hero card for the upcoming map + compact dimmed side cards.
+    let ms = since.as_secs_f32() * 1000.0;
+    let turn = ease(ms, WHEEL_MS);
+    let hero_w = (w * 0.48).clamp(320.0, 440.0);
+    let hero_h = 186.0;
+    let side_w = (w * 0.22).clamp(160.0, 206.0);
+    let side_h = 136.0;
+    let gap_x = 16.0;
+    let hero_y = 122.0;
+    let side_y = hero_y + (hero_h - side_h) / 2.0;
+    let slide = (1.0 - turn) * (side_w + gap_x);
+    let hero_x = (w - hero_w) / 2.0 + slide;
+
+    // Left side card: previous map & outcome.
     if let Some(play) = last {
-        let card = Card {
-            item: &play.item,
-            stars: play.item.stars,
-            line: Some(outcome_line(play)),
-            lit: false,
-        };
-        draw_card(
+        let (line, col) = outcome_line(play);
+        let mut foot = String::new();
+        if play.vote_on.is_some() {
+            foot.push_str(tr!("L/D: vote", "L/D: 評価", "L/D: оценка"));
+        }
+        if play.cached.is_some() {
+            if !foot.is_empty() {
+                foot.push_str("  ·  ");
+            }
+            foot.push_str(tr!("S: save", "S: 保存", "S: сохр."));
+        }
+        draw_side_card(
             c,
-            [mid - cw - gap, y, cw, ch],
-            &card,
-            0.55 + 0.45 * (1.0 - turn),
+            [hero_x - gap_x - side_w, side_y, side_w, side_h],
+            &SideCard {
+                eyebrow: tr!("LAST MAP", "前の譜面", "ПРОШЛАЯ"),
+                stripe_col: col,
+                item: &play.item,
+                line: Some((line, col)),
+                footer: (!foot.is_empty()).then_some(foot.as_str()),
+                alpha: 0.60 + 0.35 * (1.0 - turn),
+            },
         );
     }
-    if let Some(q) = current {
-        // The star rating rolls from the last map's to this one's.
-        let from = last.map_or(q.item.stars, |p| p.item.stars);
-        let roll = ease(ms, STARS_MS) as f64;
-        let card = Card {
-            item: &q.item,
-            stars: from + (q.item.stars - from) * roll,
-            line: Some(source_line(&q.source, loading)),
-            lit: true,
-        };
-        draw_card(c, [mid, y, cw, ch], &card, 1.0);
-    }
-    if let Some(q) = state.journey.queue.get(1) {
-        let card = Card {
-            item: &q.item,
-            stars: q.item.stars,
-            line: Some((
-                tr!("N: another", "N: ほかの譜面", "N: другую").into(),
-                0x787890,
-            )),
-            lit: false,
-        };
-        draw_card(c, [mid + cw + gap, y, cw, ch], &card, 0.55 * turn);
-    }
 
-    // The middle: what happens next.
-    let cy = 196.0;
-    let (head, col) = if held {
+    // Center Hero card: the next map (or outage / searching state).
+    let (eyebrow, eyebrow_col) = if held {
         (
             tr!(
                 "Held: Space to go on",
@@ -544,61 +739,290 @@ fn draw_wheel(state: &State, c: &mut Canvas, since: Duration, held: bool, loadin
     } else {
         (tr!("Up next", "次の譜面", "Дальше"), 0x22d4c0)
     };
-    c.text_centered(w / 2.0, cy, 9.0, rgba(col, 1.0), head);
+
     if let Some(q) = current {
-        c.text_centered(
-            w / 2.0,
-            cy + 18.0,
-            14.0,
-            rgba(0xffffff, 1.0),
-            &Canvas::fit(14.0, w - 48.0, &q.item.title),
+        let (role_label, role_col) = super::journey::role_badge(&q.item.role);
+        let from = last.map_or(q.item.stars, |p| p.item.stars);
+        let roll = ease(ms, STARS_MS) as f64;
+        let shown_stars = from + (q.item.stars - from) * roll;
+
+        style::cold_panel(c, [hero_x, hero_y, hero_w, hero_h]);
+        c.round_rect(
+            [hero_x, hero_y],
+            [hero_w, hero_h],
+            style::radius::CARD,
+            rgba(0, 0.0),
+            rgba(if held { 0xffd24a } else { role_col }, 0.55),
+            1.2,
+        );
+
+        // Artwork banner covering the upper 126px (title/artist/diff sit over its bottom fade,
+        // matching Journey's own card with no hollow gap when artwork is absent).
+        let banner_h = 126.0;
+        let has_bg = queued_background(state, q).is_some_and(|bg| {
+            let drawn = c.picture_cover_round_top(
+                &bg,
+                [hero_x, hero_y, hero_w, banner_h],
+                [hero_x, hero_y, hero_w, banner_h],
+                [0.85, 0.85, 0.85, 1.0],
+                style::radius::CARD,
+                Some(0.5),
+            );
+            if drawn {
+                c.shade_eased_fade_down(
+                    [hero_x, hero_y],
+                    [hero_w, banner_h],
+                    style::radius::CARD,
+                    rgba(style::PANEL_COLD, 0.78),
+                    rgba(style::PANEL_COLD, 0.14),
+                    0.55,
+                );
+            }
+            drawn
+        });
+        if !has_bg {
+            c.rect(
+                hero_x + 1.0,
+                hero_y + 4.0,
+                hero_w - 2.0,
+                34.0,
+                rgba(role_col, 0.06),
+            );
+        }
+        c.round_rect(
+            [hero_x + 6.0, hero_y + 1.5],
+            [hero_w - 12.0, 2.5],
+            1.2,
+            rgba(if held { 0xffd24a } else { role_col }, 0.95),
+            rgba(0, 0.0),
+            0.0,
+        );
+
+        // Top row of hero banner: role pill + eyebrow on left, rolling star_chip on right.
+        let pad = 14.0;
+        let stars_opt = (shown_stars > 0.05).then_some(shown_stars as f32);
+        let star_w = style::star_chip(
+            c,
+            hero_x + hero_w - pad,
+            hero_y + 14.0,
+            9.5,
+            None,
+            stars_opt,
+        );
+
+        let pill_w = Canvas::text_width(6.5, role_label) + 10.0;
+        c.round_rect(
+            [hero_x + pad, hero_y + 12.0],
+            [pill_w, 14.0],
+            style::radius::SMALL,
+            rgba(role_col, 0.22),
+            rgba(role_col, 0.8),
+            1.0,
         );
         c.text_centered(
-            w / 2.0,
-            cy + 40.0,
-            9.0,
-            rgba(0xa8a8bc, 1.0),
+            hero_x + pad + pill_w / 2.0,
+            hero_y + 15.5,
+            6.5,
+            rgba(role_col, 1.0),
+            role_label,
+        );
+        c.text(
+            hero_x + pad + pill_w + 8.0,
+            hero_y + 15.0,
+            8.0,
+            rgba(eyebrow_col, 1.0),
             &Canvas::fit(
-                9.0,
-                w - 48.0,
-                &format!("{}  [{}]", q.item.artist, q.item.version),
+                8.0,
+                (hero_w - pad * 2.0 - pill_w - star_w - 18.0).max(40.0),
+                eyebrow,
             ),
         );
+
+        // Title + artist + diff anchored at bottom of banner (consistent with Journey card).
+        let title_y = hero_y + banner_h - 62.0;
+        let inner_w = hero_w - pad * 2.0;
+        let title = Canvas::fit(15.0, inner_w, &q.item.title);
+        style::title(c, hero_x + pad, title_y, 15.0, 0xffffff, &title);
+        c.text(
+            hero_x + pad,
+            title_y + 23.0,
+            9.5,
+            rgba(0xc8c8dc, 1.0),
+            &Canvas::fit(9.5, inner_w, &q.item.artist),
+        );
+        let diff_line = format!("[{}]  by {}", q.item.version, q.item.creator);
+        c.text(
+            hero_x + pad,
+            title_y + 39.0,
+            8.5,
+            rgba(role_col, 0.95),
+            &Canvas::fit(8.5, inner_w, &diff_line),
+        );
+
+        style::rule(c, hero_x + 1.0, hero_y + banner_h, hero_w - 2.0);
+
+        // Metadata row: LENGTH & BPM on left, honest ready/loading/downloading status on right.
+        let meta_y = hero_y + banner_h + 18.0;
+        let len_s = format_len(q.item.length_ms);
+        let bpm_s = if q.item.bpm > 0.0 {
+            format!("{:.0}", q.item.bpm * state.play_speed().0.max(0.01))
+        } else {
+            "-".into()
+        };
+        let meta = tr!(
+            "LENGTH {len_s}   BPM {bpm_s}",
+            "長さ {len_s}   BPM {bpm_s}",
+            "ДЛИНА {len_s}   BPM {bpm_s}";
+            [] [len_s, bpm_s]
+        );
+        c.text(hero_x + pad, meta_y, 8.0, rgba(0x9a9ab0, 1.0), &meta);
+
+        let (status, scol) = source_line(&q.source, loading);
+        let st_w = Canvas::text_width(8.0, &status);
+        c.text(
+            hero_x + hero_w - pad - st_w,
+            meta_y,
+            8.0,
+            rgba(scol, 1.0),
+            &status,
+        );
+
+        // Countdown / progress bar inset inside the bottom edge of the hero card.
+        let bar_y_bot = hero_y + hero_h - 11.0;
+        let track_w = inner_w;
+        c.round_rect(
+            [hero_x + pad, bar_y_bot],
+            [track_w, 4.0],
+            2.0,
+            rgba(0x1b1f2e, 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
+        let frac = if held {
+            1.0
+        } else if !wait_gap.is_zero() {
+            (1.0 - (since.as_secs_f32() / wait_gap.as_secs_f32()).clamp(0.0, 1.0)).clamp(0.0, 1.0)
+        } else {
+            q.source.download_progress().unwrap_or(1.0)
+        };
+        let bar_col = if held {
+            0xffd24a
+        } else if loading {
+            0x22d4c0
+        } else {
+            role_col
+        };
+        c.round_rect(
+            [hero_x + pad, bar_y_bot],
+            [(track_w * frac).max(4.0), 4.0],
+            2.0,
+            rgba(bar_col, 0.92),
+            rgba(0, 0.0),
+            0.0,
+        );
+    } else {
+        // Queue is empty: either fetching next batch or server outage.
+        let outage = state.journey.outage(now) && !state.journey.local_mode;
+        style::cold_panel(c, [hero_x, hero_y, hero_w, hero_h]);
+        c.round_rect(
+            [hero_x, hero_y],
+            [hero_w, hero_h],
+            style::radius::CARD,
+            rgba(0, 0.0),
+            rgba(
+                if outage {
+                    style::DANGER
+                } else {
+                    style::tone::EDGE
+                },
+                0.65,
+            ),
+            1.2,
+        );
+        if outage {
+            c.text_centered(
+                hero_x + hero_w / 2.0,
+                hero_y + 38.0,
+                11.0,
+                rgba(0xffffff, 1.0),
+                tr!(
+                    "Can't reach the taiko.rs server",
+                    "taiko.rs サーバーに接続できません",
+                    "Сервер taiko.rs не отвечает"
+                ),
+            );
+            if let Some(err) = &state.journey.error {
+                c.text_centered(
+                    hero_x + hero_w / 2.0,
+                    hero_y + 62.0,
+                    7.5,
+                    rgba(0x9a9ab0, 1.0),
+                    &Canvas::fit(7.5, hero_w - 32.0, err),
+                );
+            }
+            let retry_lbl = tr!("Retry now", "今すぐ再試行", "Повторить");
+            let off_lbl = tr!("Continue offline", "オフラインで続ける", "Играть оффлайн");
+            let rw = Canvas::text_width(8.0, retry_lbl) + 34.0;
+            let ow = Canvas::text_width(8.0, off_lbl) + 34.0;
+            let bx = hero_x + (hero_w - (rw + 10.0 + ow)) / 2.0 + 6.0;
+            let by = hero_y + 124.0;
+            let bw = style::block_button(
+                c,
+                [bx, by],
+                &style::PLAY,
+                retry_lbl,
+                None,
+                8.0,
+                true,
+                hit::Hit::JourneyRetry,
+                28.0,
+            );
+            style::block_button(
+                c,
+                [bx + bw + 10.0, by],
+                &style::FOLDER,
+                off_lbl,
+                None,
+                8.0,
+                false,
+                hit::Hit::JourneyOffline,
+                28.0,
+            );
+        } else {
+            c.text_centered(
+                hero_x + hero_w / 2.0,
+                hero_y + hero_h / 2.0 - 6.0,
+                10.0,
+                rgba(0xb4b4c8, 1.0),
+                eyebrow,
+            );
+        }
     }
 
-    // The marathon so far.
-    let n = m.played() + 1;
-    let time = clock(m.duration(Instant::now()));
-    let mut so_far = tr!("MARATHON  ·  map {n}  ·  {time}", "マラソン  ·  {n}譜面目  ·  {time}", "МАРАФОН  ·  карта {n}  ·  {time}"; [] [n, time]);
-    if let Some(acc) = m.average_accuracy() {
-        so_far.push_str(&format!("  ·  {:.2}%", acc * 100.0));
-    }
-    if m.pp > 0.0 {
-        so_far.push_str(&format!("  ·  {:.0}pp", m.pp));
-    }
-    if state.cfg.journey_hardcore {
-        so_far.push_str(tr!("  ·  HARDCORE", "  ·  ハードコア", "  ·  ХАРДКОР"));
-    }
-    c.text_centered(
-        w / 2.0,
-        120.0,
-        8.0,
-        rgba(0x9a9ab0, 1.0),
-        &Canvas::fit(8.0, w - 32.0, &so_far),
-    );
-    if m.combo > 0 {
-        let combo = m.combo;
-        c.text_centered(
-            w / 2.0,
-            140.0,
-            12.0,
-            rgba(0xffd24a, 1.0),
-            &tr!("MARATHON COMBO x{combo}", "マラソンコンボ x{combo}", "КОМБО МАРАФОНА x{combo}"; [] [combo]),
+    // Right side card: map after next.
+    if let Some(q) = state.journey.queue.get(1) {
+        let len_s = format_len(q.item.length_ms);
+        let (_, ncol) = super::journey::role_badge(&q.item.role);
+        draw_side_card(
+            c,
+            [hero_x + hero_w + gap_x, side_y, side_w, side_h],
+            &SideCard {
+                eyebrow: tr!("AFTER THIS", "その次", "ПОТОМ"),
+                stripe_col: ncol,
+                item: &q.item,
+                line: Some((
+                    tr!("Length {len_s}", "長さ {len_s}", "Длина {len_s}"; [] [len_s]),
+                    0x9a9ab0,
+                )),
+                footer: Some(tr!("N: swap", "N: 変更", "N: заменить")),
+                alpha: 0.55 * turn,
+            },
         );
     }
+
+    // 3. Bottom controls & hints.
     draw_buttons(c, held);
 
-    // Nothing needs a key: the next map starts by itself. The buttons above say theirs.
     let mut hints = String::from(tr!(
         "N: another next one",
         "N: 次の次を変更",
@@ -616,22 +1040,56 @@ fn draw_wheel(state: &State, c: &mut Canvas, since: Duration, held: bool, loadin
     }
     c.text_centered(
         w / 2.0,
-        c.height - 18.0,
+        h - 18.0,
         7.0,
         rgba(0x787890, 1.0),
         &Canvas::fit_hints(7.0, w - 24.0, &hints),
     );
 }
 
-/// What the marathon came to.
-fn draw_summary(m: &Marathon, c: &mut Canvas) {
+/// What the marathon came to: solid modal card with KPI tiles, full-width Best Play row,
+/// run outcome dot strip, and Play again / Back to Journey buttons.
+fn draw_summary(state: &State, m: &Marathon, c: &mut Canvas, now: Instant) {
     let w = c.width;
-    let pw = 360.0_f32.min(w - 32.0);
-    let ph = 258.0;
+    let h = c.height;
+    // Full-screen dark scrim so background art never competes with the summary.
+    c.rect(0.0, 0.0, w, h, rgba(0x080a12, 0.80));
+
+    let pw = 472.0_f32.min(w - 28.0);
+    let has_outcomes = !m.outcomes.is_empty();
+    let ph = if has_outcomes { 318.0 } else { 300.0 };
     let x = (w - pw) / 2.0;
-    let y = (c.height - ph) / 2.0;
-    style::panel(c, x, y, pw, ph);
-    let heading = match m.ended.map(|(why, _)| why) {
+    let y = ((h - ph) / 2.0).max(20.0);
+
+    let end_reason = m.ended.map(|(why, _)| why);
+    let is_hc_end = end_reason == Some(MarathonEnd::Hardcore);
+    let top_col = if is_hc_end { style::DANGER } else { 0xffd24a };
+
+    c.round_rect(
+        [x, y],
+        [pw, ph],
+        10.0,
+        rgba(style::PANEL_COLD, 0.99),
+        rgba(
+            if is_hc_end {
+                style::DANGER
+            } else {
+                style::tone::EDGE
+            },
+            0.95,
+        ),
+        1.5,
+    );
+    c.round_rect(
+        [x + 10.0, y + 1.5],
+        [pw - 20.0, 2.5],
+        1.2,
+        rgba(top_col, 0.95),
+        rgba(0, 0.0),
+        0.0,
+    );
+
+    let heading = match end_reason {
         Some(MarathonEnd::Hardcore) => {
             tr!(
                 "HARDCORE: A FAIL ENDS IT",
@@ -642,71 +1100,236 @@ fn draw_summary(m: &Marathon, c: &mut Canvas) {
         Some(MarathonEnd::OutOfMaps) => tr!("NO MORE MAPS", "譜面がありません", "КАРТЫ КОНЧИЛИСЬ"),
         _ => tr!("MARATHON OVER", "マラソン終了", "МАРАФОН ОКОНЧЕН"),
     };
-    let tw = Canvas::text_width(12.0, heading);
-    style::title(c, x + (pw - tw) / 2.0, y + 16.0, 12.0, 0xffffff, heading);
-    style::rule(c, x + 16.0, y + 40.0, pw - 32.0);
+    let title_col = if is_hc_end { style::DANGER } else { 0xffffff };
+    let tw = Canvas::text_width(13.0, heading);
+    style::title(c, x + (pw - tw) / 2.0, y + 16.0, 13.0, title_col, heading);
 
-    let (played, passed, failed, skipped) = (m.played(), m.passed, m.failed, m.skipped);
-    let rows: Vec<(&str, String)> = vec![
-        (
-            tr!("Maps played", "プレイした譜面", "Сыграно карт"),
-            tr!("{played}  ({passed} passed, {failed} failed)", "{played}  (クリア{passed}, 失敗{failed})", "{played}  (пройдено {passed}, фейлов {failed})"; [] [played, passed, failed]),
-        ),
-        (tr!("Skipped", "スキップ", "Пропущено"), skipped.to_string()),
-        (
-            tr!("Time", "時間", "Время"),
-            clock(m.duration(Instant::now())),
-        ),
-        (
-            tr!("Average accuracy", "平均精度", "Средняя точность"),
-            m.average_accuracy()
-                .map_or("-".into(), |a| format!("{:.2}%", a * 100.0)),
-        ),
-        (
-            tr!("pp from passes", "クリアのpp", "pp с пройденных"),
-            format!("{:.0}", m.pp),
-        ),
-        (
-            tr!("Best streak", "最長連続クリア", "Лучшая серия"),
-            m.best_streak.to_string(),
-        ),
-        (
-            tr!(
-                "Best marathon combo",
-                "最大マラソンコンボ",
-                "Лучшее комбо марафона"
-            ),
-            m.best_combo.to_string(),
-        ),
-        (
-            tr!("Best play", "ベストプレイ", "Лучшая игра"),
-            m.best
-                .as_ref()
-                .map_or("-".into(), |(name, pp)| format!("{pp:.0}pp  {name}")),
-        ),
-    ];
-    for (i, (label, value)) in rows.iter().enumerate() {
-        let ry = y + 52.0 + i as f32 * 22.0;
-        c.text(x + 18.0, ry, 9.0, rgba(0x9a9ab0, 1.0), label);
-        let vx = x + pw * 0.45;
-        c.text(
-            vx,
-            ry,
-            9.0,
-            rgba(0xffffff, 1.0),
-            &Canvas::fit(9.0, x + pw - 18.0 - vx, value),
-        );
+    // Subtitle: elapsed time + active modifiers.
+    let mut sub = clock(m.duration(now));
+    if state.cfg.journey_hardcore {
+        sub.push_str(tr!("  ·  Hardcore", "  ·  ハードコア", "  ·  Хардкор"));
+    }
+    if state.cfg.journey_focus != crate::config::JourneyFocus::Any {
+        sub.push_str(&format!("  ·  {}", state.cfg.journey_focus.name()));
+    }
+    if state.cfg.journey_chill {
+        sub.push_str(tr!("  ·  Chill", "  ·  チル", "  ·  Чилл"));
     }
     c.text_centered(
         x + pw / 2.0,
-        y + ph - 18.0,
-        7.0,
-        rgba(0x787890, 1.0),
+        y + 36.0,
+        8.0,
+        rgba(0x9a9ab0, 1.0),
+        &Canvas::fit(8.0, pw - 32.0, &sub),
+    );
+    let pad = 16.0;
+    let inner_w = pw - pad * 2.0;
+    style::rule(c, x + pad, y + 52.0, inner_w);
+
+    // 2x2 KPI tile grid (labels above values: zero collisions in any language).
+    let (played, passed, failed, skipped) = (m.played(), m.passed, m.failed, m.skipped);
+    let tile_gap = 10.0;
+    let tile_w = (inner_w - tile_gap) / 2.0;
+    let tile_h = 58.0;
+    let gx = x + pad;
+    let gy = y + 62.0;
+
+    let draw_kpi = |c: &mut Canvas,
+                    tx: f32,
+                    ty: f32,
+                    caption: &str,
+                    value: &str,
+                    val_col: u32,
+                    sub_line: Option<String>| {
+        style::tile(
+            c,
+            [tx, ty, tile_w, tile_h],
+            style::radius::CONTROL,
+            style::Surface::Lifted,
+        );
+        c.text(
+            tx + 12.0,
+            ty + 8.0,
+            7.0,
+            rgba(0x8888a4, 1.0),
+            &Canvas::fit(7.0, tile_w - 24.0, caption),
+        );
+        c.text(
+            tx + 12.0,
+            ty + 22.0,
+            13.0,
+            rgba(val_col, 1.0),
+            &Canvas::fit(13.0, tile_w - 24.0, value),
+        );
+        if let Some(sub) = sub_line {
+            c.text(
+                tx + 12.0,
+                ty + 42.0,
+                6.5,
+                rgba(0x9a9ab0, 1.0),
+                &Canvas::fit(6.5, tile_w - 24.0, &sub),
+            );
+        }
+    };
+
+    let breakdown = tr!(
+        "{passed} pass  ·  {failed} fail  ·  {skipped} skip",
+        "{passed}クリア · {failed}失敗 · {skipped}スキップ",
+        "{passed} ок  ·  {failed} фейл  ·  {skipped} скип";
+        [] [passed, failed, skipped]
+    );
+    draw_kpi(
+        c,
+        gx,
+        gy,
+        tr!("Maps played", "プレイした譜面", "Сыграно карт"),
+        &played.to_string(),
+        0xffffff,
+        Some(breakdown),
+    );
+    let acc_val = m
+        .average_accuracy()
+        .map_or("-".into(), |a| format!("{:.2}%", a * 100.0));
+    draw_kpi(
+        c,
+        gx + tile_w + tile_gap,
+        gy,
+        tr!("Average accuracy", "平均精度", "Средняя точность"),
+        &acc_val,
+        0x22d4c0,
+        None,
+    );
+    let pp_val = format!("{:.0}pp", m.pp);
+    draw_kpi(
+        c,
+        gx,
+        gy + tile_h + tile_gap,
+        tr!("pp from passes", "クリアのpp", "pp с пройденных"),
+        &pp_val,
+        0xffd24a,
+        None,
+    );
+    let streak = m.best_streak;
+    let streak_sub = tr!(
+        "Best streak: {streak}",
+        "最長連続クリア: {streak}",
+        "Лучшая серия: {streak}";
+        [] [streak]
+    );
+    draw_kpi(
+        c,
+        gx + tile_w + tile_gap,
+        gy + tile_h + tile_gap,
         tr!(
-            "Enter: back to Journey",
-            "Enter: ジャーニーに戻る",
-            "Enter: назад в Journey"
+            "Best marathon combo",
+            "最大マラソンコンボ",
+            "Лучшее комбо марафона"
         ),
+        &format!("x{}", m.best_combo),
+        0xffd24a,
+        Some(streak_sub),
+    );
+
+    // Full-width Best Play tile.
+    let bp_y = gy + tile_h * 2.0 + tile_gap * 2.0;
+    let bp_h = 44.0;
+    style::tile(
+        c,
+        [gx, bp_y, inner_w, bp_h],
+        style::radius::CONTROL,
+        style::Surface::Lifted,
+    );
+    c.text(
+        gx + 12.0,
+        bp_y + 7.0,
+        7.0,
+        rgba(0x8888a4, 1.0),
+        tr!("Best play", "ベストプレイ", "Лучшая игра"),
+    );
+    match &m.best {
+        Some((name, pp)) => {
+            let pp_s = format!("{pp:.0}pp");
+            let pp_w = Canvas::text_width(11.0, &pp_s);
+            c.text(
+                gx + inner_w - 12.0 - pp_w,
+                bp_y + 18.0,
+                11.0,
+                rgba(0xffd24a, 1.0),
+                &pp_s,
+            );
+            c.text(
+                gx + 12.0,
+                bp_y + 21.0,
+                9.0,
+                rgba(0xffffff, 1.0),
+                &Canvas::fit(9.0, inner_w - 34.0 - pp_w, name),
+            );
+        }
+        None => {
+            c.text(gx + 12.0, bp_y + 21.0, 9.0, rgba(0x787890, 1.0), "-");
+        }
+    }
+
+    // Run history dot strip (green pass, red fail, gray skip).
+    let mut next_y = bp_y + bp_h + 10.0;
+    if has_outcomes {
+        let shown: &[MarathonOutcome] = if m.outcomes.len() > 28 {
+            &m.outcomes[m.outcomes.len() - 28..]
+        } else {
+            &m.outcomes
+        };
+        let step = 12.0;
+        let strip_w = (shown.len().saturating_sub(1)) as f32 * step;
+        let start_x = x + pw / 2.0 - strip_w / 2.0;
+        let dot_y = next_y + 4.0;
+        for (k, out) in shown.iter().enumerate() {
+            let col = match out {
+                MarathonOutcome::Passed => 0x4ee07a,
+                MarathonOutcome::Failed => 0xff4d5a,
+                MarathonOutcome::Skipped => 0x5c5c74,
+            };
+            c.circle(
+                start_x + k as f32 * step,
+                dot_y,
+                3.5,
+                rgba(col, 0.95),
+                rgba(0xffffff, 0.3),
+                0.8,
+            );
+        }
+        next_y += 18.0;
+    }
+
+    // Clickable footer buttons: Play again (R) and Back to Journey (Enter).
+    let again_lbl = tr!("Play again", "もう一度", "Ещё раз");
+    let back_lbl = tr!("Back to Journey", "ジャーニーに戻る", "Назад в Journey");
+    let aw = style::icon_button_width(again_lbl, Some("R"), 8.0);
+    let bw = style::icon_button_width(back_lbl, Some("Enter"), 8.0);
+    let btn_gap = 12.0;
+    let total_w = aw + btn_gap + bw;
+    let bx = x + (pw - total_w) / 2.0 + 6.0;
+    let by = next_y + 18.0;
+    style::block_button(
+        c,
+        [bx, by],
+        &style::PLAY,
+        again_lbl,
+        Some("R"),
+        8.0,
+        false,
+        hit::Hit::MarathonRestart,
+        28.0,
+    );
+    style::block_button(
+        c,
+        [bx + aw + btn_gap, by],
+        &style::BACK,
+        back_lbl,
+        Some("Enter"),
+        8.0,
+        true,
+        hit::Hit::Key(KeyCode::Enter),
+        28.0,
     );
 }
 
@@ -809,13 +1432,15 @@ impl State {
         };
         let mods = self.cfg.mods;
         let rate = self.cfg.rate;
-        let speed = mods.speed(rate, self.cfg.rate_keep_pitch);
+        let keep_pitch = self.cfg.rate_keep_pitch;
+        let speed = mods.speed(rate, keep_pitch);
         let job = self.spawn_loader_at(path.clone(), speed, mods, None, true, None);
         if let Some(m) = &mut self.journey.marathon {
             m.preload = Some(Preload {
                 path,
                 mods,
                 rate,
+                keep_pitch,
                 job,
             });
         }
@@ -836,12 +1461,13 @@ impl State {
         let p = self.journey.marathon.as_mut()?.preload.take()?;
         let same = self.library.get(entry).is_some_and(|e| e.path == p.path)
             && p.mods == self.cfg.mods
-            && p.rate == self.cfg.rate;
+            && p.rate == self.cfg.rate
+            && p.keep_pitch == self.cfg.rate_keep_pitch;
         same.then_some(p)
     }
 
     /// The pause menu's Skip: the map being played is left (no score), the server hears of it
-    /// as a skip, and the wheel turns to the next.
+    /// as a skip, and the wheel turns to the next (or ends a hardcore marathon).
     pub(crate) fn marathon_skip_map(&mut self) {
         let seen_secs = self
             .play
@@ -855,6 +1481,9 @@ impl State {
         self.journey_skip_quiet(seen_secs);
         if let Some(m) = &mut self.journey.marathon {
             m.combo_broken();
+            if self.cfg.journey_hardcore {
+                m.end(MarathonEnd::Hardcore, Instant::now());
+            }
         }
         if let (Some(m), Some(item)) = (&mut self.journey.marathon, item) {
             m.record(MarathonPlay {

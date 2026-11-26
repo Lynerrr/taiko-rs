@@ -253,6 +253,93 @@ impl JourneyFocus {
     }
 }
 
+/// Chart length filter for Journey recommendations (its settings panel).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum JourneyLength {
+    /// Any length in normal Journey; Marathon caps at 5 minutes by default.
+    #[default]
+    Any,
+    /// Short maps up to 2 minutes.
+    Short,
+    /// Standard maps from 1 to 4 minutes.
+    Standard,
+    /// Maps up to 6 minutes.
+    Extended,
+    /// Long maps 4 minutes and over.
+    Long,
+}
+
+/// Default upper bound (5 minutes) applied in Marathon when `JourneyLength::Any` is selected,
+/// so hour-long compilation charts never ambush a marathon run.
+pub const MARATHON_DEFAULT_MAX_LENGTH_MS: u64 = 300_000;
+
+impl JourneyLength {
+    pub const ALL: [JourneyLength; 5] = [
+        JourneyLength::Any,
+        JourneyLength::Short,
+        JourneyLength::Standard,
+        JourneyLength::Extended,
+        JourneyLength::Long,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            JourneyLength::Any => tr!("Any", "おまかせ", "Любые"),
+            JourneyLength::Short => tr!("Short (<=2m)", "短め (<=2分)", "Короткие (<=2м)"),
+            JourneyLength::Standard => tr!("Normal (1-4m)", "標準 (1-4分)", "Обычные (1-4м)"),
+            JourneyLength::Extended => tr!("Up to 6m", "6分まで", "До 6м"),
+            JourneyLength::Long => tr!("Long (4m+)", "長め (4分+)", "Длинные (4м+)"),
+        }
+    }
+
+    /// Compact label for segmented chips in Journey settings and active-filter badges.
+    pub fn chip(self, marathon: bool) -> &'static str {
+        match self {
+            JourneyLength::Any if marathon => tr!("Any <=5m", "標準 <=5分", "Все <=5м"),
+            JourneyLength::Any => tr!("Any", "おまかせ", "Любые"),
+            JourneyLength::Short => tr!("<=2m", "<=2分", "<=2м"),
+            JourneyLength::Standard => tr!("1-4m", "1-4分", "1-4м"),
+            JourneyLength::Extended => tr!("<=6m", "<=6分", "<=6м"),
+            JourneyLength::Long => tr!("4m+", "4分+", "4м+"),
+        }
+    }
+
+    /// Inclusive `(min_length_ms, max_length_ms)` bounds sent to the server and local picker.
+    pub fn bounds(self, marathon: bool) -> (Option<u64>, Option<u64>) {
+        match self {
+            JourneyLength::Any => (None, marathon.then_some(MARATHON_DEFAULT_MAX_LENGTH_MS)),
+            JourneyLength::Short => (None, Some(120_000)),
+            JourneyLength::Standard => (Some(60_000), Some(240_000)),
+            JourneyLength::Extended => (None, Some(360_000)),
+            JourneyLength::Long => (Some(240_000), None),
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            JourneyLength::Any => "any",
+            JourneyLength::Short => "short",
+            JourneyLength::Standard => "standard",
+            JourneyLength::Extended => "extended",
+            JourneyLength::Long => "long",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<JourneyLength> {
+        JourneyLength::ALL
+            .into_iter()
+            .find(|v| v.key().eq_ignore_ascii_case(s))
+    }
+
+    pub fn step(self, dir: i32) -> JourneyLength {
+        let i = JourneyLength::ALL
+            .iter()
+            .position(|&v| v == self)
+            .unwrap_or(0) as i32;
+        JourneyLength::ALL[(i + dir).rem_euclid(JourneyLength::ALL.len() as i32) as usize]
+    }
+}
+
 /// How Journey goes from one map to the next.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum JourneyFlow {
@@ -325,8 +412,8 @@ impl JourneyFlow {
 
     pub fn name(self) -> &'static str {
         match self {
-            JourneyFlow::Off => tr!("Off", "オフ", "Выкл"),
-            JourneyFlow::Nonstop => tr!("Non-stop", "ノンストップ", "Без перерывов"),
+            JourneyFlow::Off => tr!("Manual", "手動", "Вручную"),
+            JourneyFlow::Nonstop => tr!("Non-stop", "ノンストップ", "Нон-стоп"),
             JourneyFlow::Marathon => tr!("Marathon", "マラソン", "Марафон"),
         }
     }
@@ -456,6 +543,8 @@ pub struct Config {
     pub journey_save_on_like: bool,
     /// The kind of maps Journey asks for.
     pub journey_focus: JourneyFocus,
+    /// Map duration filter for Journey and Marathon sessions.
+    pub journey_length: JourneyLength,
     /// Journey plays it easy: maps below the player's level, no stretch maps.
     pub journey_chill: bool,
     /// How Journey goes from one map to the next (results, a countdown, or a marathon), showing
@@ -791,6 +880,7 @@ impl Default for Config {
             journey_save_to: JourneySaveTo::Own,
             journey_save_on_like: true,
             journey_focus: JourneyFocus::Any,
+            journey_length: JourneyLength::Any,
             journey_chill: false,
             journey_flow: JourneyFlow::Off,
             journey_hardcore: false,
@@ -1724,6 +1814,9 @@ impl Config {
                 "journey_focus" => {
                     cfg.journey_focus = JourneyFocus::parse(v).unwrap_or(cfg.journey_focus)
                 }
+                "journey_length" => {
+                    cfg.journey_length = JourneyLength::parse(v).unwrap_or(cfg.journey_length)
+                }
                 "journey_chill" => cfg.journey_chill = v == "true",
                 "journey_flow" => {
                     cfg.journey_flow = JourneyFlow::parse(v).unwrap_or(cfg.journey_flow)
@@ -2378,6 +2471,10 @@ impl Config {
         out.push_str(&format!(
             "# the kind of maps Journey picks: any, streams, long-streams, tech or sv\njourney_focus = {}\n",
             self.journey_focus.key()
+        ));
+        out.push_str(&format!(
+            "# map length filter for Journey: any, short (<=2m), standard (1-4m), extended (<=6m) or long (4m+)\njourney_length = {}\n",
+            self.journey_length.key()
         ));
         out.push_str(&format!(
             "# Journey plays it easy: maps below your level, no stretch maps\njourney_chill = {}\n",

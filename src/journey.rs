@@ -7,11 +7,12 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use crate::config::{self, JourneyFocus, JourneySaveTo};
+use crate::config::{self, JourneyFocus, JourneyLength, JourneySaveTo};
 use crate::download;
 use crate::library::Entry;
 use crate::online::{self, JourneyBatch, JourneyItem, JourneyProfile};
@@ -83,6 +84,22 @@ pub struct PastMap {
     pub outcome: PastOutcome,
 }
 
+/// Background task that checks the cache, prunes old cache folders, downloads the set if needed,
+/// and parses the target difficulty — keeping all disk I/O off the render/gameplay thread.
+pub struct DownloadTask {
+    pub done: Arc<AtomicU64>,
+    pub total: Arc<AtomicU64>,
+    pub cancel: Arc<AtomicBool>,
+    pub rx: Receiver<Result<(PathBuf, Entry), String>>,
+}
+
+impl DownloadTask {
+    pub fn fraction(&self) -> Option<f32> {
+        let total = self.total.load(Ordering::Relaxed);
+        (total > 0).then(|| self.done.load(Ordering::Relaxed) as f32 / total as f32)
+    }
+}
+
 /// Where a queued Journey map currently lives on disk.
 /// Uses stable `PathBuf`s rather than library indices so `refresh_library` never shifts targets.
 pub enum MapSource {
@@ -90,8 +107,8 @@ pub enum MapSource {
     Local(PathBuf),
     /// Queued beyond the first `MAX_PREFETCH_AHEAD` slots; download starts when it shifts up.
     Pending,
-    /// Currently downloading into `JourneyCache`.
-    Downloading(Box<download::Job>),
+    /// Currently checking cache / downloading / unpacking into `JourneyCache` on a worker thread.
+    Downloading(Box<DownloadTask>),
     /// Unpacked in `JourneyCache/<folder>`, ready to play and save.
     Cached { folder: PathBuf, entry: Box<Entry> },
     /// Moved from cache into the player's permanent library at this `.osu`/`.tko` path.
@@ -178,6 +195,10 @@ pub struct Journey {
     revisited: Vec<PastOutcome>,
     /// The kind of maps asked for (`Config::journey_focus`).
     pub focus: JourneyFocus,
+    /// Map duration filter (`Config::journey_length`).
+    pub length: JourneyLength,
+    /// Whether Marathon's default 5-minute length cap applies when `length == JourneyLength::Any`.
+    pub marathon_cap: bool,
     /// An easy session (`Config::journey_chill`).
     pub chill: bool,
     /// The settings panel is up, with this row chosen.
@@ -189,6 +210,9 @@ pub struct Journey {
     pub skip_intro_next: bool,
     /// A marathon on: maps one after another with no results, until the player stops.
     pub marathon: Option<Marathon>,
+    /// Smoothly animated 0..=1 visibility for the in-play "Up next" card (prevents pop-in and
+    /// sudden combo chip jumps).
+    pub up_next_alpha: f32,
 }
 
 /// What became of a map in a marathon.
@@ -238,6 +262,7 @@ pub(crate) struct Preload {
     /// The mods and speed it was loaded for.
     pub mods: crate::mods::Mods,
     pub rate: f64,
+    pub keep_pitch: bool,
     pub job: crate::Job<crate::Loaded>,
 }
 
@@ -280,6 +305,8 @@ pub struct Marathon {
     map_combo: u32,
     /// The map up next, loading ahead of time.
     pub(crate) preload: Option<Preload>,
+    /// Outcome history of maps in this marathon (for the summary run strip).
+    pub outcomes: Vec<MarathonOutcome>,
 }
 
 impl Marathon {
@@ -302,6 +329,7 @@ impl Marathon {
             map_broken: false,
             map_combo: 0,
             preload: None,
+            outcomes: Vec::new(),
         }
     }
 
@@ -367,6 +395,7 @@ impl Marathon {
             }
             MarathonOutcome::Skipped => self.skipped += 1,
         }
+        self.outcomes.push(play.outcome);
         self.last = Some(play);
     }
 
@@ -435,11 +464,14 @@ impl Journey {
             back: Vec::new(),
             revisited: Vec::new(),
             focus: JourneyFocus::Any,
+            length: JourneyLength::Any,
+            marathon_cap: false,
             chill: false,
             settings: None,
             autostart: false,
             skip_intro_next: false,
             marathon: None,
+            up_next_alpha: 0.0,
         }
     }
 
@@ -584,14 +616,31 @@ impl Journey {
         self.needs_level = false;
     }
 
-    /// Asks for maps of another kind (`focus`) or pace (`chill`): the queue is filled again
-    /// when either changed. True when it was.
-    pub fn set_style(&mut self, focus: JourneyFocus, chill: bool) -> bool {
-        if (focus, chill) == (self.focus, self.chill) {
+    /// Effective inclusive `(min_length_ms, max_length_ms)` bounds for this session.
+    pub fn length_bounds(&self) -> (Option<u64>, Option<u64>) {
+        self.length.bounds(self.marathon_cap)
+    }
+
+    /// Asks for maps of another kind (`focus`), duration (`length`/`marathon_cap`), or pace
+    /// (`chill`): the queue is filled again when the effective filter changed. True when it was.
+    pub fn set_style(
+        &mut self,
+        focus: JourneyFocus,
+        chill: bool,
+        length: JourneyLength,
+        marathon_cap: bool,
+    ) -> bool {
+        let old_bounds = self.length_bounds();
+        let new_bounds = length.bounds(marathon_cap);
+        if (focus, chill, old_bounds) == (self.focus, self.chill, new_bounds) {
+            self.length = length;
+            self.marathon_cap = marathon_cap;
             return false;
         }
         self.focus = focus;
         self.chill = chill;
+        self.length = length;
+        self.marathon_cap = marathon_cap;
         self.rebuild();
         true
     }
@@ -805,17 +854,13 @@ impl Journey {
     }
 
     /// Enqueues a recommended item, matching against the local library first.
-    /// Downloads only start once an item is within the first `MAX_PREFETCH_AHEAD` slots.
+    /// Cache checks and downloads run on a worker thread once within the first `MAX_PREFETCH_AHEAD`
+    /// slots so gameplay and UI frames never block on disk I/O.
     pub fn enqueue_item(&mut self, item: JourneyItem, library: &[Entry]) {
         self.remember_item(&item);
         let protected = self.protected_cache_folders();
         let source = if let Some(path) = find_in_library(&item, library) {
             MapSource::Local(path)
-        } else if let Some((folder, entry)) = find_in_cache(&item) {
-            MapSource::Cached {
-                folder,
-                entry: Box::new(entry),
-            }
         } else if self.queue.len() < MAX_PREFETCH_AHEAD {
             start_item_download(&item, &protected)
         } else {
@@ -825,19 +870,14 @@ impl Journey {
     }
 
     /// Starts any `Pending` downloads in the first `MAX_PREFETCH_AHEAD` slots and polls active jobs.
+    /// Performs no synchronous disk I/O on the calling thread.
     pub fn poll_downloads(&mut self) -> bool {
         let protected = self.protected_cache_folders();
         let mut changed = false;
         for q in self.queue.iter_mut().take(MAX_PREFETCH_AHEAD) {
             if matches!(q.source, MapSource::Pending) {
-                // A download paused for a play may have finished unpacking first.
-                q.source = match find_in_cache(&q.item) {
-                    Some((folder, entry)) => MapSource::Cached {
-                        folder,
-                        entry: Box::new(entry),
-                    },
-                    None => start_item_download(&q.item, &protected),
-                };
+                // Worker thread checks the cache first before downloading from mirrors.
+                q.source = start_item_download(&q.item, &protected);
                 changed = true;
             }
             let finished = match &mut q.source {
@@ -847,19 +887,9 @@ impl Journey {
             if let Some(res) = finished {
                 changed = true;
                 q.source = match res {
-                    Ok(folder) => match load_entry_from_folder(&folder, &q.item) {
-                        Some(entry) => MapSource::Cached {
-                            folder,
-                            entry: Box::new(entry),
-                        },
-                        None => MapSource::Failed(
-                            tr!(
-                                "No playable taiko chart in downloaded set",
-                                "ダウンロードしたセットに遊べる太鼓譜面がありません",
-                                "В скачанном сете нет играбельной taiko-карты"
-                            )
-                            .into(),
-                        ),
+                    Ok((folder, entry)) => MapSource::Cached {
+                        folder,
+                        entry: Box::new(entry),
                     },
                     Err(e) => MapSource::Failed(e),
                 };
@@ -898,6 +928,7 @@ impl Journey {
     }
 
     fn spawn_next(&mut self, server: String, token: String, scroll_speed: f64, want: u8) {
+        let (min_length_ms, max_length_ms) = self.length_bounds();
         let req = online::Request::JourneyNext {
             token,
             target_stars: self.target_stars,
@@ -908,6 +939,8 @@ impl Journey {
             count: want,
             focus: self.focus.wire(),
             chill: self.chill,
+            min_length_ms,
+            max_length_ms,
         };
         let (tx, rx) = mpsc::channel();
         self.fetching = Some(rx);
@@ -1016,6 +1049,18 @@ impl Journey {
                 }
                 // Strongly prefer maps with known stars so unrated maps don't always win.
                 let (stars_opt, bpm, length_ms) = info_of(i);
+                let (min_len, max_len) = self.length_bounds();
+                let mut unknown_len_penalty = 0.0;
+                if length_ms > 0 {
+                    if min_len.is_some_and(|lo| length_ms < lo)
+                        || max_len.is_some_and(|hi| length_ms > hi)
+                    {
+                        continue;
+                    }
+                } else if min_len.is_some() || max_len.is_some() {
+                    // Prefer charts with measured duration when length filtering is active.
+                    unknown_len_penalty = 50.0;
+                }
                 let (st, unrated_penalty) = match stars_opt {
                     Some(s) if s.is_finite() && s > 0.1 => (f64::from(s), 0.0),
                     _ => (0.0, 100.0),
@@ -1028,7 +1073,7 @@ impl Journey {
                 let jitter = (((i as u64).wrapping_mul(2654435761) ^ (step as u64 * 97)) % 100)
                     as f64
                     * 0.004;
-                let score = dist + jitter;
+                let score = dist + unknown_len_penalty + jitter;
                 if best.is_none_or(|(_, b_score, _, _, _)| score < b_score) {
                     best = Some((i, score, st, bpm, length_ms));
                 }
@@ -1133,10 +1178,44 @@ fn start_item_download(item: &JourneyItem, protected: &[PathBuf]) -> MapSource {
     let Some(info) = item_to_set_info(item) else {
         return MapSource::Failed("Map has no downloadable set ID".into());
     };
-    let cache = config::journey_cache_dir();
-    let _ = std::fs::create_dir_all(&cache);
-    prune_cache(&cache, MAX_CACHE_FOLDERS, protected);
-    MapSource::Downloading(Box::new(download::start(info, cache)))
+    let done = Arc::new(AtomicU64::new(0));
+    let total = Arc::new(AtomicU64::new(0));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let (d, t, c) = (done.clone(), total.clone(), cancel.clone());
+    let item = item.clone();
+    let protected = protected.to_vec();
+    std::thread::spawn(move || {
+        let res = if let Some(cached) = find_in_cache(&item) {
+            Ok(cached)
+        } else if c.load(Ordering::Relaxed) {
+            Err(download::CANCELLED.into())
+        } else {
+            let cache = config::journey_cache_dir();
+            let _ = std::fs::create_dir_all(&cache);
+            prune_cache(&cache, MAX_CACHE_FOLDERS, &protected);
+            let (dl, _) = download::fetch_set(&info, &cache, &d, &t, &c);
+            dl.and_then(|folder| {
+                load_entry_from_folder(&folder, &item)
+                    .map(|entry| (folder, entry))
+                    .ok_or_else(|| {
+                        tr!(
+                            "No playable taiko chart in downloaded set",
+                            "ダウンロードしたセットに遊べる太鼓譜面がありません",
+                            "В скачанном сете нет играбельной taiko-карты"
+                        )
+                        .into()
+                    })
+            })
+        };
+        let _ = tx.send(res);
+    });
+    MapSource::Downloading(Box::new(DownloadTask {
+        done,
+        total,
+        cancel,
+        rx,
+    }))
 }
 
 /// The maps in one set folder (none when it's gone). Read with a scan cache of Journey's own, so
@@ -1378,6 +1457,13 @@ mod tests {
             source: MapSource::Pending,
         });
         assert!(j.poll_downloads());
+        for _ in 0..100 {
+            if matches!(j.queue[0].source, MapSource::Cached { .. }) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+            j.poll_downloads();
+        }
         assert!(
             matches!(&j.queue[0].source, MapSource::Cached { folder: f, .. } if *f == folder),
             "no download started again"
@@ -1576,5 +1662,55 @@ mod tests {
         assert_eq!(j.queue[1].item.set_id, None);
         assert_eq!(j.queue[1].item.bpm, 170.0);
         assert_eq!(j.queue[1].item.length_ms, 100_000);
+    }
+
+    #[test]
+    fn fill_from_local_enforces_length_bounds_and_marathon_cap() {
+        let entry = |p: &str, set: u32| {
+            let meta = crate::beatmap::Meta {
+                title: p.into(),
+                set_id: Some(set),
+                version: "Oni".into(),
+                ..Default::default()
+            };
+            Entry::new(PathBuf::from(p), meta)
+        };
+        let library = vec![
+            entry("/songs/1 short/a.osu", 1),
+            entry("/songs/2 mid/b.osu", 2),
+            entry("/songs/3 hour/c.osu", 3),
+        ];
+        let info = |i: usize| match i {
+            0 => (Some(5.0), 180.0, 90_000),
+            1 => (Some(5.0), 180.0, 180_000),
+            _ => (Some(5.0), 180.0, 3_600_000),
+        };
+
+        // Marathon with Length::Any applies the 5-minute default cap, keeping the 1-hour map out.
+        let mut j = Journey::new();
+        j.target_stars = Some(5.0);
+        j.comfort_stars = 5.0;
+        j.marathon_cap = true;
+        j.fill_from_local(&library, info);
+        assert_eq!(j.queue.len(), 2);
+        assert!(j.queue.iter().all(|q| q.item.length_ms <= 300_000));
+
+        // Short (<= 2m): only the 90s chart qualifies.
+        let mut j = Journey::new();
+        j.target_stars = Some(5.0);
+        j.comfort_stars = 5.0;
+        j.length = JourneyLength::Short;
+        j.fill_from_local(&library, info);
+        assert_eq!(j.queue.len(), 1);
+        assert_eq!(j.queue[0].item.set_id, Some(1));
+
+        // Long (4m+): only the 1-hour chart qualifies.
+        let mut j = Journey::new();
+        j.target_stars = Some(5.0);
+        j.comfort_stars = 5.0;
+        j.length = JourneyLength::Long;
+        j.fill_from_local(&library, info);
+        assert_eq!(j.queue.len(), 1);
+        assert_eq!(j.queue[0].item.set_id, Some(3));
     }
 }

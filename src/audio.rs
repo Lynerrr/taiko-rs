@@ -681,6 +681,50 @@ impl Mixer {
         out
     }
 
+    /// Mixes one stereo frame of the current track and any crossfading outgoing track.
+    /// Does not advance fades or the outgoing track while paused, and holds `fade_in` until the
+    /// incoming track actually starts (`at >= 0`).
+    fn mix_music_frame(
+        &mut self,
+        music_vol: f32,
+        music_vol_all: f32,
+        read: &mut usize,
+        streamed: usize,
+    ) -> (f32, f32) {
+        let (mut l, mut r) = (0.0f32, 0.0f32);
+        if !self.paused && self.track.is_some() {
+            let at = self.frame - self.base;
+            let gain = if at >= 0 { self.fade_in_gain() } else { 1.0 };
+            let vol = music_vol * gain;
+            if let Some(track) = self.track.as_ref() {
+                if let Some(s) = &track.stream {
+                    let in_song = at >= 0 && (at as usize) < s.frames();
+                    if *read < streamed && in_song {
+                        l = self.streamed[*read * 2] * vol;
+                        r = self.streamed[*read * 2 + 1] * vol;
+                        *read += 1;
+                        self.frame += 1;
+                    } else if !in_song {
+                        self.frame += 1;
+                    }
+                } else {
+                    if at >= 0 && (at as usize) < track.frames() {
+                        let i = at as usize * 2;
+                        l = track.samples[i] * vol;
+                        r = track.samples[i + 1] * vol;
+                    }
+                    self.frame += 1;
+                }
+            }
+        }
+        if !self.paused && self.outgoing.is_some() {
+            let (ol, or) = self.outgoing_frame(music_vol_all);
+            l += ol;
+            r += or;
+        }
+        (l, r)
+    }
+
     /// Starts the waiting sounds whose song frame the stream is at.
     fn start_due(&mut self) {
         let mut i = 0;
@@ -759,34 +803,8 @@ impl Mixer {
             if !self.pending.is_empty() {
                 self.start_due();
             }
-            let (mut l, mut r) = (0.0f32, 0.0f32);
-            let music_vol = music_vol * self.fade_in_gain();
-            if let Some(track) = self.track.as_ref().filter(|_| !self.paused) {
-                let at = self.frame - self.base;
-                if let Some(s) = &track.stream {
-                    let in_song = at >= 0 && (at as usize) < s.frames();
-                    if read < streamed && in_song {
-                        l = self.streamed[read * 2] * music_vol;
-                        r = self.streamed[read * 2 + 1] * music_vol;
-                        read += 1;
-                        self.frame += 1;
-                    } else if !in_song {
-                        self.frame += 1;
-                    }
-                } else {
-                    if at >= 0 && (at as usize) < track.frames() {
-                        let i = at as usize * 2;
-                        l = track.samples[i] * music_vol;
-                        r = track.samples[i + 1] * music_vol;
-                    }
-                    self.frame += 1;
-                }
-            }
-            if self.outgoing.is_some() {
-                let (ol, or) = self.outgoing_frame(music_vol_all);
-                l += ol;
-                r += or;
-            }
+            let (mut l, mut r) =
+                self.mix_music_frame(music_vol, music_vol_all, &mut read, streamed);
             for v in &mut self.voices {
                 let buf = &self.sounds[v.sound as usize];
                 let fade = if v.fade == 0 {
@@ -1148,6 +1166,45 @@ mod tests {
         assert!(m.outgoing.is_some());
         m.apply(Cmd::Stop);
         assert!(m.outgoing.is_none());
+    }
+
+    #[test]
+    fn crossfade_respects_pause_and_waits_past_negative_lead_in() {
+        let mut m = mixer();
+        m.apply(Cmd::Play {
+            track: constant(48_000, 0.5),
+            start_frame: 100,
+            base: 0,
+        });
+        m.apply(Cmd::Crossfade(4, 2));
+        // Negative lead-in of 2 frames: fade-in must not burn out during silence before frame 0.
+        m.apply(Cmd::Play {
+            track: constant(48_000, 0.4),
+            start_frame: -2,
+            base: 0,
+        });
+        m.apply(Cmd::Pause(true));
+        let mut read = 0;
+        // While paused, mix_music_frame outputs silence and freezes both outgoing and fade_in.
+        assert_eq!(m.mix_music_frame(1.0, 1.0, &mut read, 0), (0.0, 0.0));
+        assert_eq!(m.outgoing.as_ref().unwrap().left, 4);
+        assert_eq!(m.fade_in.0, 2);
+
+        // Unpause: during the 2 negative lead-in frames, outgoing fades out while fade_in waits.
+        m.apply(Cmd::Pause(false));
+        let f0 = m.mix_music_frame(1.0, 1.0, &mut read, 0);
+        let f1 = m.mix_music_frame(1.0, 1.0, &mut read, 0);
+        assert!((f0.0 - 0.5).abs() < 1e-6);
+        assert!((f1.0 - 0.375).abs() < 1e-6);
+        assert_eq!(m.fade_in.0, 2, "fade_in must wait until track frame >= 0");
+
+        // At frame 0 and 1, incoming track fades in (0.0 then 0.5 of 0.4) over outgoing (0.25, 0.125).
+        let f2 = m.mix_music_frame(1.0, 1.0, &mut read, 0);
+        let f3 = m.mix_music_frame(1.0, 1.0, &mut read, 0);
+        assert!((f2.0 - 0.25).abs() < 1e-6);
+        assert!((f3.0 - (0.125 + 0.2)).abs() < 1e-6);
+        assert!(m.outgoing.is_none());
+        assert_eq!(m.fade_in.0, 0);
     }
 
     #[test]
