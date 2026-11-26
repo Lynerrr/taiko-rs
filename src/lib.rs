@@ -9832,15 +9832,21 @@ impl State {
         self.find_lobby_map();
     }
 
-    /// A lobby map may have been announced before our library was ready.
+    /// A lobby map may have been announced before our library was ready, or the library may have
+    /// been refreshed/replaced while in the lobby (shifting or removing indices).
     fn find_lobby_map(&mut self) {
         if let Some(s) = &mut self.mp
             && let Some(m) = &s.map
-            && !s.have_map
         {
+            let had = s.have_map;
             s.map_entry = find_map(&self.library, m);
             s.have_map = s.map_entry.is_some();
-            s.client.send(net::ClientMsg::HasMap(s.have_map));
+            if !s.have_map {
+                s.ready = false;
+            }
+            if s.have_map != had {
+                s.client.send(net::ClientMsg::HasMap(s.have_map));
+            }
         }
     }
 
@@ -14562,7 +14568,7 @@ impl State {
     fn send_map_to(&mut self, to: u32) {
         let Some(s) = &self.mp else { return };
         let tx = s.client.bulk_sender();
-        let entry = s.map_entry.map(|i| &self.library[i]);
+        let entry = s.map_entry.and_then(|i| self.library.get(i));
         let folder = entry.and_then(|e| e.path.parent().map(|p| p.to_path_buf()));
         // A TJA chart: its file, sent with what it names rather than its whole folder.
         let tja = entry

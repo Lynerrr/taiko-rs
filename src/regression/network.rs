@@ -3983,3 +3983,58 @@ fn a_local_unpacking_failure_does_not_cool_down_the_mirror() {
     assert!(crate::download::mirror_cooling("mirror.hinamizawa.ai"));
     let _ = std::fs::remove_dir_all(&songs);
 }
+
+#[test]
+fn refreshing_the_library_in_a_lobby_re_resolves_the_lobby_map_entry() {
+    let room = FakeRoom::new();
+    let songs = Songs::new("mp-lib-refresh", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    let client = net::Client::connect(&room.addr, "me", None).unwrap();
+    s.mp = Some(multiplayer::joined(client, "regression room"));
+    s.scene = crate::screens::lobby::Lobby::scene();
+    room.send(&ServerMsg::Welcome { id: 2 });
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+
+    // Pick library[1] as the lobby map.
+    let e = &s.library[1];
+    let map = net::MapInfo {
+        hash: e.hash(),
+        artist: e.meta.artist.clone(),
+        title: e.meta.title.clone(),
+        version: e.meta.version.clone(),
+        rate: 1.0,
+        from: None,
+        set_id: None,
+        mods: Vec::new(),
+        multiverse: None,
+        shapeshift: None,
+        seed: None,
+        defense: None,
+        stats: None,
+        host_mods: false,
+    };
+    room.send(&room_msg(Some(map), false));
+    assert!(wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| m.map_entry == Some(1))
+    }));
+    assert!(s.mp.as_ref().unwrap().have_map);
+
+    // 1. Replacing the library with the lobby map shifted to index 0 updates map_entry.
+    let shifted = vec![songs.entries().swap_remove(1)];
+    s.use_library(shifted, None);
+    assert_eq!(s.mp.as_ref().unwrap().map_entry, Some(0));
+    assert!(s.mp.as_ref().unwrap().have_map);
+
+    // 2. Replacing the library without the lobby map clears map_entry and reports HasMap(false).
+    s.mp.as_mut().unwrap().ready = true;
+    let other = vec![songs.entries().swap_remove(0)];
+    s.use_library(other, None);
+    let mp = s.mp.as_ref().unwrap();
+    assert_eq!(mp.map_entry, None);
+    assert!(!mp.have_map);
+    assert!(!mp.ready);
+    assert!(room.wait_for_msg(|m| matches!(m, ClientMsg::HasMap(false))));
+}
