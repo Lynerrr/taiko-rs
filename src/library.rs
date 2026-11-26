@@ -100,12 +100,12 @@ impl Entry {
     /// The title as shown: in its own script with Settings > Original names (`set_original_names`),
     /// else romanised. `meta.title` stays the romanised one, what the map is known by.
     pub fn title(&self) -> &str {
-        shown_name(&self.meta.title, &self.meta.title_unicode)
+        shown_name(&self.meta.title, self.meta.original_title())
     }
 
     /// The artist as shown, as `title`.
     pub fn artist(&self) -> &str {
-        shown_name(&self.meta.artist, &self.meta.artist_unicode)
+        shown_name(&self.meta.artist, self.meta.original_artist())
     }
 
     /// `label` with the names as shown, for a screen to show (not to know the map by).

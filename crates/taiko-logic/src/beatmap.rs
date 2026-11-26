@@ -145,12 +145,11 @@ pub struct Meta {
     pub title: String,
     pub artist: String,
     /// The title and artist in their own script (`TitleUnicode`, `ArtistUnicode`), shown
-    /// instead with Settings > Original names. Empty when the map has none, and in a cache
-    /// from before they were kept.
-    #[serde(default)]
-    pub title_unicode: String,
-    #[serde(default)]
-    pub artist_unicode: String,
+    /// instead with Settings > Original names. None when the map has none apart from the
+    /// romanised ones (most maps), and in a cache from before they were kept: boxed, so a big
+    /// library's entries stay as small as they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original: Option<Box<OriginalNames>>,
     pub creator: String,
     pub version: String,
     pub audio_file: String,
@@ -221,7 +220,26 @@ pub struct Beatmap {
     pub branching: Option<std::sync::Arc<crate::branch::Branching>>,
 }
 
+/// A map's title and artist in their own script (`Meta::original`); either may be empty.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OriginalNames {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artist: String,
+}
+
 impl Meta {
+    /// The title in its own script, empty when the map has none.
+    pub fn original_title(&self) -> &str {
+        self.original.as_ref().map_or("", |o| &o.title)
+    }
+
+    /// The artist in its own script, empty when the map has none.
+    pub fn original_artist(&self) -> &str {
+        self.original.as_ref().map_or("", |o| &o.artist)
+    }
+
     pub fn is_playable(&self) -> bool {
         self.mode == 0 || self.mode == 1
     }
@@ -567,8 +585,13 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
             "Metadata" => match kv(trimmed) {
                 Some(("Title", v)) => meta.title = v.to_owned(),
                 Some(("Artist", v)) => meta.artist = v.to_owned(),
-                Some(("TitleUnicode", v)) => meta.title_unicode = v.to_owned(),
-                Some(("ArtistUnicode", v)) => meta.artist_unicode = v.to_owned(),
+                // Kept only when it differs from the romanised one (`Title` comes first).
+                Some(("TitleUnicode", v)) if !v.is_empty() && v != meta.title => {
+                    meta.original.get_or_insert_default().title = v.to_owned();
+                }
+                Some(("ArtistUnicode", v)) if !v.is_empty() && v != meta.artist => {
+                    meta.original.get_or_insert_default().artist = v.to_owned();
+                }
                 Some(("Creator", v)) => meta.creator = v.to_owned(),
                 Some(("Version", v)) => meta.version = v.to_owned(),
                 Some(("Tags", v)) => {
@@ -1063,8 +1086,13 @@ SliderTickRate:1
             (m.title.as_str(), m.artist.as_str()),
             ("Tolko zvyozdy", "Kameria")
         );
-        assert_eq!(m.title_unicode, "только звёзды");
-        assert_eq!(m.artist_unicode, "かめりあ");
+        assert_eq!(m.original_title(), "только звёзды");
+        assert_eq!(m.original_artist(), "かめりあ");
+        // The same as the romanised ones: nothing kept.
+        let plain = read_meta(
+            "[Metadata]\nTitle:Ghost\nTitleUnicode:Ghost\nArtist:Camellia\nArtistUnicode:Camellia\n",
+        );
+        assert!(plain.original.is_none());
     }
 
     #[test]

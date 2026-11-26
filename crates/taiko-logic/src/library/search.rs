@@ -338,9 +338,9 @@ pub struct Text {
     creator: String,
     pub artist: String,
     pub title: String,
-    /// The artist and title in their own script, found as well as the romanised ones.
-    artist_unicode: String,
-    title_unicode: String,
+    /// The artist and title in their own script, found as well as the romanised ones: only for
+    /// a map that has them (most don't), so the search over a big library reads no more.
+    unicode: Option<Box<[String; 2]>>,
     version: String,
     tags: String,
     source: String,
@@ -353,8 +353,10 @@ impl Text {
             creator: meta.creator.to_lowercase(),
             artist: meta.artist.to_lowercase(),
             title: meta.title.to_lowercase(),
-            artist_unicode: meta.artist_unicode.to_lowercase(),
-            title_unicode: meta.title_unicode.to_lowercase(),
+            unicode: meta
+                .original
+                .as_ref()
+                .map(|o| Box::new([o.artist.to_lowercase(), o.title.to_lowercase()])),
             version: meta.version.to_lowercase(),
             tags: meta.tags.to_lowercase(),
             source: meta.source.to_lowercase(),
@@ -450,8 +452,10 @@ impl Query {
         let words = self.words.iter().all(|w| {
             let w = w.as_str();
             text.label.contains(w)
-                || text.artist_unicode.contains(w)
-                || text.title_unicode.contains(w)
+                || text
+                    .unicode
+                    .as_ref()
+                    .is_some_and(|u| u.iter().any(|n| n.contains(w)))
                 || text.creator.contains(w)
                 || text.tags.contains(w)
                 || text.source.contains(w)
@@ -485,8 +489,8 @@ impl Query {
                 } => {
                     let (have, also) = match field {
                         Field::Creator => (&text.creator, None),
-                        Field::Artist => (&text.artist, Some(&text.artist_unicode)),
-                        Field::Title => (&text.title, Some(&text.title_unicode)),
+                        Field::Artist => (&text.artist, text.unicode.as_ref().map(|u| &u[0])),
+                        Field::Title => (&text.title, text.unicode.as_ref().map(|u| &u[1])),
                         Field::Version => (&text.version, None),
                         Field::Tags => (&text.tags, None),
                         Field::Source => (&text.source, None),
@@ -794,8 +798,10 @@ mod tests {
         let m = Meta {
             title: "Tolko zvyozdy nad nami".into(),
             artist: "hxvvxn".into(),
-            title_unicode: "только звёзды над нами".into(),
-            artist_unicode: "хввхн".into(),
+            original: Some(Box::new(crate::beatmap::OriginalNames {
+                title: "только звёзды над нами".into(),
+                artist: "хввхн".into(),
+            })),
             ..meta()
         };
         let label = "hxvvxn - Tolko zvyozdy nad nami [Oni]";

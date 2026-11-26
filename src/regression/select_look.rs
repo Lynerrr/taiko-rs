@@ -4076,8 +4076,10 @@ fn song_names_show_romanised_unless_original_names_is_on() {
     let songs = Songs::new("original-names", &maps::all()[..1]);
     let mut entries = songs.entries();
     for e in &mut entries {
-        e.meta.title_unicode = "только звёзды".into();
-        e.meta.artist_unicode = "かめりあ".into();
+        e.meta.original = Some(Box::new(crate::beatmap::OriginalNames {
+            title: "только звёзды".into(),
+            artist: "かめりあ".into(),
+        }));
     }
     let title = entries[0].meta.title.clone();
     let mut s = state_with(harness::config(), entries);
