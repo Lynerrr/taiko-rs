@@ -4038,3 +4038,68 @@ fn refreshing_the_library_in_a_lobby_re_resolves_the_lobby_map_entry() {
     assert!(!mp.ready);
     assert!(room.wait_for_msg(|m| matches!(m, ClientMsg::HasMap(false))));
 }
+
+#[test]
+fn leaving_or_disconnecting_aborts_in_progress_host_transfer() {
+    let room = FakeRoom::new();
+    let (mut s, _songs, mut now) = guest("mp-transfer-leave", maps::basics(), &room);
+    let missing = net::MapInfo {
+        hash: 0xdead_beef_1234_5678,
+        artist: "Other".into(),
+        title: "Missing".into(),
+        version: "Oni".into(),
+        rate: 1.0,
+        from: None,
+        set_id: Some(999999),
+        mods: Vec::new(),
+        multiverse: None,
+        shapeshift: None,
+        seed: None,
+        defense: None,
+        stats: None,
+        host_mods: false,
+    };
+    room.send(&room_msg(Some(missing.clone()), false));
+    assert!(wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| m.map.is_some())
+    }));
+    // Start a partial host map transfer (first 16 bytes of 1000).
+    s.host_map_asked = true;
+    room.send(&ServerMsg::MapFile(net::MapPart {
+        name: "999999 Other - Missing".into(),
+        total: 1000,
+        offset: 0,
+        data: download::base64_encode(&[b'x'; 16]),
+        error: None,
+    }));
+    assert!(wait_for(&mut s, &mut now, |s| s.host_transfer.is_some()));
+    assert!(!s.downloads.is_empty());
+
+    // Leaving the room aborts the transfer and removes the dead download entry.
+    s.leave_room("left the room");
+    assert!(s.host_transfer.is_none());
+    assert!(s.downloads.is_empty());
+
+    // Disconnecting mid-transfer does the same.
+    let room2 = FakeRoom::new();
+    let client2 = net::Client::connect(&room2.addr, "me", None).unwrap();
+    s.mp = Some(multiplayer::joined(client2, "regression room 2"));
+    s.scene = crate::screens::lobby::Lobby::scene();
+    room2.send(&ServerMsg::Welcome { id: 2 });
+    room2.send(&room_msg(Some(missing), false));
+    assert!(wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| m.map.is_some())
+    }));
+    s.host_map_asked = true;
+    room2.send(&ServerMsg::MapFile(net::MapPart {
+        name: "999999 Other - Missing".into(),
+        total: 1000,
+        offset: 0,
+        data: download::base64_encode(&[b'y'; 16]),
+        error: None,
+    }));
+    assert!(wait_for(&mut s, &mut now, |s| s.host_transfer.is_some()));
+    s.handle_server_msg(ServerMsg::Disconnected("connection lost".into()));
+    assert!(s.host_transfer.is_none());
+    assert!(s.downloads.is_empty());
+}

@@ -8137,6 +8137,8 @@ impl State {
 
     fn leave_room(&mut self, why: &str) {
         self.stop_audio();
+        self.stop_host_transfer();
+        self.auto_fetched = None;
         self.mp = None;
         self.picking_lobby_map = false;
         self.mp_status = why.to_string();
@@ -12771,6 +12773,8 @@ impl State {
                     .screen()
                     .is_some_and(|s| s.in_room() || s.spectating());
                 self.toast(format!("multiplayer: {why}"));
+                self.stop_host_transfer();
+                self.auto_fetched = None;
                 self.mp = None;
                 self.picking_lobby_map = false;
                 if in_mp {
@@ -14680,6 +14684,8 @@ impl State {
                 ranked_date: String::new(),
                 custom: None,
             };
+            // A transfer that's still going is given up before starting the new one.
+            self.stop_host_transfer();
             let (job, feed) = download::receive(
                 set,
                 part.name.clone(),
@@ -14689,8 +14695,6 @@ impl State {
                 self.custom_dir.clone(),
                 self.tja_dir.clone(),
             );
-            // A transfer that's still going is given up for this one.
-            self.stop_host_transfer();
             let done = job.done.clone();
             self.downloads.push(job);
             self.host_transfer = Some((feed, done));
