@@ -357,11 +357,15 @@ impl Own<'_> {
     /// it if they have one of that name already); where the copy is.
     pub fn copy(&mut self, k: usize) -> Option<usize> {
         let c = self.0.get(k).filter(|c| c.source == Source::Osu)?.clone();
-        let mut name = c.name.clone();
-        let mut n = 1;
+        let base = c.name.trim();
+        let mut name: String = base.chars().take(MAX_NAME).collect();
+        let mut n = 1usize;
         while self.check(&name, None) == Err(BadName::Taken) {
             n += 1;
-            name = format!("{} {n}", c.name);
+            let suffix = format!(" {n}");
+            let keep = MAX_NAME.saturating_sub(suffix.chars().count());
+            let prefix: String = base.chars().take(keep).collect();
+            name = format!("{}{suffix}", prefix.trim_end());
         }
         self.add(&name, c.maps).ok()
     }
@@ -513,5 +517,55 @@ pub fn osu_running() -> bool {
     )))]
     {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copying_a_max_length_osu_collection_twice_truncates_to_fit_suffix() {
+        let long_ascii = "a".repeat(MAX_NAME + 5);
+        let long_utf8 = "曲".repeat(MAX_NAME);
+        let mut all = vec![
+            Collection {
+                name: long_ascii,
+                source: Source::Osu,
+                maps: Vec::new(),
+            },
+            Collection {
+                name: long_utf8,
+                source: Source::Osu,
+                maps: Vec::new(),
+            },
+        ];
+
+        // Copy ASCII >=60-char osu! collection three times: first takes 60 chars, next fit " 2", " 3".
+        let first = Own(&mut all).copy(0).unwrap();
+        assert_eq!(all[first].name.chars().count(), MAX_NAME);
+        let osu_ascii = all.iter().position(|c| c.source == Source::Osu).unwrap();
+        let second = Own(&mut all).copy(osu_ascii).unwrap();
+        assert!(all[second].name.ends_with(" 2"));
+        assert!(all[second].name.chars().count() <= MAX_NAME);
+        let osu_ascii = all.iter().position(|c| c.source == Source::Osu).unwrap();
+        let third = Own(&mut all).copy(osu_ascii).unwrap();
+        assert!(all[third].name.ends_with(" 3"));
+        assert!(all[third].name.chars().count() <= MAX_NAME);
+
+        // Multi-byte UTF-8 60-char name copied twice stays on valid char boundaries and terminates.
+        let osu_utf8 = all
+            .iter()
+            .position(|c| c.source == Source::Osu && c.name.starts_with('曲'))
+            .unwrap();
+        let u1 = Own(&mut all).copy(osu_utf8).unwrap();
+        assert_eq!(all[u1].name.chars().count(), MAX_NAME);
+        let osu_utf8 = all
+            .iter()
+            .position(|c| c.source == Source::Osu && c.name.starts_with('曲'))
+            .unwrap();
+        let u2 = Own(&mut all).copy(osu_utf8).unwrap();
+        assert!(all[u2].name.ends_with(" 2"));
+        assert!(all[u2].name.chars().count() <= MAX_NAME);
     }
 }
