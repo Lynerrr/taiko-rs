@@ -250,6 +250,8 @@ journey_flow = marathon
 journey_hardcore = true
 # maps Journey starts by itself start just before their first note
 journey_skip_intro = false
+# Non-stop and Marathon show the map up next in a play (N says no to it)
+journey_up_next = false
 # between a marathon's maps: wheel, short (a brief wheel) or seamless (none)
 journey_gap = seamless
 # automatically save maps played in a Journey marathon to the library

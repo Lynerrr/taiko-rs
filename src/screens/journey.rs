@@ -222,6 +222,7 @@ enum SettingId {
     Flow,
     Gap,
     SkipIntro,
+    UpNext,
     Hardcore,
     MarathonSave,
 }
@@ -240,6 +241,7 @@ fn visible_settings(flow: JourneyFlow) -> &'static [SettingId] {
             SettingId::Chill,
             SettingId::Flow,
             SettingId::SkipIntro,
+            SettingId::UpNext,
         ],
         JourneyFlow::Marathon => &[
             SettingId::Focus,
@@ -248,6 +250,7 @@ fn visible_settings(flow: JourneyFlow) -> &'static [SettingId] {
             SettingId::Flow,
             SettingId::Gap,
             SettingId::SkipIntro,
+            SettingId::UpNext,
             SettingId::Hardcore,
             SettingId::MarathonSave,
         ],
@@ -327,6 +330,11 @@ fn setting_help(state: &State, id: SettingId) -> &'static str {
             "自動で始まる譜面は長いイントロを飛ばして最初のノーツ直前から始まります。",
             "Карты с автостартом начинаются прямо перед первой нотой, пропуская длинные вступления."
         ),
+        SettingId::UpNext => tr!(
+            "Show the map up next towards the end of a map and in its breaks, where N swaps it. Off: no card, and N does nothing.",
+            "譜面の終わり際と休憩中に次の譜面を表示し、Nで変更できます。オフ: 表示せず、Nも無効です。",
+            "Показывать следующую карту в конце карты и в перерывах, N — заменить. Выкл.: без карточки, N не работает."
+        ),
         SettingId::Hardcore => tr!(
             "Hardcore marathon: the first failed map ends the run immediately. Pause Skip and Retry are disabled.",
             "ハードコア: 1度でも失敗すると即終了。プレイ中のスキップとリトライは無効になります。",
@@ -373,8 +381,8 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
     // Height adapts cleanly to the active flow mode so there's never dead space or hidden rows.
     let sub_h = match flow {
         JourneyFlow::Off => 30.0,
-        JourneyFlow::Nonstop => 36.0,
-        JourneyFlow::Marathon => 130.0,
+        JourneyFlow::Nonstop => 64.0,
+        JourneyFlow::Marathon => 156.0,
     };
     let ph = 288.0 + sub_h;
     let x = (w - pw) / 2.0;
@@ -453,6 +461,29 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
                 0.0,
             );
         }
+    };
+
+    // The "Up next" card's row, in Non-stop's options and Marathon's alike.
+    let up_next_row = |c: &mut Canvas, [rx, ry, rw, rh]: [f32; 4], active_id: &mut SettingId| {
+        draw_row_bg(c, rx, ry, rw, rh, SettingId::UpNext, 0x22c8b8, active_id);
+        if let Some(idx) = row_index_of(SettingId::UpNext) {
+            c.hit(rx, ry, rw, rh, hit::Hit::JourneySetting(idx, 1));
+        }
+        c.text(
+            rx + 6.0,
+            ry + (rh - 8.5) / 2.0,
+            8.5,
+            rgba(0xffffff, 1.0),
+            tr!("Up next card", "次の譜面カード", "Карточка «Дальше»"),
+        );
+        style::switch(
+            c,
+            [
+                rx + rw - style::SWITCH[0] - 6.0,
+                ry + (rh - style::SWITCH[1]) / 2.0,
+            ],
+            state.cfg.journey_up_next,
+        );
     };
 
     let mut cy = y + 48.0;
@@ -790,6 +821,7 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
                 ],
                 state.cfg.journey_skip_intro,
             );
+            up_next_row(c, [sub_rx, sy + 28.0, sub_rw, 26.0], &mut active_id);
         }
         JourneyFlow::Marathon => {
             c.text(
@@ -883,6 +915,9 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
                 ],
                 state.cfg.journey_skip_intro,
             );
+            my += 26.0;
+
+            up_next_row(c, [sub_rx, my, sub_rw, mrow_h], &mut active_id);
             my += 26.0;
 
             // Hardcore
@@ -2717,6 +2752,7 @@ impl State {
             SettingId::Flow => self.cfg.journey_flow = self.cfg.journey_flow.step(dir),
             SettingId::Gap => self.cfg.journey_gap = self.cfg.journey_gap.step(dir),
             SettingId::SkipIntro => self.cfg.journey_skip_intro = !self.cfg.journey_skip_intro,
+            SettingId::UpNext => self.cfg.journey_up_next = !self.cfg.journey_up_next,
             SettingId::Hardcore => self.cfg.journey_hardcore = !self.cfg.journey_hardcore,
             SettingId::MarathonSave => {
                 self.cfg.journey_marathon_save = !self.cfg.journey_marathon_save;
