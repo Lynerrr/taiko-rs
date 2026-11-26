@@ -2405,3 +2405,43 @@ fn marathon_save_maps_option_controls_auto_saving_played_maps() {
     let _ = std::fs::remove_dir_all(&folder_skip);
     let _ = std::fs::remove_dir_all(&dest_skip);
 }
+
+#[test]
+fn a_journey_load_failure_clears_skip_intro_and_returns_to_journey() {
+    let songs = Songs::new("journey-load-fail", &maps::all());
+    let mut cfg = harness::config();
+    cfg.journey_flow = JourneyFlow::Nonstop;
+    cfg.journey_skip_intro = true;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    s.journey.in_play = true;
+    s.journey.skip_intro_next = true;
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(Err("corrupt audio".into())).unwrap();
+    s.scene = screens::loading::Loading::scene(
+        crate::Job::from_receiver(rx),
+        "broken map".into(),
+        0,
+        None,
+    );
+
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+
+    assert_eq!(scene_name(&s), "Journey");
+    assert!(!s.journey.in_play);
+    assert!(
+        !s.journey.skip_intro_next,
+        "load failure must not leak skip_intro_next"
+    );
+
+    // Exiting Journey also clears skip_intro_next if it was set.
+    s.journey.skip_intro_next = true;
+    s.journey.stop();
+    assert!(!s.journey.skip_intro_next);
+}

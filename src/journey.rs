@@ -529,6 +529,7 @@ impl Journey {
         self.in_play = false;
         self.fetching = None;
         self.playing_cached = None;
+        self.skip_intro_next = false;
         self.pool_exhausted = false;
         self.retry_after = None;
     }

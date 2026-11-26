@@ -2225,6 +2225,7 @@ impl State {
         if self.journey.active && self.journey.in_play {
             self.journey.in_play = false;
             self.journey.playing_cached = None;
+            self.journey.skip_intro_next = false;
             self.journey.shown_at = Instant::now();
             self.stop_audio();
             self.report_smoothness();
