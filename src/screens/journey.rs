@@ -223,6 +223,7 @@ enum SettingId {
     Gap,
     SkipIntro,
     Hardcore,
+    MarathonSave,
 }
 
 fn visible_settings(flow: JourneyFlow) -> &'static [SettingId] {
@@ -248,6 +249,7 @@ fn visible_settings(flow: JourneyFlow) -> &'static [SettingId] {
             SettingId::Gap,
             SettingId::SkipIntro,
             SettingId::Hardcore,
+            SettingId::MarathonSave,
         ],
     }
 }
@@ -330,6 +332,11 @@ fn setting_help(state: &State, id: SettingId) -> &'static str {
             "ハードコア: 1度でも失敗すると即終了。プレイ中のスキップとリトライは無効になります。",
             "Хардкор: первый же фейл сразу заканчивает марафон. Скип и ретрай в паузе отключены."
         ),
+        SettingId::MarathonSave => tr!(
+            "Automatically save maps played in Marathon to your library (folder in Settings > Library). Off keeps them in temporary cache.",
+            "マラソンでプレイした譜面を自動でライブラリに保存します（保存先は設定 > ライブラリ）。オフ時は一時キャッシュのみ。",
+            "Автоматически сохраняет сыгранные в марафоне карты в библиотеку (папка в Настройки > Библиотека). Выкл — только в кэше."
+        ),
     }
 }
 
@@ -367,24 +374,11 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
     let sub_h = match flow {
         JourneyFlow::Off => 30.0,
         JourneyFlow::Nonstop => 36.0,
-        JourneyFlow::Marathon => 112.0,
+        JourneyFlow::Marathon => 130.0,
     };
-    let footer_h = 56.0;
-    let ph = 44.0
-        + 18.0
-        + 32.0
-        + 32.0
-        + 30.0
-        + 12.0
-        + 18.0
-        + 34.0
-        + 8.0
-        + sub_h
-        + 12.0
-        + footer_h
-        + 12.0;
+    let ph = 288.0 + sub_h;
     let x = (w - pw) / 2.0;
-    let y = ((h - ph) / 2.0).max(20.0);
+    let y = ((h - ph) / 2.0).max(16.0);
 
     // Solid modal surface (0.99 alpha over 0.80 scrim: zero bleed-through).
     c.round_rect(
@@ -652,7 +646,7 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
         ],
         state.cfg.journey_chill,
     );
-    cy += 32.0;
+    cy += 30.0;
 
     style::rule(c, rx, cy, inner_w);
     cy += 10.0;
@@ -813,14 +807,14 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
                 sub_rx,
                 my,
                 sub_rw,
-                28.0,
+                26.0,
                 SettingId::Gap,
                 0xffd24a,
                 &mut active_id,
             );
             c.text(
                 sub_rx + 6.0,
-                my + 9.5,
+                my + 8.5,
                 8.5,
                 rgba(0xffffff, 1.0),
                 tr!("Between maps", "譜面の間", "Между картами"),
@@ -829,7 +823,7 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
             let g_w = (sub_rw - 120.0 - 8.0) / 3.0;
             for (k, &g) in MarathonGap::ALL.iter().enumerate() {
                 let bx = g_left + k as f32 * (g_w + 4.0);
-                let by = my + 4.0;
+                let by = my + 3.0;
                 let bh = 20.0;
                 let on = state.cfg.journey_gap == g;
                 let hov = c.hovered(bx, by, g_w, bh);
@@ -857,25 +851,26 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
                 );
                 c.hit(bx, by, g_w, bh, hit::Hit::MarathonGap(g));
             }
-            my += 30.0;
+            my += 28.0;
 
             // Skip intros
+            let mrow_h = 24.0;
             draw_row_bg(
                 c,
                 sub_rx,
                 my,
                 sub_rw,
-                26.0,
+                mrow_h,
                 SettingId::SkipIntro,
                 0x22c8b8,
                 &mut active_id,
             );
             if let Some(idx) = row_index_of(SettingId::SkipIntro) {
-                c.hit(sub_rx, my, sub_rw, 26.0, hit::Hit::JourneySetting(idx, 1));
+                c.hit(sub_rx, my, sub_rw, mrow_h, hit::Hit::JourneySetting(idx, 1));
             }
             c.text(
                 sub_rx + 6.0,
-                my + 8.5,
+                my + 7.5,
                 8.5,
                 rgba(0xffffff, 1.0),
                 tr!("Skip intros", "イントロをスキップ", "Скип интро"),
@@ -884,11 +879,11 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
                 c,
                 [
                     sub_rx + sub_rw - style::SWITCH[0] - 6.0,
-                    my + (26.0 - style::SWITCH[1]) / 2.0,
+                    my + (mrow_h - style::SWITCH[1]) / 2.0,
                 ],
                 state.cfg.journey_skip_intro,
             );
-            my += 28.0;
+            my += 26.0;
 
             // Hardcore
             let hc_col = if state.cfg.journey_hardcore {
@@ -901,17 +896,17 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
                 sub_rx,
                 my,
                 sub_rw,
-                26.0,
+                mrow_h,
                 SettingId::Hardcore,
                 hc_col,
                 &mut active_id,
             );
             if let Some(idx) = row_index_of(SettingId::Hardcore) {
-                c.hit(sub_rx, my, sub_rw, 26.0, hit::Hit::JourneySetting(idx, 1));
+                c.hit(sub_rx, my, sub_rw, mrow_h, hit::Hit::JourneySetting(idx, 1));
             }
             c.text(
                 sub_rx + 6.0,
-                my + 8.5,
+                my + 7.5,
                 8.5,
                 rgba(
                     if state.cfg.journey_hardcore {
@@ -930,7 +925,7 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
             );
             c.text(
                 sub_rx + 86.0,
-                my + 9.5,
+                my + 8.5,
                 7.0,
                 rgba(0x8888a4, 1.0),
                 &Canvas::fit(7.0, sub_rw - 122.0, hc_note),
@@ -939,13 +934,63 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
                 c,
                 [
                     sub_rx + sub_rw - style::SWITCH[0] - 6.0,
-                    my + (26.0 - style::SWITCH[1]) / 2.0,
+                    my + (mrow_h - style::SWITCH[1]) / 2.0,
                 ],
                 state.cfg.journey_hardcore,
             );
+            my += 26.0;
+
+            // Save played maps
+            draw_row_bg(
+                c,
+                sub_rx,
+                my,
+                sub_rw,
+                mrow_h,
+                SettingId::MarathonSave,
+                0x22c8b8,
+                &mut active_id,
+            );
+            if let Some(idx) = row_index_of(SettingId::MarathonSave) {
+                c.hit(sub_rx, my, sub_rw, mrow_h, hit::Hit::JourneySetting(idx, 1));
+            }
+            c.text(
+                sub_rx + 6.0,
+                my + 7.5,
+                8.5,
+                rgba(0xffffff, 1.0),
+                tr!("Save maps", "譜面を保存", "Сохранять карты"),
+            );
+            let save_note = tr!(
+                "Keep played maps in your library",
+                "プレイした譜面をライブラリに保存",
+                "Оставлять сыгранные в библиотеке"
+            );
+            let save_lbl_w =
+                Canvas::text_width(8.5, tr!("Save maps", "譜面を保存", "Сохранять карты"));
+            let note_x = sub_rx + 14.0 + save_lbl_w;
+            c.text(
+                note_x,
+                my + 8.5,
+                7.0,
+                rgba(0x8888a4, 1.0),
+                &Canvas::fit(
+                    7.0,
+                    (sub_rx + sub_rw - style::SWITCH[0] - 14.0 - note_x).max(40.0),
+                    save_note,
+                ),
+            );
+            style::switch(
+                c,
+                [
+                    sub_rx + sub_rw - style::SWITCH[0] - 6.0,
+                    my + (mrow_h - style::SWITCH[1]) / 2.0,
+                ],
+                state.cfg.journey_marathon_save,
+            );
         }
     }
-    cy += sub_h + 12.0;
+    cy += sub_h + 10.0;
 
     // Footer help strip: full wrapped description (never truncated with '...').
     c.round_rect(
@@ -2660,6 +2705,9 @@ impl State {
             SettingId::Gap => self.cfg.journey_gap = self.cfg.journey_gap.step(dir),
             SettingId::SkipIntro => self.cfg.journey_skip_intro = !self.cfg.journey_skip_intro,
             SettingId::Hardcore => self.cfg.journey_hardcore = !self.cfg.journey_hardcore,
+            SettingId::MarathonSave => {
+                self.cfg.journey_marathon_save = !self.cfg.journey_marathon_save;
+            }
         }
         self.journey_apply_settings();
     }
@@ -2899,6 +2947,10 @@ impl State {
     }
 
     pub(crate) fn journey_save_current(&mut self) {
+        self.journey_save_current_with(true);
+    }
+
+    pub(crate) fn journey_save_current_with(&mut self, toast_on_success: bool) {
         // The map just played (from its results), else the one up on the Journey screen.
         let cached_info = if let Some((folder, item)) = self.journey.playing_cached.clone() {
             Some((folder, item))
@@ -2913,14 +2965,16 @@ impl State {
         };
 
         let Some((folder, item)) = cached_info else {
-            self.toast(
-                tr!(
-                    "Already in your library",
-                    "すでにライブラリにあります",
-                    "Карта уже в библиотеке"
-                )
-                .into(),
-            );
+            if toast_on_success {
+                self.toast(
+                    tr!(
+                        "Already in your library",
+                        "すでにライブラリにあります",
+                        "Карта уже в библиотеке"
+                    )
+                    .into(),
+                );
+            }
             return;
         };
 
@@ -2969,13 +3023,15 @@ impl State {
                 // Every queued map of the set is in the library now, and the play of it has
                 // nothing left to save.
                 self.journey.saved(&folder, &dest);
-                let where_saved = self.cfg.journey_save_to.name();
-                self.toast(tr!(
-                    "Saved to {where_saved}",
-                    "{where_saved}に保存しました",
-                    "Сохранено в: {where_saved}";
-                    [] [where_saved]
-                ));
+                if toast_on_success {
+                    let where_saved = self.cfg.journey_save_to.name();
+                    self.toast(tr!(
+                        "Saved to {where_saved}",
+                        "{where_saved}に保存しました",
+                        "Сохранено в: {where_saved}";
+                        [] [where_saved]
+                    ));
+                }
             }
             Err(e) => {
                 self.toast(

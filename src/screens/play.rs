@@ -618,6 +618,16 @@ impl Screen for PlayScreen {
             // Failed plays aren't kept anyway: straight into the next try.
             self.out.fail_restart = true;
         } else if done {
+            // Auto-save a cached Marathon map before recording the replay and spawning background
+            // jobs (results_job, submit_score) so every path points to the permanent library folder
+            // with no race on the temporary cache directory.
+            let mut marathon_auto_saved = false;
+            if marathon && state.cfg.journey_marathon_save && state.journey.playing_cached.is_some()
+            {
+                state.journey_save_current_with(false);
+                marathon_auto_saved = state.journey.playing_cached.is_none();
+            }
+            let game = state.play.as_deref_mut()?;
             let title = results_title(&game.map().meta, self.from);
             let failed = game.failed();
             if game.failed_early() {
@@ -847,6 +857,7 @@ impl Screen for PlayScreen {
                     vote_on: results.vote_on.clone(),
                     vote: None,
                     cached: state.journey.playing_cached.clone(),
+                    saved: marathon_auto_saved,
                 });
                 return Some(state.marathon_after_play(play, failed));
             }

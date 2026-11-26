@@ -249,13 +249,16 @@ fn journey_config_defaults_to_own_folder_and_round_trips() {
     let mut cfg = Config::default();
     assert_eq!(cfg.journey_save_to, JourneySaveTo::Own);
     assert!(cfg.journey_save_on_like);
+    assert!(!cfg.journey_marathon_save);
 
     cfg.journey_save_to = JourneySaveTo::Osu;
     cfg.journey_save_on_like = false;
+    cfg.journey_marathon_save = true;
     let text = cfg.to_text();
     let parsed = Config::parse_text(&text);
     assert_eq!(parsed.journey_save_to, JourneySaveTo::Osu);
     assert!(!parsed.journey_save_on_like);
+    assert!(parsed.journey_marathon_save);
 }
 
 #[test]
@@ -1478,6 +1481,7 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     assert!(!shows(&c, "Hardcore"));
     assert!(!shows(&c, "Between maps"));
     assert!(!shows(&c, "Skip intros"));
+    assert!(!shows(&c, "Save maps"));
     assert!(
         s.hits
             .iter()
@@ -1543,8 +1547,9 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     assert!(shows(&c, "Skip intros"));
     assert!(!shows(&c, "Hardcore"));
     assert!(!shows(&c, "Between maps"));
+    assert!(!shows(&c, "Save maps"));
 
-    // Marathon reveals Hardcore and Between maps, and caps Length::Any at 5 minutes.
+    // Marathon reveals Hardcore, Between maps, and Save maps, and caps Length::Any at 5 minutes.
     s.click(
         hit::Hit::JourneyLength(crate::config::JourneyLength::Any),
         None,
@@ -1554,6 +1559,12 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     let c = frame(&mut s, now);
     assert!(shows(&c, "Hardcore"));
     assert!(shows(&c, "Between maps"));
+    assert!(shows(&c, "Save maps"));
+    assert!(!s.cfg.journey_marathon_save);
+    s.click(hit::Hit::JourneySetting(7, 1), None);
+    assert!(s.cfg.journey_marathon_save);
+    s.click(hit::Hit::JourneySetting(7, 1), None);
+    assert!(!s.cfg.journey_marathon_save);
     frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
     assert!(
         seen.lock().unwrap()[asked..].contains(&(
@@ -2259,4 +2270,138 @@ fn a_short_marathon_wheel_is_brief() {
     let start = now;
     assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
     assert!(now.duration_since(start) < Duration::from_millis(1500));
+}
+
+/// Marathon's "Save maps" option controls whether cached maps played to completion are moved into
+/// the player's library automatically (Off keeps them in cache with `S: save`; On moves them
+/// before score submission / replay recording and marks the wheel card `Saved`; Pause -> Skip
+/// never auto-saves).
+#[test]
+fn marathon_save_maps_option_controls_auto_saving_played_maps() {
+    let pid = std::process::id();
+    let make_cached = |tag: &str,
+                       set_id: u32,
+                       src_osu: &std::path::Path|
+     -> (String, std::path::PathBuf, QueuedMap) {
+        let name = format!("{set_id} MarathonSave-{pid}-{tag}");
+        let folder = config::journey_cache_dir().join(&name);
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let chart_path = folder.join("chart.osu");
+        std::fs::copy(src_osu, &chart_path).unwrap();
+        let entries = crate::journey::scan_single_folder(&folder);
+        let entry = entries.into_iter().next().expect("scanned cached chart");
+        let version = entry.meta.version.clone();
+        let q = QueuedMap {
+            item: item(&format!("Map {tag}"), &version, set_id),
+            source: MapSource::Cached {
+                folder: folder.clone(),
+                entry: Box::new(entry),
+            },
+        };
+        (name, folder, q)
+    };
+
+    // 1. Default (journey_marathon_save = false): played cached map stays in cache.
+    let songs = Songs::new("journey-marathon-save-off", &maps::all());
+    let mut cfg = harness::config();
+    cfg.journey_flow = JourneyFlow::Marathon;
+    cfg.journey_save_to = JourneySaveTo::Own;
+    cfg.journey_marathon_save = false;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    let src_osu = s.library[0].path.clone();
+    let (name_off, folder_off, q_off) = make_cached("off", 9101, &src_osu);
+    let dest_off = config::own_songs_dir().join(&name_off);
+    let _ = std::fs::remove_dir_all(&dest_off);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    s.journey.queue.push_front(q_off);
+    s.marathon_start();
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let map = harness::game(&s).unwrap().map().clone();
+    super::flows::play_out(
+        &mut s,
+        &mut now,
+        &maps::presses(&map, maps::Player::Perfect),
+    );
+    assert_eq!(scene_name(&s), "Marathon");
+    assert!(
+        folder_off.is_dir(),
+        "cached folder stays in cache when Save maps is Off"
+    );
+    assert!(
+        !dest_off.exists(),
+        "must not move to library when Save maps is Off"
+    );
+    let last = s.journey.marathon.as_ref().unwrap().last.as_ref().unwrap();
+    assert!(last.cached.is_some());
+    assert!(!last.saved);
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "S: save"));
+    let _ = std::fs::remove_dir_all(&folder_off);
+
+    // 2. Enabled (journey_marathon_save = true): played cached map is auto-saved to library.
+    let songs = Songs::new("journey-marathon-save-on", &maps::all());
+    let mut cfg = harness::config();
+    cfg.journey_flow = JourneyFlow::Marathon;
+    cfg.journey_save_to = JourneySaveTo::Own;
+    cfg.journey_marathon_save = true;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    let src_osu = s.library[0].path.clone();
+    let (name_on, folder_on, q_on) = make_cached("on", 9102, &src_osu);
+    let (name_skip, folder_skip, q_skip) = make_cached("skip", 9103, &src_osu);
+    let dest_on = config::own_songs_dir().join(&name_on);
+    let dest_skip = config::own_songs_dir().join(&name_skip);
+    let _ = std::fs::remove_dir_all(&dest_on);
+    let _ = std::fs::remove_dir_all(&dest_skip);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    s.journey.queue.push_front(q_skip);
+    s.journey.queue.push_front(q_on);
+    s.marathon_start();
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let map = harness::game(&s).unwrap().map().clone();
+    super::flows::play_out(
+        &mut s,
+        &mut now,
+        &maps::presses(&map, maps::Player::Perfect),
+    );
+    assert_eq!(scene_name(&s), "Marathon");
+    assert!(
+        dest_on.join("chart.osu").is_file(),
+        "played map is auto-saved into the library folder when Save maps is On"
+    );
+    assert!(!folder_on.exists(), "cached folder moved out of cache");
+    assert!(
+        s.library
+            .iter()
+            .any(|e| e.path == dest_on.join("chart.osu")),
+        "library entry path updated in place to the permanent destination"
+    );
+    let last = s.journey.marathon.as_ref().unwrap().last.as_ref().unwrap();
+    assert!(last.cached.is_none());
+    assert!(last.saved);
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "Saved"));
+    assert!(!shows(&c, "S: save"));
+
+    // 3. Pause -> Skip while Save maps is On must NOT auto-save the skipped map.
+    s.click(hit::Hit::Key(KeyCode::Enter), None);
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    press(&mut s, KeyCode::Escape, now);
+    press(&mut s, KeyCode::ArrowDown, now);
+    press(&mut s, KeyCode::Enter, now);
+    assert_eq!(scene_name(&s), "Marathon");
+    assert!(folder_skip.is_dir(), "skipped map stays in cache");
+    assert!(!dest_skip.exists(), "skipped map must not be auto-saved");
+
+    let _ = std::fs::remove_dir_all(&dest_on);
+    let _ = std::fs::remove_dir_all(&folder_skip);
+    let _ = std::fs::remove_dir_all(&dest_skip);
 }

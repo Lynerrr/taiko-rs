@@ -556,6 +556,8 @@ pub struct Config {
     pub journey_skip_intro: bool,
     /// What a marathon shows between two maps: its wheel, briefly, or nothing at all.
     pub journey_gap: MarathonGap,
+    /// Automatically save cached maps played in a Journey marathon to the player's library.
+    pub journey_marathon_save: bool,
     /// The interface's language.
     pub language: crate::lang::Lang,
     /// Empty selects the original pixel font; otherwise an installed family name.
@@ -886,6 +888,7 @@ impl Default for Config {
             journey_hardcore: false,
             journey_skip_intro: true,
             journey_gap: MarathonGap::Wheel,
+            journey_marathon_save: false,
             language: crate::lang::Lang::En,
             ui_font: String::new(),
             // osu!'s default: a new player starts where an osu! player does.
@@ -1824,6 +1827,7 @@ impl Config {
                 "journey_hardcore" => cfg.journey_hardcore = v == "true",
                 "journey_skip_intro" => cfg.journey_skip_intro = v != "false",
                 "journey_gap" => cfg.journey_gap = MarathonGap::parse(v).unwrap_or(cfg.journey_gap),
+                "journey_marathon_save" => cfg.journey_marathon_save = v == "true",
                 "ui_font" => cfg.ui_font = v.to_string(),
                 "language" => cfg.language = crate::lang::Lang::parse(v).unwrap_or(cfg.language),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
@@ -2495,6 +2499,10 @@ impl Config {
         out.push_str(&format!(
             "# between a marathon's maps: wheel, short (a brief wheel) or seamless (none)\njourney_gap = {}\n",
             self.journey_gap.key()
+        ));
+        out.push_str(&format!(
+            "# automatically save maps played in a Journey marathon to the library\njourney_marathon_save = {}\n",
+            self.journey_marathon_save
         ));
         let tja = self
             .tja_folder
