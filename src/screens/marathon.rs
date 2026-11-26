@@ -194,6 +194,131 @@ impl Screen for MarathonScreen {
     }
 }
 
+/// A marathon's combo in a play's bottom-right corner (over Non-stop's "up next" card while it
+/// shows).
+pub(crate) fn draw_combo_chip(c: &mut Canvas, combo: u32, over_card: bool) {
+    let text = format!("x{combo}");
+    let label = tr!("MARATHON", "マラソン", "МАРАФОН");
+    let w = Canvas::text_width(7.0, label) + 8.0 + Canvas::text_width(11.0, &text) + 20.0;
+    let h = 22.0;
+    let x = c.width - 12.0 - w;
+    let y = if over_card {
+        c.height - 62.0 - 6.0 - h
+    } else {
+        c.height - 12.0 - h
+    };
+    style::cold_panel(c, [x, y, w, h]);
+    c.text(x + 10.0, y + 8.0, 7.0, rgba(0x22d4c0, 1.0), label);
+    c.text(
+        x + w - 10.0 - Canvas::text_width(11.0, &text),
+        y + 5.0,
+        11.0,
+        rgba(0xffd24a, 1.0),
+        &text,
+    );
+}
+
+/// The wheel's buttons: hold, and the way out.
+const PAUSE_ICON: style::Icon = [
+    "................",
+    "................",
+    "...####..####...",
+    "...####..####...",
+    "...####..####...",
+    "...####..####...",
+    "...####..####...",
+    "...####..####...",
+    "...####..####...",
+    "...####..####...",
+    "...####..####...",
+    "...####..####...",
+    "...####..####...",
+    "...####..####...",
+    "................",
+    "................",
+];
+const CROSS_ICON: style::Icon = [
+    "................",
+    "................",
+    "..##........##..",
+    "..###......###..",
+    "...###....###...",
+    "....###..###....",
+    ".....######.....",
+    "......####......",
+    "......####......",
+    ".....######.....",
+    "....###..###....",
+    "...###....###...",
+    "..###......###..",
+    "..##........##..",
+    "................",
+    "................",
+];
+
+/// The wheel's row of buttons, each doing what its key does (the key named on it).
+fn draw_buttons(c: &mut Canvas, held: bool) {
+    let size = 8.0;
+    let hold = if held {
+        (
+            &style::PLAY,
+            tr!("Go on", "再開", "Продолжить"),
+            "Space",
+            KeyCode::Space,
+        )
+    } else {
+        (
+            &PAUSE_ICON,
+            tr!("Hold", "一時停止", "Пауза"),
+            "Space",
+            KeyCode::Space,
+        )
+    };
+    let buttons: [(&'static style::Icon, &str, &str, KeyCode); 4] = [
+        (
+            &style::PLAY,
+            tr!("Start now", "すぐ開始", "Начать сразу"),
+            "Enter",
+            KeyCode::Enter,
+        ),
+        hold,
+        (
+            &super::journey::SKIP_ICON,
+            tr!("Another map", "別の譜面", "Другая карта"),
+            "Tab",
+            KeyCode::Tab,
+        ),
+        (
+            &CROSS_ICON,
+            tr!("End", "終了", "Закончить"),
+            "Esc",
+            KeyCode::Escape,
+        ),
+    ];
+    let gap = 10.0;
+    let widths: Vec<f32> = buttons
+        .iter()
+        .map(|(_, label, key, _)| style::icon_button_width(label, Some(key), size))
+        .collect();
+    let total = widths.iter().sum::<f32>() + gap * (buttons.len() - 1) as f32;
+    let mut x = (c.width - total) / 2.0 + 6.0;
+    let mid = c.height - 52.0;
+    for ((icon, label, key, code), w) in buttons.iter().zip(&widths) {
+        style::block_button(
+            c,
+            [x, mid],
+            icon,
+            label,
+            Some(key),
+            size,
+            held && *code == KeyCode::Space,
+            hit::Hit::Key(*code),
+            30.0,
+        );
+        x += w + gap;
+    }
+}
+
 fn ease(ms: f32, over: f32) -> f32 {
     if !render::animations() {
         return 1.0;
@@ -438,11 +563,23 @@ fn draw_wheel(state: &State, c: &mut Canvas, since: Duration, held: bool, loadin
         rgba(0x9a9ab0, 1.0),
         &Canvas::fit(8.0, w - 32.0, &so_far),
     );
+    if m.combo > 0 {
+        let combo = m.combo;
+        c.text_centered(
+            w / 2.0,
+            140.0,
+            12.0,
+            rgba(0xffd24a, 1.0),
+            &tr!("MARATHON COMBO x{combo}", "マラソンコンボ x{combo}", "КОМБО МАРАФОНА x{combo}"; [] [combo]),
+        );
+    }
+    draw_buttons(c, held);
 
+    // Nothing needs a key: the next map starts by itself. The buttons above say theirs.
     let mut hints = String::from(tr!(
-        "Enter: go now   Space: hold   Tab: another map   N: another next",
-        "Enter: すぐ開始   Space: 一時停止   Tab: 別の譜面   N: 次を変更",
-        "Enter: сразу   Space: пауза   Tab: другая карта   N: другая следующая"
+        "N: another next one",
+        "N: 次の次を変更",
+        "N: другая следующая"
     ));
     if last.is_some_and(|p| p.vote_on.is_some()) {
         hints.push_str(tr!(
@@ -454,7 +591,6 @@ fn draw_wheel(state: &State, c: &mut Canvas, since: Duration, held: bool, loadin
     if last.is_some_and(|p| p.cached.is_some()) {
         hints.push_str(tr!("   S: save", "   S: 保存", "   S: сохранить"));
     }
-    hints.push_str(tr!("   Esc: end", "   Esc: 終了", "   Esc: закончить"));
     c.text_centered(
         w / 2.0,
         c.height - 18.0,
@@ -468,7 +604,7 @@ fn draw_wheel(state: &State, c: &mut Canvas, since: Duration, held: bool, loadin
 fn draw_summary(m: &Marathon, c: &mut Canvas) {
     let w = c.width;
     let pw = 360.0_f32.min(w - 32.0);
-    let ph = 236.0;
+    let ph = 258.0;
     let x = (w - pw) / 2.0;
     let y = (c.height - ph) / 2.0;
     style::panel(c, x, y, pw, ph);
@@ -510,6 +646,14 @@ fn draw_summary(m: &Marathon, c: &mut Canvas) {
         (
             tr!("Best streak", "最長連続クリア", "Лучшая серия"),
             m.best_streak.to_string(),
+        ),
+        (
+            tr!(
+                "Best marathon combo",
+                "最大マラソンコンボ",
+                "Лучшее комбо марафона"
+            ),
+            m.best_combo.to_string(),
         ),
         (
             tr!("Best play", "ベストプレイ", "Лучшая игра"),
@@ -570,6 +714,7 @@ impl State {
         self.journey_refill();
         let hardcore = self.cfg.journey_hardcore;
         if let Some(m) = &mut self.journey.marathon {
+            m.map_ended();
             if let Some(play) = play {
                 m.record(play);
             }
@@ -593,6 +738,9 @@ impl State {
         self.journey.in_play = false;
         self.journey.playing_cached = None;
         self.journey_skip_quiet(seen_secs);
+        if let Some(m) = &mut self.journey.marathon {
+            m.combo_broken();
+        }
         if let (Some(m), Some(item)) = (&mut self.journey.marathon, item) {
             m.record(MarathonPlay {
                 item,

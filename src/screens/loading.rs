@@ -210,6 +210,9 @@ pub(crate) fn start_game(
         }
     }
     game.view.marathon = state.journey.marathon.is_some();
+    if let Some(m) = &mut state.journey.marathon {
+        m.map_started();
+    }
     state.play = Some(Box::new(game));
     super::play::PlayScreen::scene(entry, from)
 }
