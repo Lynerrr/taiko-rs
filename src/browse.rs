@@ -88,6 +88,8 @@ pub struct Browse {
     page: usize,
     more: bool,
     edited: Option<Instant>,
+    /// The set a `taiko-rs://` map link opened, while the list shows just it.
+    opened: Option<SetInfo>,
     /// The query the shown results are for (None: nothing searched yet).
     searched: Option<String>,
     /// Previewable difficulties fetched so far (entries for the song select preview) and their keys.
@@ -148,6 +150,7 @@ impl Default for Browse {
             page: 0,
             more: false,
             edited: None,
+            opened: None,
             searched: None,
             remote: Vec::new(),
             remote_keys: Vec::new(),
@@ -394,6 +397,7 @@ impl Browse {
 
     /// Switches to the osu! mirrors or the taiko.rs website, in the category it had last.
     pub fn set_source(&mut self, source: Source) {
+        self.opened = None;
         if source == self.source() {
             return;
         }
@@ -444,11 +448,13 @@ impl Browse {
     }
 
     pub fn flip_sort(&mut self) {
+        self.opened = None;
         self.desc = !self.desc;
         self.search_now();
     }
 
     pub fn set_category(&mut self, c: Category) {
+        self.opened = None;
         self.menu = None;
         if c != self.category {
             self.category = c;
@@ -460,6 +466,7 @@ impl Browse {
 
     /// Picks an order; picking the current one again flips its direction.
     pub fn set_sort(&mut self, s: SortKey) {
+        self.opened = None;
         self.menu = None;
         if s == self.sort {
             self.desc = !self.desc;
@@ -477,6 +484,7 @@ impl Browse {
     }
 
     pub fn step_sort(&mut self, dir: i32) {
+        self.opened = None;
         let all = self.sorts();
         let i = all.iter().position(|&s| s == self.sort).unwrap_or(0) as i32;
         let next = all[(i + dir).rem_euclid(all.len() as i32) as usize];
@@ -487,9 +495,35 @@ impl Browse {
 
     /// Searches on first open.
     pub fn opened(&mut self) {
-        if self.searched.is_none() {
+        if self.opened.is_none() && self.searched.is_none() {
             self.search_now();
         }
+    }
+
+    /// Shows just `set` (a `taiko-rs://` map link's set): its source and nothing else, until
+    /// the player edits the search (`type_text`, `set_category`, ... put it back to normal).
+    pub fn show_opened(&mut self, set: SetInfo) {
+        let source = if set.custom.is_some() {
+            Source::Ours
+        } else {
+            Source::Osu
+        };
+        if source != self.source() {
+            std::mem::swap(&mut self.category, &mut self.other_category);
+            self.fit_sort();
+        }
+        self.opened = Some(set.clone());
+        self.search = None;
+        self.searched = None;
+        self.edited = None;
+        self.loved_progress = None;
+        self.loved_count = None;
+        self.query.clear();
+        self.status.clear();
+        (self.page, self.more) = (0, false);
+        (self.scroll_target, self.follow) = (0.0, true);
+        self.results = vec![set];
+        self.cursor = 0;
     }
 
     /// The selected set's chosen difficulty.
@@ -590,7 +624,8 @@ impl Browse {
 
     pub fn poll(&mut self, now: Instant) {
         self.poll_preview(now);
-        if self.edited.is_some_and(|t| now - t >= TYPE_DELAY)
+        if self.opened.is_none()
+            && self.edited.is_some_and(|t| now - t >= TYPE_DELAY)
             && self.searched.as_deref() != Some(self.query.trim())
         {
             self.search_now();
@@ -688,6 +723,7 @@ impl Browse {
     pub fn set_query(&mut self, text: String) {
         if self.query != text {
             self.query = text;
+            self.opened = None;
             self.edited = Some(Instant::now());
         }
     }
@@ -696,18 +732,21 @@ impl Browse {
         let before = self.query.len();
         self.query.extend(text.chars().filter(|c| !c.is_control()));
         if self.query.len() != before {
+            self.opened = None;
             self.edited = Some(Instant::now());
         }
     }
 
     pub fn backspace(&mut self) {
         if self.query.pop().is_some() {
+            self.opened = None;
             self.edited = Some(Instant::now());
         }
     }
 
     pub fn clear(&mut self) {
         self.query.clear();
+        self.opened = None;
         self.edited = Some(Instant::now());
     }
 
@@ -1620,5 +1659,40 @@ mod tests {
         b.category = Category::Custom;
         b.fit_sort();
         assert_eq!((b.sort, b.desc), (SortKey::Relevance, true));
+    }
+
+    #[test]
+    fn an_opened_set_shows_alone_until_the_player_edits_the_search() {
+        let mut b = Browse::default();
+        b.show_opened(set(7));
+        assert_eq!(b.source(), Source::Osu);
+        assert_eq!(b.results.len(), 1);
+        assert_eq!(b.cursor, 0);
+        assert_eq!(b.results[0].id, 7);
+        assert_eq!(b.query, "");
+        assert_eq!(b.status, "");
+        // Nothing searched, and opening the tab again doesn't start a search either.
+        assert!(b.search.is_none());
+        b.opened();
+        assert!(b.search.is_none());
+        // A custom set shows in the website's list.
+        let custom = SetInfo {
+            custom: Some(download::CustomSet::default()),
+            ..set(5)
+        };
+        b.show_opened(custom.clone());
+        assert_eq!(b.source(), Source::Ours);
+        assert_eq!(b.results[0].id, 5);
+        // The first edit goes back to the normal search.
+        b.type_text("a");
+        assert!(b.opened.is_none());
+        b.show_opened(custom);
+        b.clear();
+        assert!(b.opened.is_none());
+        // So does a category change (the same one: nothing searched).
+        b.show_opened(set(7));
+        b.set_category(b.category);
+        assert!(b.opened.is_none());
+        assert!(b.search.is_none());
     }
 }

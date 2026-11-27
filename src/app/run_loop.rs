@@ -1374,6 +1374,7 @@ impl State {
             custom_move: Job::idle(),
             custom_move_looked: false,
             score_link: None,
+            set_link: None,
             preview_remote: false,
             host_transfer: None,
             host_map_asked: false,

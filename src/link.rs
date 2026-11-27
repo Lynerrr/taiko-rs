@@ -1,6 +1,7 @@
 //! `taiko-rs://` links: a score's "Watch replay" button (on the website, and under the Discord
-//! bot's plays) opens that score in the game, ready to watch. The game makes itself their
-//! handler when it starts (Windows: the user's registry; Linux: a desktop entry), and a link
+//! bot's plays) opens that score in the game, ready to watch, and a map's "Open in taiko.rs"
+//! button opens its set (in song select, or the download tab if it isn't here). The game makes
+//! itself their handler when it starts (Windows: the user's registry; Linux: a desktop entry), and a link
 //! opened while it's running goes to the running game over a local socket instead of starting
 //! a second one.
 //!
@@ -18,17 +19,24 @@ use std::time::Duration;
 pub enum Link {
     /// An online score, by its `OnlineScore::id`.
     Score(u64),
+    /// An osu! set, by its osu! set ID.
+    OsuSet(u32),
+    /// A custom set, by its website ID.
+    CustomSet(u32),
 }
 
 impl Link {
     pub fn url(self) -> String {
         match self {
             Link::Score(id) => format!("taiko-rs://score/{id}"),
+            Link::OsuSet(id) => format!("taiko-rs://osu/{id}"),
+            Link::CustomSet(id) => format!("taiko-rs://custom/{id}"),
         }
     }
 }
 
-/// `taiko-rs://score/123` (browsers may add a slash or a query).
+/// `taiko-rs://score/123`, `taiko-rs://osu/123`, `taiko-rs://custom/123` (browsers may add a
+/// slash or a query).
 pub fn parse(text: &str) -> Option<Link> {
     let text = text.trim();
     let rest = text
@@ -36,8 +44,10 @@ pub fn parse(text: &str) -> Option<Link> {
         .filter(|s| s.eq_ignore_ascii_case("taiko-rs://"))
         .map(|_| &text[11..])?;
     let path = rest.split(['?', '#']).next()?.trim_end_matches('/');
-    match path.split_once('/')? {
+    match path.to_ascii_lowercase().split_once('/')? {
         ("score" | "s", id) => id.parse().ok().map(Link::Score),
+        ("osu" | "set", id) => id.parse().ok().map(Link::OsuSet),
+        ("custom" | "c", id) => id.parse().ok().map(Link::CustomSet),
         _ => None,
     }
 }
@@ -402,6 +412,20 @@ mod tests {
         assert_eq!(parse("taiko-rs://map/1"), None);
         assert_eq!(parse("https://score/1"), None);
         assert_eq!(parse("/home/me/Songs"), None);
+    }
+
+    #[test]
+    fn map_links_parse() {
+        assert_eq!(parse("taiko-rs://osu/123"), Some(Link::OsuSet(123)));
+        assert_eq!(parse("taiko-rs://osu/123/"), Some(Link::OsuSet(123)));
+        assert_eq!(parse("taiko-rs://set/123"), Some(Link::OsuSet(123)));
+        assert_eq!(parse("taiko-rs://CUSTOM/456?q"), Some(Link::CustomSet(456)));
+        assert_eq!(parse("taiko-rs://c/7"), Some(Link::CustomSet(7)));
+        assert_eq!(parse(&Link::OsuSet(9).url()), Some(Link::OsuSet(9)));
+        assert_eq!(parse(&Link::CustomSet(9).url()), Some(Link::CustomSet(9)));
+        assert_eq!(parse("taiko-rs://osu/"), None);
+        assert_eq!(parse("taiko-rs://custom/x"), None);
+        assert_eq!(parse("taiko-rs://osu/1.5"), None);
     }
 
     #[test]
