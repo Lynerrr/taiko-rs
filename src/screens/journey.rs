@@ -1828,7 +1828,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         ),
         None => (None, None, None, None),
     };
-    let rate = state.play_speed().0;
+    let rate = state.journey_play_speed(0).0;
     let (pot_pp, live_stars) = match &entry_path {
         Some(path) => {
             state
@@ -1845,7 +1845,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     let od_val = od_raw.map(|od| {
         crate::beatmap::od_at_rate(state.cfg.mods.od_with(od, crate::od_override::get()), rate)
     });
-    let loaded_stats = state.preview.loaded_stats();
+    let loaded_stats = is_ready.then(|| state.preview.loaded_stats()).flatten();
 
     let card_start = c.shapes.len();
 
@@ -1972,10 +1972,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         &pill_text,
     );
     let mut left_used = pill_w;
-    if let Some(rec_rate) = item
-        .rate
-        .filter(|&r| r.is_finite() && (r - 1.0).abs() > 0.005)
-    {
+    if let Some(rec_rate) = state.journey_applied_recommended_rate(0) {
         let rate_lbl = format!("{rec_rate:.2}x");
         let rw = Canvas::text_width(7.5, &rate_lbl) + 12.0;
         let rx_rate = cx + pad + left_used + 6.0;
@@ -2096,20 +2093,29 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
 
     // --- LEFT COLUMN: stats, Don/Kat bar, pp row, live autoplay preview + density graph ---
     let mut ly = body_y + 10.0;
+    // Server `item.bpm` and `item.length_ms` are already scaled by `item.rate`; unscale them to
+    // 1.0x before applying the actual playback speed so neither recommended rates nor DT/HT/manual
+    // overrides double-scale or misreport stats.
+    let item_rate = item
+        .rate
+        .filter(|&r| r.is_finite() && r > 0.01)
+        .unwrap_or(1.0);
+    let item_nomod_bpm = item.bpm / item_rate;
+    let item_nomod_len_ms = (item.length_ms as f64 * item_rate).round() as u64;
     let (raw_bpm, raw_len_ms, dons, kats, rolls, swells) = match loaded_stats {
         Some(st) => (
-            if st.bpm > 0.0 { st.bpm } else { item.bpm },
+            if st.bpm > 0.0 { st.bpm } else { item_nomod_bpm },
             if st.length_ms > 0.0 {
                 st.length_ms as u64
             } else {
-                item.length_ms
+                item_nomod_len_ms
             },
             Some(st.dons),
             Some(st.kats),
             st.rolls,
             st.swells,
         ),
-        None => (item.bpm, item.length_ms, None, None, 0, 0),
+        None => (item_nomod_bpm, item_nomod_len_ms, None, None, 0, 0),
     };
     let speed = rate.max(0.01);
     let bpm_val = raw_bpm * speed;
@@ -2900,25 +2906,38 @@ impl State {
         self.journey_apply_settings();
     }
 
+    /// Server-recommended rate for Journey queue slot `queue_idx` when it is actually in
+    /// effect (Journey is active and neither DT/HT nor an explicit `cfg.rate` overrides it).
+    pub(crate) fn journey_applied_recommended_rate(&self, queue_idx: usize) -> Option<f64> {
+        let mod_speed = self.cfg.mods.speed(1.0, false).0;
+        if (self.cfg.rate - 1.0).abs() > 0.005 || (mod_speed - 1.0).abs() > 0.005 {
+            return None;
+        }
+        if !self.journey.active {
+            return None;
+        }
+        self.journey
+            .queue
+            .get(queue_idx)
+            .and_then(|q| q.item.rate)
+            .filter(|&r| r.is_finite() && (r - 1.0).abs() > 0.005)
+            .map(|r| r.clamp(RATE_RANGE.0, RATE_RANGE.1))
+    }
+
     /// Effective playback rate for Journey queue slot `queue_idx`: the player's explicit rate
     /// or DT/HT mod always wins; otherwise a server-recommended `item.rate` is applied without
     /// mutating `cfg.rate`.
     pub(crate) fn journey_rate_for(&self, queue_idx: usize) -> f64 {
-        let mod_speed = self.cfg.mods.speed(1.0, false).0;
-        if (self.cfg.rate - 1.0).abs() > 0.005 || (mod_speed - 1.0).abs() > 0.005 {
-            return self.cfg.rate;
-        }
-        if self.journey.active
-            && let Some(r) = self
-                .journey
-                .queue
-                .get(queue_idx)
-                .and_then(|q| q.item.rate)
-                .filter(|&r| r.is_finite() && (r - 1.0).abs() > 0.005)
-        {
-            return r.clamp(RATE_RANGE.0, RATE_RANGE.1);
-        }
-        self.cfg.rate
+        self.journey_applied_recommended_rate(queue_idx)
+            .unwrap_or(self.cfg.rate)
+    }
+
+    /// Effective `(speed, keep_pitch)` for Journey queue slot `queue_idx`, combining mods
+    /// (DT/HT/NC/DC) with [`State::journey_rate_for`].
+    pub(crate) fn journey_play_speed(&self, queue_idx: usize) -> (f64, bool) {
+        self.cfg
+            .mods
+            .speed(self.journey_rate_for(queue_idx), self.cfg.rate_keep_pitch)
     }
 
     pub(crate) fn journey_set_flow(&mut self, flow: JourneyFlow) {
