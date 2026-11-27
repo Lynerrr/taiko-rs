@@ -2816,3 +2816,92 @@ fn journey_rates_setting_wires_to_server_and_applies_recommended_rate() {
     let parsed = Config::parse_text(&s.cfg.to_text());
     assert_eq!(parsed.journey_rates, crate::config::JourneyRates::Off);
 }
+
+#[test]
+fn journey_card_hides_rate_badge_and_matches_preview_under_recommended_and_override_rates() {
+    let songs = Songs::new("journey-rate-card", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    s.journey.queue.clear();
+    // Server sends already-scaled BPM (180 * 1.15 = 207) and length (120s / 1.15 ≈ 104348 ms).
+    let mut it = item("Rate Card Song", "Oni", 5151);
+    it.bpm = 207.0;
+    it.length_ms = 104_348;
+    it.rate = Some(1.15);
+    s.journey.queue.push_back(crate::journey::QueuedMap {
+        item: it,
+        source: crate::journey::MapSource::Pending,
+    });
+
+    // 1. Recommended 1.15x active: badge shown, BPM/length match 1.15x (not double-scaled),
+    //    and preview_rate() matches 1.15x so preview audio and Play cache share the same speed.
+    now += Duration::from_millis(16);
+    let c_rec = frame(&mut s, now);
+    assert!(
+        harness::shows(&c_rec, "1.15x"),
+        "recommended rate badge should show when active"
+    );
+    assert!(
+        harness::shows(&c_rec, "207"),
+        "BPM should be 207 (not double-scaled)"
+    );
+    assert!(
+        harness::shows(&c_rec, "1:44"),
+        "length should be 1:44 (not double-scaled)"
+    );
+    assert!(
+        (s.preview_rate().0 - 1.15).abs() < 1e-6,
+        "preview_rate must use recommended 1.15x, got {}",
+        s.preview_rate().0
+    );
+
+    // 2. DT enabled: 1.15x badge hidden, BPM/length reflect 1.50x DT, preview_rate is 1.50x.
+    s.cfg.mods.toggle(crate::mods::Mod::DoubleTime);
+    now += Duration::from_millis(16);
+    let c_dt = frame(&mut s, now);
+    assert!(
+        !harness::shows(&c_dt, "1.15x"),
+        "1.15x badge must be hidden when DT overrides it"
+    );
+    assert!(
+        harness::shows(&c_dt, "270"),
+        "BPM under DT should be 270 (180 * 1.5)"
+    );
+    assert!(
+        harness::shows(&c_dt, "1:20"),
+        "length under DT should be 1:20 (120s / 1.5)"
+    );
+    assert!(
+        (s.preview_rate().0 - 1.5).abs() < 1e-6,
+        "preview_rate under DT must be 1.5x, got {}",
+        s.preview_rate().0
+    );
+
+    // 3. Manual cfg.rate = 1.25: 1.15x badge hidden, BPM/length reflect 1.25x, preview_rate is 1.25x.
+    s.cfg.mods.toggle(crate::mods::Mod::DoubleTime);
+    s.cfg.rate = 1.25;
+    now += Duration::from_millis(16);
+    let c_man = frame(&mut s, now);
+    assert!(
+        !harness::shows(&c_man, "1.15x"),
+        "1.15x badge must be hidden when manual rate overrides it"
+    );
+    assert!(
+        harness::shows(&c_man, "225"),
+        "BPM under 1.25x should be 225 (180 * 1.25)"
+    );
+    assert!(
+        harness::shows(&c_man, "1:36"),
+        "length under 1.25x should be 1:36 (120s / 1.25)"
+    );
+    assert!(
+        (s.preview_rate().0 - 1.25).abs() < 1e-6,
+        "preview_rate under manual 1.25x must be 1.25x, got {}",
+        s.preview_rate().0
+    );
+}

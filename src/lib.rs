@@ -1211,6 +1211,13 @@ impl State {
         if let Some(p) = &self.player {
             return p.rate();
         }
+        let in_journey = self.scene.screen_is::<screens::journey::JourneyScreen>()
+            || self
+                .behind_settings()
+                .is_some_and(|back| back.screen_is::<screens::journey::JourneyScreen>());
+        if in_journey && !lobby {
+            return self.journey_play_speed(0);
+        }
         let (rate, keep_pitch) = self.play_speed();
         (lobby_rate.filter(|_| lobby).unwrap_or(rate), keep_pitch)
     }
