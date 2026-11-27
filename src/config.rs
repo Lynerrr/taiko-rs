@@ -340,6 +340,53 @@ impl JourneyLength {
     }
 }
 
+/// Whether Journey may recommend rate-scaled (`1.15x..=1.50x`) charts.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum JourneyRates {
+    #[default]
+    Auto,
+    Off,
+    On,
+}
+
+impl JourneyRates {
+    pub const ALL: [JourneyRates; 3] = [JourneyRates::Auto, JourneyRates::Off, JourneyRates::On];
+
+    pub fn chip(self) -> &'static str {
+        match self {
+            JourneyRates::Auto => tr!("Auto", "自動", "Авто"),
+            JourneyRates::Off => tr!("Off", "オフ", "Выкл"),
+            JourneyRates::On => tr!("On", "オン", "Вкл"),
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            JourneyRates::Auto => "auto",
+            JourneyRates::Off => "off",
+            JourneyRates::On => "on",
+        }
+    }
+
+    pub fn wire(self) -> Option<String> {
+        Some(self.key().to_string())
+    }
+
+    pub fn parse(s: &str) -> Option<JourneyRates> {
+        JourneyRates::ALL
+            .into_iter()
+            .find(|r| r.key().eq_ignore_ascii_case(s))
+    }
+
+    pub fn step(self, dir: i32) -> JourneyRates {
+        let i = JourneyRates::ALL
+            .iter()
+            .position(|&v| v == self)
+            .unwrap_or(0) as i32;
+        JourneyRates::ALL[(i + dir).rem_euclid(JourneyRates::ALL.len() as i32) as usize]
+    }
+}
+
 /// How Journey goes from one map to the next.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum JourneyFlow {
@@ -545,6 +592,8 @@ pub struct Config {
     pub journey_focus: JourneyFocus,
     /// Map duration filter for Journey and Marathon sessions.
     pub journey_length: JourneyLength,
+    /// Rate-scaled recommendation mode (`auto`, `off`, or `on`) for Journey sessions.
+    pub journey_rates: JourneyRates,
     /// Journey plays it easy: maps below the player's level, no stretch maps.
     pub journey_chill: bool,
     /// How Journey goes from one map to the next (results, a countdown, or a marathon), showing
@@ -888,6 +937,7 @@ impl Default for Config {
             journey_save_on_like: true,
             journey_focus: JourneyFocus::Any,
             journey_length: JourneyLength::Any,
+            journey_rates: JourneyRates::Auto,
             journey_chill: false,
             journey_flow: JourneyFlow::Off,
             journey_hardcore: false,
@@ -1827,6 +1877,9 @@ impl Config {
                 "journey_length" => {
                     cfg.journey_length = JourneyLength::parse(v).unwrap_or(cfg.journey_length)
                 }
+                "journey_rates" => {
+                    cfg.journey_rates = JourneyRates::parse(v).unwrap_or(cfg.journey_rates)
+                }
                 "journey_chill" => cfg.journey_chill = v == "true",
                 "journey_flow" => {
                     cfg.journey_flow = JourneyFlow::parse(v).unwrap_or(cfg.journey_flow)
@@ -2492,6 +2545,10 @@ impl Config {
         out.push_str(&format!(
             "# map length filter for Journey: any, short (<=2m), standard (1-4m), extended (<=6m) or long (4m+)\njourney_length = {}\n",
             self.journey_length.key()
+        ));
+        out.push_str(&format!(
+            "# rate-scaled recommendations in Journey: auto, off or on\njourney_rates = {}\n",
+            self.journey_rates.key()
         ));
         out.push_str(&format!(
             "# Journey plays it easy: maps below your level, no stretch maps\njourney_chill = {}\n",

@@ -127,6 +127,7 @@ fn results_screen_next_and_save_on_like_in_journey() {
         stars: 4.5,
         bpm: 180.0,
         length_ms: 60_000,
+        rate: None,
         role: "main".into(),
         reason: "Fits your comfort level".into(),
         scroll_velocity: 0.45,
@@ -233,6 +234,7 @@ fn failed_download_play_advances_without_sending_skip() {
             stars: 4.0,
             bpm: 160.0,
             length_ms: 60_000,
+            rate: None,
             role: "main".into(),
             reason: "Fits".into(),
             scroll_velocity: 0.45,
@@ -300,6 +302,7 @@ fn item(title: &str, version: &str, set: u32) -> online::JourneyItem {
         stars: 4.5,
         bpm: 180.0,
         length_ms: 60_000,
+        rate: None,
         role: "main".into(),
         reason: "Fits your comfort level".into(),
         scroll_velocity: 0.45,
@@ -1522,6 +1525,7 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
 
     let asked = seen.lock().unwrap().len();
     press(&mut s, KeyCode::ArrowDown, now);
+    press(&mut s, KeyCode::ArrowDown, now);
     press(&mut s, KeyCode::ArrowRight, now);
     assert!(s.cfg.journey_chill);
     assert!(s.journey.chill);
@@ -1562,16 +1566,16 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     assert!(shows(&c, "Between maps"));
     assert!(shows(&c, "Save maps"));
     assert!(shows(&c, "Up next card"));
-    // Rows: Focus, Length, Chill, Flow, Between maps, Skip intros, Up next card, Hardcore, Save.
+    // Rows: Focus, Length, Rates, Chill, Flow, Between maps, Skip intros, Up next card, Hardcore, Save.
     assert!(s.cfg.journey_up_next);
-    s.click(hit::Hit::JourneySetting(6, 1), None);
+    s.click(hit::Hit::JourneySetting(7, 1), None);
     assert!(!s.cfg.journey_up_next);
-    s.click(hit::Hit::JourneySetting(6, 1), None);
+    s.click(hit::Hit::JourneySetting(7, 1), None);
     assert!(s.cfg.journey_up_next);
     assert!(!s.cfg.journey_marathon_save);
-    s.click(hit::Hit::JourneySetting(8, 1), None);
+    s.click(hit::Hit::JourneySetting(9, 1), None);
     assert!(s.cfg.journey_marathon_save);
-    s.click(hit::Hit::JourneySetting(8, 1), None);
+    s.click(hit::Hit::JourneySetting(9, 1), None);
     assert!(!s.cfg.journey_marathon_save);
     frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
     assert!(
@@ -1624,7 +1628,7 @@ fn an_offline_chill_journey_has_no_stretch_maps() {
     );
 
     let level = s.journey.comfort_stars;
-    s.journey_change_setting(2, 1);
+    s.journey_change_setting(3, 1);
     assert!(s.journey.chill);
     assert_eq!(s.journey.comfort_stars, level);
     let mut seen = Vec::new();
@@ -2092,6 +2096,75 @@ fn a_marathon_shows_its_combo_on_the_wheel_and_in_the_next_map() {
     assert!(shows(&c, "Go on"));
     s.click(hit::Hit::Key(KeyCode::Escape), None);
     assert!(s.journey.marathon.as_ref().unwrap().ended.is_some());
+}
+
+/// The wheel says at what speed the map up next plays (a recommended rate, or DT over it), with
+/// its BPM and length at that speed: the server's are already at the recommended rate, so they
+/// aren't scaled twice. The in-play "Up next" card says the same.
+#[test]
+fn a_marathon_shows_the_speed_of_the_map_up_next() {
+    let songs = Songs::new("journey-marathon-rate", &maps::all());
+    let mut cfg = harness::config();
+    cfg.journey_flow = JourneyFlow::Marathon;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    // Up next: 180 BPM and 2:00 at 1.0x, sent at 1.15x. After it: 2:30, at 1.0x.
+    let mut it = item("Rate Wheel Song", "Oni", 5252);
+    it.bpm = 207.0;
+    it.length_ms = 104_348;
+    it.rate = Some(1.15);
+    let mut after = item("Nomod After", "Oni", 5253);
+    after.length_ms = 150_000;
+    let queue = |s: &mut State| {
+        s.journey.queue.clear();
+        for item in [it.clone(), after.clone()] {
+            s.journey.queue.push_back(QueuedMap {
+                item,
+                source: MapSource::Pending,
+            });
+        }
+    };
+    queue(&mut s);
+    s.marathon_start();
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Marathon");
+    assert!(shows(&c, "1.15x"), "the recommended rate is on the wheel");
+    assert!(shows(&c, "BPM 207"), "BPM at 1.15x, not scaled twice");
+    assert!(shows(&c, "1:44"), "length at 1.15x");
+    assert!(shows(&c, "Length 2:30") && !shows(&c, "2:30  ·"));
+
+    // DT over it: the map plays at 1.50x of its own 180 BPM, and so does the one after it.
+    s.cfg.mods.toggle(crate::mods::Mod::DoubleTime);
+    queue(&mut s);
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert!(!shows(&c, "1.15x"), "DT overrides the recommended rate");
+    assert!(shows(&c, "BPM 270"), "180 * 1.5, not 207 * 1.5");
+    assert!(shows(&c, "LENGTH 1:20"), "2:00 / 1.5");
+    assert!(shows(&c, "Length 1:40  ·  1.50x"), "2:30 / 1.5");
+
+    let card = |speed: f64| {
+        let mut c = crate::hit::Canvas {
+            width: 800.0,
+            height: 600.0,
+            audit: true,
+            ..Default::default()
+        };
+        crate::screens::journey::draw_up_next(&mut c, Some(&it), speed, 1.0);
+        c
+    };
+    let c = card(1.15);
+    assert!(shows(&c, "1.15x") && shows(&c, "1:44"));
+    let c = card(1.5);
+    assert!(shows(&c, "1.50x") && shows(&c, "1:20") && !shows(&c, "1:44"));
+    let c = card(1.0);
+    assert!(!shows(&c, "1.00x"), "no label at 1.0x");
+    assert!(shows(&c, "2:00"), "1.0x: the map's own length");
 }
 
 /// Plays the map up through (every note hit) until the marathon has counted it, the next map
@@ -2712,4 +2785,192 @@ fn journey_reset_preserves_in_flight_background_saves() {
 
     let _ = std::fs::remove_dir_all(&cache_dir);
     let _ = std::fs::remove_dir_all(&dest_root);
+}
+
+#[test]
+fn journey_rates_setting_wires_to_server_and_applies_recommended_rate() {
+    use std::sync::Mutex;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen_rates: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_srv = seen_rates.clone();
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() || !line.contains("JourneyNext") {
+                continue;
+            }
+            let val: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+            let inner = journey_next_of(&val).cloned().unwrap_or_default();
+            let rates = inner
+                .get("rates")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            seen_srv.lock().unwrap().push(rates.clone());
+            let rec_rate = if rates.as_deref() == Some("off") {
+                None
+            } else {
+                Some(1.25)
+            };
+            let mut it = item("Rate Song", "Oni", 4242);
+            it.rate = rec_rate;
+            let reply = online::Reply::Journey(online::JourneyBatch {
+                needs_level: false,
+                comfort_stars: 7.5,
+                items: vec![it],
+                ..Default::default()
+            });
+            let mut w = stream;
+            let _ = writeln!(w, "{}", serde_json::to_string(&reply).unwrap());
+            let _ = w.flush();
+        }
+    });
+
+    let songs = Songs::new("journey-rates-wire", &maps::all());
+    let mut cfg = harness::config();
+    cfg.online_server = format!("127.0.0.1:{}", addr.port());
+    cfg.online_token = "tok".into();
+    assert_eq!(cfg.journey_rates, crate::config::JourneyRates::Auto);
+    let mut s = state_with(cfg, songs.entries());
+    s.journey_supported = true;
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    // Opening Journey sends rates = "auto" by default and receives a 1.25x pick.
+    s.open_journey();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && s.journey.queue.is_empty() {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        seen_rates.lock().unwrap().first().cloned(),
+        Some(Some("auto".to_string()))
+    );
+    assert!((s.journey_rate_for(0) - 1.25).abs() < 1e-6);
+    assert!(
+        (s.cfg.rate - 1.0).abs() < 1e-6,
+        "recommended rate must not mutate cfg.rate"
+    );
+
+    // Explicit player rate override wins over the Journey recommendation.
+    s.cfg.rate = 1.4;
+    assert!((s.journey_rate_for(0) - 1.4).abs() < 1e-6);
+    s.cfg.rate = 1.0;
+
+    // Switching Journey rates to Off via hit target rebuilds and sends rates = "off".
+    let asked = seen_rates.lock().unwrap().len();
+    s.click(
+        hit::Hit::JourneyRates(crate::config::JourneyRates::Off),
+        None,
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && seen_rates.lock().unwrap().len() <= asked {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(s.cfg.journey_rates, crate::config::JourneyRates::Off);
+    assert!(
+        seen_rates.lock().unwrap()[asked..].contains(&Some("off".to_string())),
+        "{:?}",
+        seen_rates.lock().unwrap()
+    );
+
+    // Config round-trips journey_rates cleanly.
+    let parsed = Config::parse_text(&s.cfg.to_text());
+    assert_eq!(parsed.journey_rates, crate::config::JourneyRates::Off);
+}
+
+#[test]
+fn journey_card_hides_rate_badge_and_matches_preview_under_recommended_and_override_rates() {
+    let songs = Songs::new("journey-rate-card", &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    s.journey.queue.clear();
+    // Server sends already-scaled BPM (180 * 1.15 = 207) and length (120s / 1.15 ≈ 104348 ms).
+    let mut it = item("Rate Card Song", "Oni", 5151);
+    it.bpm = 207.0;
+    it.length_ms = 104_348;
+    it.rate = Some(1.15);
+    s.journey.queue.push_back(crate::journey::QueuedMap {
+        item: it,
+        source: crate::journey::MapSource::Pending,
+    });
+
+    // 1. Recommended 1.15x active: badge shown, BPM/length match 1.15x (not double-scaled),
+    //    and preview_rate() matches 1.15x so preview audio and Play cache share the same speed.
+    now += Duration::from_millis(16);
+    let c_rec = frame(&mut s, now);
+    assert!(
+        harness::shows(&c_rec, "1.15x"),
+        "recommended rate badge should show when active"
+    );
+    assert!(
+        harness::shows(&c_rec, "207"),
+        "BPM should be 207 (not double-scaled)"
+    );
+    assert!(
+        harness::shows(&c_rec, "1:44"),
+        "length should be 1:44 (not double-scaled)"
+    );
+    assert!(
+        (s.preview_rate().0 - 1.15).abs() < 1e-6,
+        "preview_rate must use recommended 1.15x, got {}",
+        s.preview_rate().0
+    );
+
+    // 2. DT enabled: 1.15x badge hidden, BPM/length reflect 1.50x DT, preview_rate is 1.50x.
+    s.cfg.mods.toggle(crate::mods::Mod::DoubleTime);
+    now += Duration::from_millis(16);
+    let c_dt = frame(&mut s, now);
+    assert!(
+        !harness::shows(&c_dt, "1.15x"),
+        "1.15x badge must be hidden when DT overrides it"
+    );
+    assert!(
+        harness::shows(&c_dt, "270"),
+        "BPM under DT should be 270 (180 * 1.5)"
+    );
+    assert!(
+        harness::shows(&c_dt, "1:20"),
+        "length under DT should be 1:20 (120s / 1.5)"
+    );
+    assert!(
+        (s.preview_rate().0 - 1.5).abs() < 1e-6,
+        "preview_rate under DT must be 1.5x, got {}",
+        s.preview_rate().0
+    );
+
+    // 3. Manual cfg.rate = 1.25: 1.15x badge hidden, BPM/length reflect 1.25x, preview_rate is 1.25x.
+    s.cfg.mods.toggle(crate::mods::Mod::DoubleTime);
+    s.cfg.rate = 1.25;
+    now += Duration::from_millis(16);
+    let c_man = frame(&mut s, now);
+    assert!(
+        !harness::shows(&c_man, "1.15x"),
+        "1.15x badge must be hidden when manual rate overrides it"
+    );
+    assert!(
+        harness::shows(&c_man, "225"),
+        "BPM under 1.25x should be 225 (180 * 1.25)"
+    );
+    assert!(
+        harness::shows(&c_man, "1:36"),
+        "length under 1.25x should be 1:36 (120s / 1.25)"
+    );
+    assert!(
+        (s.preview_rate().0 - 1.25).abs() < 1e-6,
+        "preview_rate under manual 1.25x must be 1.25x, got {}",
+        s.preview_rate().0
+    );
 }

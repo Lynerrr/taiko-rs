@@ -3,7 +3,7 @@
 //! in the middle, and a Song-Select-style action bar along the bottom.
 
 use super::screen::{Frame, Key, Screen};
-use crate::config::{JourneyFlow, JourneyFocus, JourneyLength, MarathonGap};
+use crate::config::{JourneyFlow, JourneyFocus, JourneyLength, JourneyRates, MarathonGap};
 use crate::journey::{Gate, LEVEL_CHOICES, MapSource, PastOutcome};
 use crate::*;
 
@@ -218,6 +218,7 @@ impl Screen for JourneyScreen {
 enum SettingId {
     Focus,
     Length,
+    Rates,
     Chill,
     Flow,
     Gap,
@@ -232,12 +233,14 @@ fn visible_settings(flow: JourneyFlow) -> &'static [SettingId] {
         JourneyFlow::Off => &[
             SettingId::Focus,
             SettingId::Length,
+            SettingId::Rates,
             SettingId::Chill,
             SettingId::Flow,
         ],
         JourneyFlow::Nonstop => &[
             SettingId::Focus,
             SettingId::Length,
+            SettingId::Rates,
             SettingId::Chill,
             SettingId::Flow,
             SettingId::SkipIntro,
@@ -246,6 +249,7 @@ fn visible_settings(flow: JourneyFlow) -> &'static [SettingId] {
         JourneyFlow::Marathon => &[
             SettingId::Focus,
             SettingId::Length,
+            SettingId::Rates,
             SettingId::Chill,
             SettingId::Flow,
             SettingId::Gap,
@@ -286,6 +290,16 @@ fn setting_help(state: &State, id: SettingId) -> &'static str {
                 )
             }
         }
+        SettingId::Rates if state.journey.local_mode => tr!(
+            "Rate-scaled picks (1.15x–1.50x) expand high-star pools. Requires online mode (using library offline).",
+            "レート変更おすすめ（1.15x〜1.50x）は高難易度プールを広げます（オンライン専用）。",
+            "Рекомендации с рейтами (1.15x–1.50x) расширяют пул на высоких звёздах. Работает только онлайн."
+        ),
+        SettingId::Rates => tr!(
+            "Allow playable sped-up charts (1.15x–1.50x). Auto blends them in only when nomod maps at your level run short.",
+            "プレイ可能な加速譜面（1.15x〜1.50x）を混ぜます。自動はレベルに合うnomod譜面が少ない時だけ混ぜます。",
+            "Предлагать играбельные ускоренные карты (1.15x–1.50x). Авто подмешивает их, только когда nomod-карт твоего уровня не хватает."
+        ),
         SettingId::Chill => tr!(
             "Easier pace: maps half a star below your comfort level and no stretch maps. Your level stays unchanged.",
             "レベルより0.5☆やさしい譜面のみ、ストレッチなし。推定レベルは変わりません。",
@@ -384,7 +398,7 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
         JourneyFlow::Nonstop => 64.0,
         JourneyFlow::Marathon => 156.0,
     };
-    let ph = 288.0 + sub_h;
+    let ph = 320.0 + sub_h;
     let x = (w - pw) / 2.0;
     let y = ((h - ph) / 2.0).max(16.0);
 
@@ -635,7 +649,77 @@ fn draw_settings(state: &State, c: &mut Canvas, w: f32, h: f32) {
     }
     cy += 32.0;
 
-    // 3. Chill (switch)
+    // 3. Rates (Auto / Off / On segmented chips)
+    draw_row_bg(
+        c,
+        rx,
+        cy,
+        inner_w,
+        row_h,
+        SettingId::Rates,
+        0x22c8b8,
+        &mut active_id,
+    );
+    let offline_rates = state.journey.local_mode;
+    c.text(
+        rx + 8.0,
+        cy + 9.5,
+        9.0,
+        rgba(if offline_rates { 0x74728a } else { 0xffffff }, 1.0),
+        tr!("Rates", "レート", "Рейты"),
+    );
+    let rchip_w =
+        (seg_w - chip_gap * (JourneyRates::ALL.len() - 1) as f32) / JourneyRates::ALL.len() as f32;
+    for (k, &mode) in JourneyRates::ALL.iter().enumerate() {
+        let bx = seg_left + k as f32 * (rchip_w + chip_gap);
+        let by = cy + 4.0;
+        let bh = row_h - 8.0;
+        let on = state.cfg.journey_rates == mode;
+        let hov = c.hovered(bx, by, rchip_w, bh);
+        let fill = if on {
+            rgba(if offline_rates { 0x4a4a62 } else { 0x22d4c0 }, 0.24)
+        } else if hov {
+            rgba(0x2d3042, 0.95)
+        } else {
+            rgba(0x161926, 0.95)
+        };
+        let edge = if on {
+            rgba(if offline_rates { 0x6a6a84 } else { 0x22d4c0 }, 0.9)
+        } else if hov {
+            rgba(style::tone::EDGE_HOVER, 0.9)
+        } else {
+            rgba(style::tone::EDGE, 0.65)
+        };
+        c.round_rect(
+            [bx, by],
+            [rchip_w, bh],
+            style::radius::SMALL,
+            fill,
+            edge,
+            1.0,
+        );
+        let lbl = mode.chip();
+        c.text_centered(
+            bx + rchip_w / 2.0,
+            by + (bh - 7.5) / 2.0,
+            7.5,
+            rgba(
+                if on {
+                    if offline_rates { 0xb4b4c8 } else { 0x62f2df }
+                } else if offline_rates {
+                    0x6e6e84
+                } else {
+                    0xc4c4d8
+                },
+                1.0,
+            ),
+            &Canvas::fit(7.5, rchip_w - 6.0, lbl),
+        );
+        c.hit(bx, by, rchip_w, bh, hit::Hit::JourneyRates(mode));
+    }
+    cy += 32.0;
+
+    // 4. Chill (switch)
     let sw_row_h = 26.0;
     draw_row_bg(
         c,
@@ -1094,9 +1178,34 @@ fn format_length_short(ms: u64) -> Option<String> {
     Some(format!("{}:{:02}", s / 60, s % 60))
 }
 
+/// `item`'s BPM and length at playback `speed`. The server sends both already scaled by
+/// `item.rate`, so they go back to 1.0x first: neither a recommended rate nor DT/HT or a manual
+/// rate over it is applied twice.
+pub(crate) fn item_bpm_len_at(item: &online::JourneyItem, speed: f64) -> (f64, u64) {
+    let item_rate = item
+        .rate
+        .filter(|&r| r.is_finite() && r > 0.01)
+        .unwrap_or(1.0);
+    let speed = speed.max(0.01);
+    (
+        item.bpm / item_rate * speed,
+        (item.length_ms as f64 * item_rate / speed).round() as u64,
+    )
+}
+
+/// A playback speed as a label (`1.35x`), None at 1.0x.
+pub(crate) fn speed_label(speed: f64) -> Option<String> {
+    ((speed - 1.0).abs() > 0.005).then(|| format!("{speed:.2}x"))
+}
+
 /// In-play "Up next" card in the bottom-right corner with smooth entrance (`alpha` 0..=1),
-/// difficulty-colored accent bar, map duration, and `[N] Swap` keycap.
-pub(crate) fn draw_up_next(c: &mut Canvas, next: Option<&online::JourneyItem>, alpha: f32) {
+/// difficulty-colored accent bar, the speed it plays at, map duration, and `[N] Swap` keycap.
+pub(crate) fn draw_up_next(
+    c: &mut Canvas,
+    next: Option<&online::JourneyItem>,
+    speed: f64,
+    alpha: f32,
+) {
     let alpha = alpha.clamp(0.0, 1.0);
     if alpha <= 0.01 {
         return;
@@ -1132,7 +1241,7 @@ pub(crate) fn draw_up_next(c: &mut Canvas, next: Option<&online::JourneyItem>, a
     match next {
         Some(item) => {
             let mut right_meta = format!("{:.2}*", item.stars);
-            if let Some(len) = format_length_short(item.length_ms) {
+            if let Some(len) = format_length_short(item_bpm_len_at(item, speed).1) {
                 right_meta.push_str(&format!("  {len}"));
             }
             let mw = Canvas::text_width(7.0, &right_meta);
@@ -1143,6 +1252,16 @@ pub(crate) fn draw_up_next(c: &mut Canvas, next: Option<&online::JourneyItem>, a
                 rgba(0xffd24a, 0.95),
                 &right_meta,
             );
+            if let Some(rate) = speed_label(speed) {
+                let rw = Canvas::text_width(7.0, &rate);
+                c.text(
+                    x + pw - 10.0 - mw - 8.0 - rw,
+                    y + 7.0,
+                    7.0,
+                    rgba(0x62f2df, 1.0),
+                    &rate,
+                );
+            }
 
             let title = format!("{} - {}", item.artist, item.title);
             c.text(
@@ -1744,7 +1863,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         ),
         None => (None, None, None, None),
     };
-    let rate = state.play_speed().0;
+    let rate = state.journey_play_speed(0).0;
     let (pot_pp, live_stars) = match &entry_path {
         Some(path) => {
             state
@@ -1761,7 +1880,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     let od_val = od_raw.map(|od| {
         crate::beatmap::od_at_rate(state.cfg.mods.od_with(od, crate::od_override::get()), rate)
     });
-    let loaded_stats = state.preview.loaded_stats();
+    let loaded_stats = is_ready.then(|| state.preview.loaded_stats()).flatten();
 
     let card_start = c.shapes.len();
 
@@ -1887,9 +2006,31 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         rgba(role_col, 1.0),
         &pill_text,
     );
-    let reason_x = cx + pad + pill_w + 10.0;
+    let mut left_used = pill_w;
+    if let Some(rec_rate) = state.journey_applied_recommended_rate(0) {
+        let rate_lbl = format!("{rec_rate:.2}x");
+        let rw = Canvas::text_width(7.5, &rate_lbl) + 12.0;
+        let rx_rate = cx + pad + left_used + 6.0;
+        c.round_rect(
+            [rx_rate, cy + 11.0],
+            [rw, 16.0],
+            style::radius::SMALL,
+            rgba(0x22d4c0, 0.24),
+            rgba(0x22d4c0, 0.9),
+            1.0,
+        );
+        c.text_centered(
+            rx_rate + rw / 2.0,
+            cy + 15.0,
+            7.5,
+            rgba(0x62f2df, 1.0),
+            &rate_lbl,
+        );
+        left_used += 6.0 + rw;
+    }
+    let reason_x = cx + pad + left_used + 10.0;
     let right_used = star_w + 8.0 + status_w + 12.0;
-    let reason_room = (cw - pad * 2.0 - pill_w - 10.0 - right_used).max(40.0);
+    let reason_room = (cw - pad * 2.0 - left_used - 10.0 - right_used).max(40.0);
     c.text(
         reason_x,
         cy + 15.5,
@@ -1914,6 +2055,9 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     }
     if state.cfg.journey_length != JourneyLength::Any {
         active_tags.push((state.cfg.journey_length.chip(false), 0x4ea8ff));
+    }
+    if state.cfg.journey_rates == JourneyRates::On && !state.journey.local_mode {
+        active_tags.push((tr!("RATES", "レート", "РЕЙТЫ"), 0x22d4c0));
     }
     if state.cfg.journey_chill {
         active_tags.push((tr!("CHILL", "チル", "ЧИЛЛ"), 0x4ee07a));
@@ -1984,20 +2128,24 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
 
     // --- LEFT COLUMN: stats, Don/Kat bar, pp row, live autoplay preview + density graph ---
     let mut ly = body_y + 10.0;
+    // Server `item.bpm` and `item.length_ms` are already scaled by `item.rate`; unscale them to
+    // 1.0x before applying the actual playback speed so neither recommended rates nor DT/HT/manual
+    // overrides double-scale or misreport stats.
+    let (item_nomod_bpm, item_nomod_len_ms) = item_bpm_len_at(&item, 1.0);
     let (raw_bpm, raw_len_ms, dons, kats, rolls, swells) = match loaded_stats {
         Some(st) => (
-            if st.bpm > 0.0 { st.bpm } else { item.bpm },
+            if st.bpm > 0.0 { st.bpm } else { item_nomod_bpm },
             if st.length_ms > 0.0 {
                 st.length_ms as u64
             } else {
-                item.length_ms
+                item_nomod_len_ms
             },
             Some(st.dons),
             Some(st.kats),
             st.rolls,
             st.swells,
         ),
-        None => (item.bpm, item.length_ms, None, None, 0, 0),
+        None => (item_nomod_bpm, item_nomod_len_ms, None, None, 0, 0),
     };
     let speed = rate.max(0.01);
     let bpm_val = raw_bpm * speed;
@@ -2387,6 +2535,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     );
     let gear_lit = state.cfg.journey_focus != JourneyFocus::Any
         || state.cfg.journey_length != JourneyLength::Any
+        || state.cfg.journey_rates != JourneyRates::Auto
         || state.cfg.journey_chill
         || state.cfg.journey_flow != JourneyFlow::Off;
     let gear_w = style::block_button(
@@ -2445,7 +2594,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
         bh,
         room,
         state.cfg.mods,
-        state.cfg.rate,
+        state.journey_rate_for(0),
     );
 
     let play_label = if is_ready {
@@ -2485,6 +2634,7 @@ impl State {
         self.journey.reset();
         self.journey.focus = self.cfg.journey_focus;
         self.journey.length = self.cfg.journey_length;
+        self.journey.rates = self.cfg.journey_rates;
         self.journey.marathon_cap = self.cfg.journey_flow == JourneyFlow::Marathon;
         self.journey.chill = self.cfg.journey_chill;
         self.journey.screen_entered = Instant::now();
@@ -2748,6 +2898,7 @@ impl State {
         match id {
             SettingId::Focus => self.cfg.journey_focus = self.cfg.journey_focus.step(dir),
             SettingId::Length => self.cfg.journey_length = self.cfg.journey_length.step(dir),
+            SettingId::Rates => self.cfg.journey_rates = self.cfg.journey_rates.step(dir),
             SettingId::Chill => self.cfg.journey_chill = !self.cfg.journey_chill,
             SettingId::Flow => self.cfg.journey_flow = self.cfg.journey_flow.step(dir),
             SettingId::Gap => self.cfg.journey_gap = self.cfg.journey_gap.step(dir),
@@ -2775,6 +2926,48 @@ impl State {
             .position(|&s| s == SettingId::Length);
         self.cfg.journey_length = length;
         self.journey_apply_settings();
+    }
+
+    pub(crate) fn journey_set_rates(&mut self, rates: JourneyRates) {
+        self.journey.settings = visible_settings(self.cfg.journey_flow)
+            .iter()
+            .position(|&s| s == SettingId::Rates);
+        self.cfg.journey_rates = rates;
+        self.journey_apply_settings();
+    }
+
+    /// Server-recommended rate for Journey queue slot `queue_idx` when it is actually in
+    /// effect (Journey is active and neither DT/HT nor an explicit `cfg.rate` overrides it).
+    pub(crate) fn journey_applied_recommended_rate(&self, queue_idx: usize) -> Option<f64> {
+        let mod_speed = self.cfg.mods.speed(1.0, false).0;
+        if (self.cfg.rate - 1.0).abs() > 0.005 || (mod_speed - 1.0).abs() > 0.005 {
+            return None;
+        }
+        if !self.journey.active {
+            return None;
+        }
+        self.journey
+            .queue
+            .get(queue_idx)
+            .and_then(|q| q.item.rate)
+            .filter(|&r| r.is_finite() && (r - 1.0).abs() > 0.005)
+            .map(|r| r.clamp(RATE_RANGE.0, RATE_RANGE.1))
+    }
+
+    /// Effective playback rate for Journey queue slot `queue_idx`: the player's explicit rate
+    /// or DT/HT mod always wins; otherwise a server-recommended `item.rate` is applied without
+    /// mutating `cfg.rate`.
+    pub(crate) fn journey_rate_for(&self, queue_idx: usize) -> f64 {
+        self.journey_applied_recommended_rate(queue_idx)
+            .unwrap_or(self.cfg.rate)
+    }
+
+    /// Effective `(speed, keep_pitch)` for Journey queue slot `queue_idx`, combining mods
+    /// (DT/HT/NC/DC) with [`State::journey_rate_for`].
+    pub(crate) fn journey_play_speed(&self, queue_idx: usize) -> (f64, bool) {
+        self.cfg
+            .mods
+            .speed(self.journey_rate_for(queue_idx), self.cfg.rate_keep_pitch)
     }
 
     pub(crate) fn journey_set_flow(&mut self, flow: JourneyFlow) {
@@ -2806,6 +2999,7 @@ impl State {
             self.cfg.journey_focus,
             self.cfg.journey_chill,
             self.cfg.journey_length,
+            self.cfg.journey_rates,
             marathon_cap,
         ) {
             self.journey_refill();
