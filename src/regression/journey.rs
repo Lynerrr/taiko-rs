@@ -127,6 +127,7 @@ fn results_screen_next_and_save_on_like_in_journey() {
         stars: 4.5,
         bpm: 180.0,
         length_ms: 60_000,
+        rate: None,
         role: "main".into(),
         reason: "Fits your comfort level".into(),
         scroll_velocity: 0.45,
@@ -233,6 +234,7 @@ fn failed_download_play_advances_without_sending_skip() {
             stars: 4.0,
             bpm: 160.0,
             length_ms: 60_000,
+            rate: None,
             role: "main".into(),
             reason: "Fits".into(),
             scroll_velocity: 0.45,
@@ -300,6 +302,7 @@ fn item(title: &str, version: &str, set: u32) -> online::JourneyItem {
         stars: 4.5,
         bpm: 180.0,
         length_ms: 60_000,
+        rate: None,
         role: "main".into(),
         reason: "Fits your comfort level".into(),
         scroll_velocity: 0.45,
@@ -1522,6 +1525,7 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
 
     let asked = seen.lock().unwrap().len();
     press(&mut s, KeyCode::ArrowDown, now);
+    press(&mut s, KeyCode::ArrowDown, now);
     press(&mut s, KeyCode::ArrowRight, now);
     assert!(s.cfg.journey_chill);
     assert!(s.journey.chill);
@@ -1562,16 +1566,16 @@ fn journey_settings_ask_the_server_for_a_focus_and_a_chill_session() {
     assert!(shows(&c, "Between maps"));
     assert!(shows(&c, "Save maps"));
     assert!(shows(&c, "Up next card"));
-    // Rows: Focus, Length, Chill, Flow, Between maps, Skip intros, Up next card, Hardcore, Save.
+    // Rows: Focus, Length, Rates, Chill, Flow, Between maps, Skip intros, Up next card, Hardcore, Save.
     assert!(s.cfg.journey_up_next);
-    s.click(hit::Hit::JourneySetting(6, 1), None);
+    s.click(hit::Hit::JourneySetting(7, 1), None);
     assert!(!s.cfg.journey_up_next);
-    s.click(hit::Hit::JourneySetting(6, 1), None);
+    s.click(hit::Hit::JourneySetting(7, 1), None);
     assert!(s.cfg.journey_up_next);
     assert!(!s.cfg.journey_marathon_save);
-    s.click(hit::Hit::JourneySetting(8, 1), None);
+    s.click(hit::Hit::JourneySetting(9, 1), None);
     assert!(s.cfg.journey_marathon_save);
-    s.click(hit::Hit::JourneySetting(8, 1), None);
+    s.click(hit::Hit::JourneySetting(9, 1), None);
     assert!(!s.cfg.journey_marathon_save);
     frames_until(&mut s, &mut now, |s| !s.journey.queue.is_empty());
     assert!(
@@ -1624,7 +1628,7 @@ fn an_offline_chill_journey_has_no_stretch_maps() {
     );
 
     let level = s.journey.comfort_stars;
-    s.journey_change_setting(2, 1);
+    s.journey_change_setting(3, 1);
     assert!(s.journey.chill);
     assert_eq!(s.journey.comfort_stars, level);
     let mut seen = Vec::new();
@@ -2712,4 +2716,103 @@ fn journey_reset_preserves_in_flight_background_saves() {
 
     let _ = std::fs::remove_dir_all(&cache_dir);
     let _ = std::fs::remove_dir_all(&dest_root);
+}
+
+#[test]
+fn journey_rates_setting_wires_to_server_and_applies_recommended_rate() {
+    use std::sync::Mutex;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen_rates: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_srv = seen_rates.clone();
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() || !line.contains("JourneyNext") {
+                continue;
+            }
+            let val: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+            let inner = journey_next_of(&val).cloned().unwrap_or_default();
+            let rates = inner
+                .get("rates")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            seen_srv.lock().unwrap().push(rates.clone());
+            let rec_rate = if rates.as_deref() == Some("off") {
+                None
+            } else {
+                Some(1.25)
+            };
+            let mut it = item("Rate Song", "Oni", 4242);
+            it.rate = rec_rate;
+            let reply = online::Reply::Journey(online::JourneyBatch {
+                needs_level: false,
+                comfort_stars: 7.5,
+                items: vec![it],
+                ..Default::default()
+            });
+            let mut w = stream;
+            let _ = writeln!(w, "{}", serde_json::to_string(&reply).unwrap());
+            let _ = w.flush();
+        }
+    });
+
+    let songs = Songs::new("journey-rates-wire", &maps::all());
+    let mut cfg = harness::config();
+    cfg.online_server = format!("127.0.0.1:{}", addr.port());
+    cfg.online_token = "tok".into();
+    assert_eq!(cfg.journey_rates, crate::config::JourneyRates::Auto);
+    let mut s = state_with(cfg, songs.entries());
+    s.journey_supported = true;
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+
+    // Opening Journey sends rates = "auto" by default and receives a 1.25x pick.
+    s.open_journey();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && s.journey.queue.is_empty() {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        seen_rates.lock().unwrap().first().cloned(),
+        Some(Some("auto".to_string()))
+    );
+    assert!((s.journey_rate_for(0) - 1.25).abs() < 1e-6);
+    assert!(
+        (s.cfg.rate - 1.0).abs() < 1e-6,
+        "recommended rate must not mutate cfg.rate"
+    );
+
+    // Explicit player rate override wins over the Journey recommendation.
+    s.cfg.rate = 1.4;
+    assert!((s.journey_rate_for(0) - 1.4).abs() < 1e-6);
+    s.cfg.rate = 1.0;
+
+    // Switching Journey rates to Off via hit target rebuilds and sends rates = "off".
+    let asked = seen_rates.lock().unwrap().len();
+    s.click(
+        hit::Hit::JourneyRates(crate::config::JourneyRates::Off),
+        None,
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && seen_rates.lock().unwrap().len() <= asked {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(s.cfg.journey_rates, crate::config::JourneyRates::Off);
+    assert!(
+        seen_rates.lock().unwrap()[asked..].contains(&Some("off".to_string())),
+        "{:?}",
+        seen_rates.lock().unwrap()
+    );
+
+    // Config round-trips journey_rates cleanly.
+    let parsed = Config::parse_text(&s.cfg.to_text());
+    assert_eq!(parsed.journey_rates, crate::config::JourneyRates::Off);
 }

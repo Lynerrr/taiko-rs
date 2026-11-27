@@ -619,6 +619,7 @@ fn journey_large_library_frame() {
         stars: 5.5,
         bpm: 180.0,
         length_ms: 90_000,
+        rate: None,
         role: "main".into(),
         reason: "Fits your comfort level".into(),
         scroll_velocity: 0.5,

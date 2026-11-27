@@ -1436,7 +1436,7 @@ impl State {
             return;
         };
         let mods = self.cfg.mods;
-        let rate = self.cfg.rate;
+        let rate = self.journey_rate_for(1);
         let keep_pitch = self.cfg.rate_keep_pitch;
         let speed = mods.speed(rate, keep_pitch);
         let job = self.spawn_loader_at(path.clone(), speed, mods, None, true, None);
@@ -1466,7 +1466,7 @@ impl State {
         let p = self.journey.marathon.as_mut()?.preload.take()?;
         let same = self.library.get(entry).is_some_and(|e| e.path == p.path)
             && p.mods == self.cfg.mods
-            && p.rate == self.cfg.rate
+            && (p.rate - self.journey_rate_for(0)).abs() < 1e-6
             && p.keep_pitch == self.cfg.rate_keep_pitch;
         same.then_some(p)
     }

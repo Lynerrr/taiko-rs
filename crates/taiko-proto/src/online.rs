@@ -244,6 +244,9 @@ pub enum Request {
         min_length_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_length_ms: Option<u64>,
+        /// Rate-scaled recommendation mode: `auto`, `off`, or `on`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rates: Option<String>,
     },
     /// Records that the player skipped a map in the Journey feed (`Reply::Counted`).
     JourneySkip {
@@ -397,6 +400,9 @@ pub struct JourneyItem {
     pub stars: f64,
     pub bpm: f64,
     pub length_ms: u64,
+    /// Recommended playback rate when not 1.0x (e.g. `Some(1.25)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate: Option<f64>,
     pub role: String,
     pub reason: String,
     #[serde(default)]
