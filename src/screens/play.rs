@@ -475,6 +475,8 @@ impl Screen for PlayScreen {
                 state.marathon_preload(time, last);
             }
         }
+        // The speed the map after this one plays at, for its "Up next" card.
+        let up_next_speed = state.journey_play_speed(1).0;
         let game = state.play.as_deref_mut()?;
         // A marathon doesn't wait out a song past its last note.
         if marathon
@@ -568,7 +570,7 @@ impl Screen for PlayScreen {
         let up_next_alpha = state.journey.up_next_alpha;
         if up_next_alpha > 0.01 && game.paused().is_none() {
             let next = state.journey.queue.get(1).map(|q| &q.item);
-            crate::screens::journey::draw_up_next(canvas, next, up_next_alpha);
+            crate::screens::journey::draw_up_next(canvas, next, up_next_speed, up_next_alpha);
         }
         // A marathon's combo goes on from map to map. Keep the chip steadily visible during live
         // play (even at x0 after a miss) so it never flickers in and out.
