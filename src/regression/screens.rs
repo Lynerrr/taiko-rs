@@ -13,7 +13,7 @@ use crate::*;
 /// drawn at made-up instants, with animations off, so the rest stays put) and the build the
 /// update setting and the changelog name (a local build has none, CI's is its commit).
 pub(super) const VOLATILE: &[&str] = &[
-    " fps  ",
+    " fps",
     "local build (no updates)",
     ", Enter to check",
     "ローカルビルド",
@@ -532,4 +532,37 @@ fn the_upload_window_guards_approved_difficulties() {
     assert!(!refused.upload.approved_changed());
     assert_snapshot("screen-map-editor-upload-refused", &draw(&mut refused));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn fps_overlay_cycles_through_simple_detailed_and_off() {
+    let (mut s, _songs, now) = client("fps-overlay-modes");
+    assert_eq!(s.cfg.show_fps, config::FpsOverlay::Simple);
+
+    let has = |c: &Canvas, needle: &str| c.texts.iter().any(|(_, t)| t.contains(needle));
+
+    // Default Simple mode: FPS only, no frame time or worst spike.
+    let c = frame(&mut s, now);
+    assert!(has(&c, " fps"), "Simple mode must show FPS");
+    assert!(!has(&c, " ms"), "Simple mode must not show ms");
+    assert!(!has(&c, "worst "), "Simple mode must not show worst ms");
+
+    // F10 -> Detailed: shows FPS, frame time and worst frame.
+    press(&mut s, KeyCode::F10, now);
+    assert_eq!(s.cfg.show_fps, config::FpsOverlay::Detailed);
+    let c = frame(&mut s, now);
+    assert!(has(&c, " fps"), "Detailed mode must show FPS");
+    assert!(has(&c, " ms"), "Detailed mode must show frame time");
+    assert!(has(&c, "worst "), "Detailed mode must show worst ms");
+
+    // F10 -> Off: nothing drawn.
+    press(&mut s, KeyCode::F10, now);
+    assert_eq!(s.cfg.show_fps, config::FpsOverlay::Off);
+    let c = frame(&mut s, now);
+    assert!(!has(&c, " fps"), "Off mode must hide FPS");
+    assert!(!has(&c, "worst "), "Off mode must hide worst ms");
+
+    // F10 -> back to Simple.
+    press(&mut s, KeyCode::F10, now);
+    assert_eq!(s.cfg.show_fps, config::FpsOverlay::Simple);
 }
