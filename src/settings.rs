@@ -820,6 +820,7 @@ impl Item {
             | Item::AudioBuffer
             | Item::PresentMode
             | Item::Renderer
+            | Item::ShowFps
             | Item::UpdateChannel
             | Item::OffsetScale
             | Item::Skin
@@ -870,7 +871,6 @@ impl Item {
             | Item::SongHeadings
             | Item::MenuVsync
             | Item::HalfResolution
-            | Item::ShowFps
             | Item::SelectInfo
             | Item::OriginalNames
             | Item::Animations
@@ -1255,9 +1255,9 @@ impl Item {
                 "Выбор песни показывает число песен и карт, а внизу видеокарту и аудиоустройство."
             ),
             Item::ShowFps => tr!(
-                "Frame rate and frame time in the corner. Shortcut: F10.",
-                "隅にフレームレートとフレーム時間。ショートカット: F10。",
-                "Частота и время кадра в углу. Клавиша: F10."
+                "FPS readout in the corner: off, simple (FPS only), or detailed (frame time, worst frame, mode). Shortcut: F10.",
+                "隅のFPS表示: オフ、シンプル（FPSのみ）、詳細（フレーム時間・最悪値・モード）。ショートカット: F10。",
+                "Счётчик FPS в углу: выкл, простой (только FPS) или подробный (время кадра, пик, режим). Клавиша: F10."
             ),
             Item::Animations => tr!(
                 "Menu motion: screen fades, sliding highlights, opening lists, results count-up. Gameplay is unaffected.",

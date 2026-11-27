@@ -3604,7 +3604,7 @@ dependencies = [
 
 [[package]]
 name = "taiko-rs"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "arboard",
  "base64 0.22.1",

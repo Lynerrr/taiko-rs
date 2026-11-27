@@ -387,6 +387,52 @@ impl JourneyRates {
     }
 }
 
+/// What the corner FPS overlay (`F10`, Settings > Video > FPS overlay) shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum FpsOverlay {
+    Off,
+    #[default]
+    Simple,
+    Detailed,
+}
+
+impl FpsOverlay {
+    pub const ALL: [FpsOverlay; 3] = [FpsOverlay::Off, FpsOverlay::Simple, FpsOverlay::Detailed];
+
+    /// Name shown in settings.
+    pub fn name(self) -> &'static str {
+        match self {
+            FpsOverlay::Off => tr!("Off", "オフ", "Выкл"),
+            FpsOverlay::Simple => tr!("Simple", "シンプル", "Простой"),
+            FpsOverlay::Detailed => tr!("Detailed", "詳細", "Подробный"),
+        }
+    }
+
+    /// Written to `config.toml`.
+    pub fn key(self) -> &'static str {
+        match self {
+            FpsOverlay::Off => "off",
+            FpsOverlay::Simple => "simple",
+            FpsOverlay::Detailed => "detailed",
+        }
+    }
+
+    /// Parses `config.toml`, keeping old `true`/`false` values working.
+    pub fn parse(v: &str) -> Option<FpsOverlay> {
+        match v.trim() {
+            "off" | "false" => Some(FpsOverlay::Off),
+            "simple" | "true" => Some(FpsOverlay::Simple),
+            "detailed" => Some(FpsOverlay::Detailed),
+            _ => None,
+        }
+    }
+
+    pub fn step(self, dir: i32) -> FpsOverlay {
+        let i = FpsOverlay::ALL.iter().position(|&m| m == self).unwrap_or(0) as i32;
+        FpsOverlay::ALL[(i + dir).rem_euclid(FpsOverlay::ALL.len() as i32) as usize]
+    }
+}
+
 /// How Journey goes from one map to the next.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum JourneyFlow {
@@ -717,7 +763,7 @@ pub struct Config {
     /// Scale that suggestion to current UR (off: plain average of the last 40 hits).
     pub offset_hint_ur_scaled: bool,
     pub audio_buffer: u32,
-    pub show_fps: bool,
+    pub show_fps: FpsOverlay,
     /// Kiai time effects on the lane (tint, pulsing glow).
     pub kiai_effects: bool,
     /// Song select's preview (main menu look) shows the drum at the start of its lane.
@@ -1002,7 +1048,7 @@ impl Default for Config {
             terms_version: 0,
             offset_hint_ur_scaled: true,
             audio_buffer: 256,
-            show_fps: true,
+            show_fps: FpsOverlay::Simple,
             fullscreen: true,
             window_size: None,
             letterbox: false,
@@ -1747,7 +1793,7 @@ impl Config {
                 "audio_buffer" => {
                     cfg.audio_buffer = v.parse::<u32>().unwrap_or(cfg.audio_buffer).clamp(32, 4096)
                 }
-                "show_fps" => cfg.show_fps = v == "true",
+                "show_fps" => cfg.show_fps = FpsOverlay::parse(v).unwrap_or(cfg.show_fps),
                 "fullscreen" => cfg.fullscreen = v != "false",
                 "window_size" => cfg.window_size = crate::layout::parse_size(v),
                 "letterbox" => cfg.letterbox = v == "true",
@@ -2216,6 +2262,7 @@ impl Config {
              rate_keep_pitch = {}\n\
              # audio device buffer in frames (lower = less latency, more risk of crackle)\n\
              audio_buffer = {}\n\
+             # corner FPS overlay: off, simple or detailed (F10 cycles)\n\
              show_fps = {}\n\
              fullscreen = {}\n\
              animations = {}\n\
@@ -2302,7 +2349,7 @@ impl Config {
             self.rate,
             self.rate_keep_pitch,
             self.audio_buffer,
-            self.show_fps,
+            self.show_fps.key(),
             self.fullscreen,
             self.animations,
             self.splash,
@@ -3250,5 +3297,27 @@ mod tests {
         remove_all(&root.join("a")).unwrap();
         assert!(!root.join("a").exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fps_overlay_parses_legacy_and_new_values() {
+        assert_eq!(FpsOverlay::default(), FpsOverlay::Simple);
+        assert_eq!(FpsOverlay::parse("false"), Some(FpsOverlay::Off));
+        assert_eq!(FpsOverlay::parse("off"), Some(FpsOverlay::Off));
+        assert_eq!(FpsOverlay::parse("true"), Some(FpsOverlay::Simple));
+        assert_eq!(FpsOverlay::parse("simple"), Some(FpsOverlay::Simple));
+        assert_eq!(FpsOverlay::parse("detailed"), Some(FpsOverlay::Detailed));
+        assert_eq!(FpsOverlay::parse("bogus"), None);
+
+        assert_eq!(FpsOverlay::Simple.step(1), FpsOverlay::Detailed);
+        assert_eq!(FpsOverlay::Detailed.step(1), FpsOverlay::Off);
+        assert_eq!(FpsOverlay::Off.step(1), FpsOverlay::Simple);
+        assert_eq!(FpsOverlay::Off.step(-1), FpsOverlay::Detailed);
+
+        let mut cfg = Config::default();
+        assert_eq!(cfg.show_fps, FpsOverlay::Simple);
+        cfg.show_fps = FpsOverlay::Detailed;
+        let roundtrip = Config::parse_text(&cfg.to_text());
+        assert_eq!(roundtrip.show_fps, FpsOverlay::Detailed);
     }
 }
