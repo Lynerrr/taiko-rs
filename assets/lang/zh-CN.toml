@@ -240,7 +240,7 @@
 "Format" = "格式"
 "Found {:.2} BPM, {}. First beat at {} ms." = "检测到速度 {:.2} BPM，{}。首拍位于 {} ms。"
 "Found: {n}" = "找到：{n}项"
-"Frame rate and frame time in the corner. Shortcut: F10." = "在角落显示帧率和帧耗时。快捷键：F10。"
+"FPS readout in the corner: off, simple (FPS only), or detailed (frame time, worst frame, mode). Shortcut: F10." = "角落的FPS显示：关闭、简洁（仅FPS）或详细（帧耗时、最差帧、模式）。快捷键：F10。"
 "Friends and chat" = "好友与聊天"
 "Full stats" = "完整数据"
 "Fullscreen" = "全屏"

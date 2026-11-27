@@ -3363,7 +3363,7 @@ impl State {
                     c.fps_cap.to_string()
                 }
             }
-            Item::ShowFps => on(c.show_fps),
+            Item::ShowFps => c.show_fps.name().into(),
             Item::SelectInfo => on(c.select_info),
             Item::OriginalNames => on(c.original_names),
             Item::Animations => on(c.animations),
@@ -3718,7 +3718,7 @@ impl State {
                     .unwrap_or(0) as i32;
                 self.cfg.fps_cap = FPS_CAPS[(i + dir).rem_euclid(FPS_CAPS.len() as i32) as usize];
             }
-            Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
+            Item::ShowFps => self.cfg.show_fps = self.cfg.show_fps.step(dir),
             Item::SelectInfo => self.cfg.select_info = !self.cfg.select_info,
             Item::OriginalNames => self.cfg.original_names = !self.cfg.original_names,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
@@ -3977,6 +3977,14 @@ impl State {
                 (
                     strings(&mut all.iter().map(|t| t.name())),
                     all.iter().position(|&t| t == c.card_fade),
+                    String::new(),
+                )
+            }
+            Item::ShowFps => {
+                let all = config::FpsOverlay::ALL;
+                (
+                    strings(&mut all.iter().map(|m| m.name())),
+                    all.iter().position(|&m| m == c.show_fps),
                     String::new(),
                 )
             }
@@ -4303,6 +4311,7 @@ impl State {
             Item::TouchLayout => self.cfg.touch_layout = config::TouchLayout::ALL[i],
             Item::Screenshots => self.cfg.screenshot_to = config::ScreenshotTo::ALL[i],
             Item::CardFade => self.cfg.card_fade = config::CardFade::ALL[i],
+            Item::ShowFps => self.cfg.show_fps = config::FpsOverlay::ALL[i],
             Item::IdleScreen => self.cfg.idle_minutes = idle::MINUTES[i],
             Item::AutoplayStyle => self.cfg.autoplay.style = autoplay::Style::ALL[i],
             Item::AutoplayBinding => self.cfg.autoplay.binding = i,
@@ -6609,7 +6618,7 @@ impl State {
                 return true;
             }
             KeyCode::F10 => {
-                self.cfg.show_fps = !self.cfg.show_fps;
+                self.cfg.show_fps = self.cfg.show_fps.step(1);
                 self.cfg.save();
                 return true;
             }
@@ -14238,28 +14247,78 @@ impl State {
                 rgba(0x121219, 0.85 * (1.0 - fade)),
             );
         }
-        if self.cfg.show_fps && !self.mobile_bar() {
-            let mode = match self.present {
-                PresentChoice::Fifo => "vsync".to_string(),
-                p if self.cfg.fps_cap > 0 => format!("{} cap {}", p.name(), self.cfg.fps_cap),
-                p => p.name().to_string(),
-            };
-            let text = format!(
-                "{:.0} fps  {:.2} ms  worst {:.1} ms  {mode}",
-                self.stats.fps,
-                1000.0 / self.stats.fps.max(1.0),
-                self.stats.worst_ms
-            );
-            let tw = Canvas::text_width(8.0, &text);
-            canvas.round_rect(
-                [6.0, 6.0],
-                [tw + 12.0, 16.0],
-                4.0,
-                rgba(0x000000, 0.55),
-                rgba(0, 0.0),
-                0.0,
-            );
-            canvas.text(12.0, 10.0, 8.0, rgba(0x9fe09f, 1.0), &text);
+        if self.cfg.show_fps != config::FpsOverlay::Off && !self.mobile_bar() {
+            let fps_text = format!("{:.0} fps", self.stats.fps);
+            let fps_w = Canvas::text_width(style::text::BODY, &fps_text);
+            let pad = 7.0;
+            match self.cfg.show_fps {
+                config::FpsOverlay::Off => {}
+                config::FpsOverlay::Simple => {
+                    canvas.round_rect(
+                        [6.0, 6.0],
+                        [fps_w + pad * 2.0, 16.0],
+                        style::radius::SMALL,
+                        rgba(style::tone::PANEL, 0.84),
+                        rgba(0, 0.0),
+                        0.0,
+                    );
+                    canvas.text(
+                        6.0 + pad,
+                        10.0,
+                        style::text::BODY,
+                        rgba(style::ink::PRIMARY, 0.92),
+                        &fps_text,
+                    );
+                }
+                config::FpsOverlay::Detailed => {
+                    let mode = match self.present {
+                        PresentChoice::Fifo => "vsync".to_string(),
+                        p if self.cfg.fps_cap > 0 => {
+                            format!("{} cap {}", p.name(), self.cfg.fps_cap)
+                        }
+                        p => p.name().to_string(),
+                    };
+                    let extra = format!(
+                        "{:.2} ms  worst {:.1} ms  {mode}",
+                        1000.0 / self.stats.fps.max(1.0),
+                        self.stats.worst_ms
+                    );
+                    let extra_w = Canvas::text_width(style::text::BODY, &extra);
+                    let sep_gap = 6.0;
+                    let total_w = pad + fps_w + sep_gap + 1.0 + sep_gap + extra_w + pad;
+                    canvas.round_rect(
+                        [6.0, 6.0],
+                        [total_w, 16.0],
+                        style::radius::SMALL,
+                        rgba(style::tone::PANEL, 0.86),
+                        rgba(0, 0.0),
+                        0.0,
+                    );
+                    let fps_x = 6.0 + pad;
+                    canvas.text(
+                        fps_x,
+                        10.0,
+                        style::text::BODY,
+                        rgba(style::ink::PRIMARY, 0.92),
+                        &fps_text,
+                    );
+                    let sep_x = fps_x + fps_w + sep_gap;
+                    canvas.rect(
+                        sep_x,
+                        10.0,
+                        style::tone::LINE,
+                        8.0,
+                        rgba(style::tone::EDGE, 0.9),
+                    );
+                    canvas.text(
+                        sep_x + 1.0 + sep_gap,
+                        10.0,
+                        style::text::BODY,
+                        rgba(style::ink::SECONDARY, 0.95),
+                        &extra,
+                    );
+                }
+            }
         }
         if let Some((done, total)) = self
             .mapinfo
