@@ -1825,6 +1825,36 @@ pub fn freshest_checksums(id: u32) -> Result<OnlineSet, String> {
     checksums_from(&json_sources(id), true)
 }
 
+/// One osu! set by its set ID, from the first mirror that answers (None: the mirror knows it,
+/// but it has no taiko difficulty — the mirrors agree, so the first answer is enough).
+pub fn set_by_id(id: u32) -> Result<Option<SetInfo>, String> {
+    crate::offline::internet()?;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .into();
+    let mut errors = Vec::new();
+    for (name, url) in json_sources(id) {
+        let reply = crate::offline::url(&url)
+            .and_then(|()| {
+                agent
+                    .get(&url)
+                    .header("User-Agent", USER_AGENT)
+                    .call()
+                    .map_err(|e| e.to_string())
+            })
+            .and_then(|mut r| r.body_mut().read_to_string().map_err(|e| e.to_string()));
+        match reply.and_then(|json| parse_sets(&format!("[{json}]"))) {
+            Ok((sets, _)) => match sets.into_iter().find(|s| s.id == id) {
+                Some(set) => return Ok(Some(set)),
+                None => return Ok(None),
+            },
+            Err(e) => errors.push(format!("{name}: {e}")),
+        }
+    }
+    Err(errors.join("; "))
+}
+
 /// A set's difficulties from `sources` (name, JSON URL): the first that answers, or with
 /// `freshest` every one asked and the newest kept (`last_updated`; one that doesn't say counts
 /// as the oldest).

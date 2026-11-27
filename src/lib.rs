@@ -782,6 +782,9 @@ struct State {
     custom_move_looked: bool,
     /// A score a `taiko-rs://` link asked for, until its results screen opens.
     score_link: Option<ScoreLink>,
+    /// A set a `taiko-rs://` map link asked for, until the download tab shows it (or song
+    /// select plays it, if it's here by then).
+    set_link: Option<SetLink>,
     /// Which screen was drawn last and since when, for the fade between screens.
     scene_kind: Option<screens::screen::SceneKind>,
     scene_since: Instant,
@@ -1005,6 +1008,14 @@ struct ScoreLink {
 
 /// How long a score link waits for its map's download.
 const SCORE_LINK_WAIT: Duration = Duration::from_secs(300);
+
+/// A set a `taiko-rs://` map link asked for: being fetched from the website or the mirrors,
+/// then waiting for the player to be in song select to show it.
+struct SetLink {
+    fetch: Job<Result<Option<download::SetInfo>, String>>,
+    /// The set, once the fetch came back (None: nothing knows it).
+    set: Option<download::SetInfo>,
+}
 
 const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 
@@ -1668,7 +1679,42 @@ impl State {
                 };
                 self.toast(tr!("opening a score{later}...", "スコアを開いています{later}...", "открываем рекорд{later}..."; [] [later]));
             }
+            link::Link::OsuSet(id) => {
+                if self.installed_sets().contains(&id) {
+                    self.play_set(false, id, &id.to_string());
+                    return;
+                }
+                self.open_set_link(move || download::set_by_id(id));
+            }
+            link::Link::CustomSet(id) => {
+                if self.select.custom_folder.values().any(|&v| v == id) {
+                    self.play_set(true, id, &id.to_string());
+                    return;
+                }
+                self.open_set_link(move || custom::set_by_id(id));
+            }
         }
+    }
+
+    /// Starts fetching the set a map link asked for, saying so.
+    fn open_set_link(
+        &mut self,
+        fetch: impl FnOnce() -> Result<Option<download::SetInfo>, String> + Send + 'static,
+    ) {
+        self.set_link = Some(SetLink {
+            fetch: Job::spawn(fetch),
+            set: None,
+        });
+        let later = if self.in_song() || self.mp.is_some() {
+            tr!(
+                " (it opens once you're back in song select)",
+                " (選曲に戻ると開きます)",
+                " (откроется, когда вернётесь к выбору песни)"
+            )
+        } else {
+            ""
+        };
+        self.toast(tr!("opening a map{later}...", "マップを開いています{later}...", "открываем карту{later}..."; [] [later]));
     }
 
     /// Opens a linked score's results once it's here, its map is (downloading it if need be)
@@ -1769,6 +1815,65 @@ impl State {
                     tr!("you haven't got {map}", "{map}を持っていません", "у вас нет {map}"; [] [map]),
                 );
             }
+        }
+    }
+
+    /// Opens a linked set once it's fetched and the player is in song select: the download tab
+    /// shows just that set (song select plays it right away if it's here by then).
+    fn poll_set_link(&mut self) {
+        let Some(l) = &mut self.set_link else {
+            return;
+        };
+        if l.fetch.is_busy() {
+            match l.fetch.poll_ended() {
+                Some(Some(Ok(Some(set)))) => l.set = Some(set),
+                Some(Some(Ok(None))) => {
+                    self.set_link = None;
+                    self.toast(tr!(
+                        "that map isn't there",
+                        "そのマップはありません",
+                        "этой карты нет"; [] []
+                    ));
+                    return;
+                }
+                Some(Some(Err(e))) => {
+                    self.set_link = None;
+                    self.toast(tr!("can't open that map: {e}", "そのマップを開けません: {e}", "не удаётся открыть карту: {e}"; [] [e]));
+                    return;
+                }
+                Some(None) => {
+                    self.set_link = None;
+                    return;
+                }
+                None => return,
+            }
+        }
+        let free = (self.scene.is_select()
+            || self
+                .scene
+                .screen()
+                .is_some_and(|s| s.song_select() || s.opens_score_links()))
+            && self.mp.is_none();
+        if self.scan.is_some() || !free {
+            return;
+        }
+        let Some(set) = self.set_link.as_ref().and_then(|l| l.set.clone()) else {
+            return;
+        };
+        self.set_link = None;
+        let (custom, id) = (set.custom.is_some(), set.id);
+        let here = if custom {
+            self.select.custom_folder.values().any(|&v| v == id)
+        } else {
+            self.installed_sets().contains(&id)
+        };
+        if here {
+            self.play_set(custom, id, &format!("{} - {}", set.artist, set.title));
+        } else {
+            let title = format!("{} - {}", set.artist, set.title);
+            self.browse.show_opened(set);
+            self.open_download();
+            self.toast(tr!("opening {title}...", "{title}を開いています...", "открываем {title}..."; [] [title]));
         }
     }
 
@@ -13651,6 +13756,7 @@ impl State {
         self.poll_tja_imports();
         self.journey_poll_saves();
         self.poll_score_link();
+        self.poll_set_link();
         self.poll_set_check(now);
         self.poll_sorting();
         self.update_presence();
@@ -14507,25 +14613,35 @@ impl State {
 
     /// Download tab: goes to song select on an installed result's maps.
     fn play_downloaded(&mut self, set: &download::SetInfo) {
-        let custom_folders: Vec<&Path> = match set.custom {
-            Some(_) => self
-                .select
+        self.play_set(
+            set.custom.is_some(),
+            set.id,
+            &format!("{} - {}", set.artist, set.title),
+        );
+    }
+
+    /// Goes to song select on the maps of set `id` (a custom one if `custom` is); `name` is
+    /// what a toast calls it if it isn't in the songs after all.
+    fn play_set(&mut self, custom: bool, id: u32, name: &str) {
+        let custom_folders: Vec<&Path> = if custom {
+            self.select
                 .custom_folder
                 .iter()
-                .filter(|(_, id)| **id == set.id)
+                .filter(|(_, i)| **i == id)
                 .map(|(dir, _)| dir.as_path())
-                .collect(),
-            None => Vec::new(),
+                .collect()
+        } else {
+            Vec::new()
         };
-        let maps = main_maps(self.library.iter().filter(|e| match set.custom {
-            Some(_) => e.path.parent().is_some_and(|d| custom_folders.contains(&d)),
-            None => e.set_id() == Some(set.id),
+        let maps = main_maps(self.library.iter().filter(|e| {
+            if custom {
+                e.path.parent().is_some_and(|d| custom_folders.contains(&d))
+            } else {
+                e.set_id() == Some(id)
+            }
         }));
         if maps.is_empty() {
-            self.toast(format!(
-                "{} - {} isn't in your songs",
-                set.artist, set.title
-            ));
+            self.toast(format!("{name} isn't in your songs"));
             return;
         }
         self.browse.menu = None;
