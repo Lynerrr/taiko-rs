@@ -54,7 +54,8 @@ rate = 1.25
 rate_keep_pitch = false
 # audio device buffer in frames (lower = less latency, more risk of crackle)
 audio_buffer = 512
-show_fps = false
+# corner FPS overlay: off, simple or detailed (F10 cycles)
+show_fps = detailed
 fullscreen = false
 animations = false
 splash = false

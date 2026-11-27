@@ -21,7 +21,10 @@ text 1023,325  >
 text  236,328  FPS cap
 text  844,328  unlimited
 text   14,357  AUDIO
+text  964,387  <
+text 1023,387  >
 text  236,390  FPS overlay
+text  875,390  Simple
 text   14,413  VIDEO
 text  236,436  Used during songs. vsync is smoothest on Wayland; mailbox/immediate add judder.
 text   14,469  SKIN
@@ -47,3 +50,5 @@ hit   222,306   845x56   SettingRow(107)
 hit   947,312    50x44   SettingStep(107, -1)
 hit  1003,312    50x44   SettingStep(107, 1)
 hit   222,368   845x54   SettingRow(108)
+hit   947,374    50x44   SettingStep(108, -1)
+hit  1003,374    50x44   SettingStep(108, 1)
