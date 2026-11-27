@@ -296,9 +296,9 @@ fn setting_help(state: &State, id: SettingId) -> &'static str {
             "Рекомендации с рейтами (1.15x–1.50x) расширяют пул на высоких звёздах. Работает только онлайн."
         ),
         SettingId::Rates => tr!(
-            "Allow playable sped-up charts (1.15x–1.50x). Auto blends them in when nomod maps thin out or you play DT.",
-            "プレイ可能な加速譜面（1.15x〜1.50x）を混ぜます。自動はnomodが少ない時やDT勢に自動で混ぜます。",
-            "Предлагать играбельные ускоренные карты (1.15x–1.50x). Авто подмешивает их при нехватке nomod или если ты играешь DT."
+            "Allow playable sped-up charts (1.15x–1.50x). Auto blends them in only when nomod maps at your level run short.",
+            "プレイ可能な加速譜面（1.15x〜1.50x）を混ぜます。自動はレベルに合うnomod譜面が少ない時だけ混ぜます。",
+            "Предлагать играбельные ускоренные карты (1.15x–1.50x). Авто подмешивает их, только когда nomod-карт твоего уровня не хватает."
         ),
         SettingId::Chill => tr!(
             "Easier pace: maps half a star below your comfort level and no stretch maps. Your level stays unchanged.",
@@ -1178,9 +1178,34 @@ fn format_length_short(ms: u64) -> Option<String> {
     Some(format!("{}:{:02}", s / 60, s % 60))
 }
 
+/// `item`'s BPM and length at playback `speed`. The server sends both already scaled by
+/// `item.rate`, so they go back to 1.0x first: neither a recommended rate nor DT/HT or a manual
+/// rate over it is applied twice.
+pub(crate) fn item_bpm_len_at(item: &online::JourneyItem, speed: f64) -> (f64, u64) {
+    let item_rate = item
+        .rate
+        .filter(|&r| r.is_finite() && r > 0.01)
+        .unwrap_or(1.0);
+    let speed = speed.max(0.01);
+    (
+        item.bpm / item_rate * speed,
+        (item.length_ms as f64 * item_rate / speed).round() as u64,
+    )
+}
+
+/// A playback speed as a label (`1.35x`), None at 1.0x.
+pub(crate) fn speed_label(speed: f64) -> Option<String> {
+    ((speed - 1.0).abs() > 0.005).then(|| format!("{speed:.2}x"))
+}
+
 /// In-play "Up next" card in the bottom-right corner with smooth entrance (`alpha` 0..=1),
-/// difficulty-colored accent bar, map duration, and `[N] Swap` keycap.
-pub(crate) fn draw_up_next(c: &mut Canvas, next: Option<&online::JourneyItem>, alpha: f32) {
+/// difficulty-colored accent bar, the speed it plays at, map duration, and `[N] Swap` keycap.
+pub(crate) fn draw_up_next(
+    c: &mut Canvas,
+    next: Option<&online::JourneyItem>,
+    speed: f64,
+    alpha: f32,
+) {
     let alpha = alpha.clamp(0.0, 1.0);
     if alpha <= 0.01 {
         return;
@@ -1216,7 +1241,7 @@ pub(crate) fn draw_up_next(c: &mut Canvas, next: Option<&online::JourneyItem>, a
     match next {
         Some(item) => {
             let mut right_meta = format!("{:.2}*", item.stars);
-            if let Some(len) = format_length_short(item.length_ms) {
+            if let Some(len) = format_length_short(item_bpm_len_at(item, speed).1) {
                 right_meta.push_str(&format!("  {len}"));
             }
             let mw = Canvas::text_width(7.0, &right_meta);
@@ -1227,6 +1252,16 @@ pub(crate) fn draw_up_next(c: &mut Canvas, next: Option<&online::JourneyItem>, a
                 rgba(0xffd24a, 0.95),
                 &right_meta,
             );
+            if let Some(rate) = speed_label(speed) {
+                let rw = Canvas::text_width(7.0, &rate);
+                c.text(
+                    x + pw - 10.0 - mw - 8.0 - rw,
+                    y + 7.0,
+                    7.0,
+                    rgba(0x62f2df, 1.0),
+                    &rate,
+                );
+            }
 
             let title = format!("{} - {}", item.artist, item.title);
             c.text(
@@ -2096,12 +2131,7 @@ fn draw_center_card(state: &mut State, c: &mut Canvas, w: f32, h: f32) {
     // Server `item.bpm` and `item.length_ms` are already scaled by `item.rate`; unscale them to
     // 1.0x before applying the actual playback speed so neither recommended rates nor DT/HT/manual
     // overrides double-scale or misreport stats.
-    let item_rate = item
-        .rate
-        .filter(|&r| r.is_finite() && r > 0.01)
-        .unwrap_or(1.0);
-    let item_nomod_bpm = item.bpm / item_rate;
-    let item_nomod_len_ms = (item.length_ms as f64 * item_rate).round() as u64;
+    let (item_nomod_bpm, item_nomod_len_ms) = item_bpm_len_at(&item, 1.0);
     let (raw_bpm, raw_len_ms, dons, kats, rolls, swells) = match loaded_stats {
         Some(st) => (
             if st.bpm > 0.0 { st.bpm } else { item_nomod_bpm },

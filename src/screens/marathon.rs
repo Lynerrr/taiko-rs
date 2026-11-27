@@ -868,9 +868,11 @@ fn draw_wheel(
 
         // Metadata row: LENGTH & BPM on left, honest ready/loading/downloading status on right.
         let meta_y = hero_y + banner_h + 18.0;
-        let len_s = format_len(q.item.length_ms);
-        let bpm_s = if q.item.bpm > 0.0 {
-            format!("{:.0}", q.item.bpm * state.play_speed().0.max(0.01))
+        let speed = state.journey_play_speed(0).0;
+        let (bpm, len_ms) = super::journey::item_bpm_len_at(&q.item, speed);
+        let len_s = format_len(len_ms);
+        let bpm_s = if bpm > 0.0 {
+            format!("{bpm:.0}")
         } else {
             "-".into()
         };
@@ -881,6 +883,20 @@ fn draw_wheel(
             [] [len_s, bpm_s]
         );
         c.text(hero_x + pad, meta_y, 8.0, rgba(0x9a9ab0, 1.0), &meta);
+        // The speed it plays at: a recommended rate, or the player's DT/HT/rate over it.
+        if let Some(rate) = super::journey::speed_label(speed) {
+            let rx = hero_x + pad + Canvas::text_width(8.0, &meta) + 8.0;
+            let rw = Canvas::text_width(7.0, &rate) + 10.0;
+            c.round_rect(
+                [rx, meta_y - 3.0],
+                [rw, 14.0],
+                style::radius::SMALL,
+                rgba(0x22d4c0, 0.24),
+                rgba(0x22d4c0, 0.9),
+                1.0,
+            );
+            c.text_centered(rx + rw / 2.0, meta_y, 7.0, rgba(0x62f2df, 1.0), &rate);
+        }
 
         let (status, scol) = source_line(&q.source, loading);
         let st_w = Canvas::text_width(8.0, &status);
@@ -1006,7 +1022,11 @@ fn draw_wheel(
 
     // Right side card: map after next.
     if let Some(q) = state.journey.queue.get(1) {
-        let len_s = format_len(q.item.length_ms);
+        let speed = state.journey_play_speed(1).0;
+        let mut len_s = format_len(super::journey::item_bpm_len_at(&q.item, speed).1);
+        if let Some(rate) = super::journey::speed_label(speed) {
+            len_s.push_str(&format!("  ·  {rate}"));
+        }
         let (_, ncol) = super::journey::role_badge(&q.item.role);
         draw_side_card(
             c,
