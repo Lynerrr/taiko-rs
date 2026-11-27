@@ -244,6 +244,8 @@ journey_save_on_like = false
 journey_focus = long-streams
 # map length filter for Journey: any, short (<=2m), standard (1-4m), extended (<=6m) or long (4m+)
 journey_length = standard
+# rate-scaled recommendations in Journey: auto, off or on
+journey_rates = on
 # Journey plays it easy: maps below your level, no stretch maps
 journey_chill = true
 # how Journey goes from map to map: off, nonstop (results count down) or marathon (no results)

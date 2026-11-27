@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use crate::config::{self, JourneyFocus, JourneyLength, JourneySaveTo};
+use crate::config::{self, JourneyFocus, JourneyLength, JourneyRates, JourneySaveTo};
 use crate::download;
 use crate::library::Entry;
 use crate::online::{self, JourneyBatch, JourneyItem, JourneyProfile};
@@ -204,6 +204,8 @@ pub struct Journey {
     pub focus: JourneyFocus,
     /// Map duration filter (`Config::journey_length`).
     pub length: JourneyLength,
+    /// Rate-scaled recommendation mode (`Config::journey_rates`).
+    pub rates: JourneyRates,
     /// Whether Marathon's default 5-minute length cap applies when `length == JourneyLength::Any`.
     pub marathon_cap: bool,
     /// An easy session (`Config::journey_chill`).
@@ -476,6 +478,7 @@ impl Journey {
             revisited: Vec::new(),
             focus: JourneyFocus::Any,
             length: JourneyLength::Any,
+            rates: JourneyRates::Auto,
             marathon_cap: false,
             chill: false,
             settings: None,
@@ -636,18 +639,19 @@ impl Journey {
         self.length.bounds(self.marathon_cap)
     }
 
-    /// Asks for maps of another kind (`focus`), duration (`length`/`marathon_cap`), or pace
-    /// (`chill`): the queue is filled again when the effective filter changed. True when it was.
+    /// Asks for maps of another kind (`focus`), duration (`length`/`marathon_cap`), rate mode
+    /// (`rates`), or pace (`chill`): the queue is filled again when the effective filter changed.
     pub fn set_style(
         &mut self,
         focus: JourneyFocus,
         chill: bool,
         length: JourneyLength,
+        rates: JourneyRates,
         marathon_cap: bool,
     ) -> bool {
         let old_bounds = self.length_bounds();
         let new_bounds = length.bounds(marathon_cap);
-        if (focus, chill, old_bounds) == (self.focus, self.chill, new_bounds) {
+        if (focus, chill, rates, old_bounds) == (self.focus, self.chill, self.rates, new_bounds) {
             self.length = length;
             self.marathon_cap = marathon_cap;
             return false;
@@ -655,6 +659,7 @@ impl Journey {
         self.focus = focus;
         self.chill = chill;
         self.length = length;
+        self.rates = rates;
         self.marathon_cap = marathon_cap;
         self.rebuild();
         true
@@ -959,6 +964,7 @@ impl Journey {
             chill: self.chill,
             min_length_ms,
             max_length_ms,
+            rates: self.rates.wire(),
         };
         let (tx, rx) = mpsc::channel();
         self.fetching = Some(rx);
@@ -1118,6 +1124,7 @@ impl Journey {
                 stars: st,
                 bpm,
                 length_ms,
+                rate: None,
                 role: role.into(),
                 reason: reason.into(),
                 scroll_velocity: 0.0,
@@ -1477,6 +1484,7 @@ mod tests {
             stars: 4.0,
             bpm: 0.0,
             length_ms: 0,
+            rate: None,
             role: "main".into(),
             reason: String::new(),
             scroll_velocity: 0.0,

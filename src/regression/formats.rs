@@ -602,6 +602,7 @@ journey_save_to = osu
 journey_save_on_like = false
 journey_focus = long-streams
 journey_length = standard
+journey_rates = on
 journey_chill = true
 journey_flow = marathon
 journey_hardcore = true
