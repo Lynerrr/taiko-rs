@@ -2098,6 +2098,75 @@ fn a_marathon_shows_its_combo_on_the_wheel_and_in_the_next_map() {
     assert!(s.journey.marathon.as_ref().unwrap().ended.is_some());
 }
 
+/// The wheel says at what speed the map up next plays (a recommended rate, or DT over it), with
+/// its BPM and length at that speed: the server's are already at the recommended rate, so they
+/// aren't scaled twice. The in-play "Up next" card says the same.
+#[test]
+fn a_marathon_shows_the_speed_of_the_map_up_next() {
+    let songs = Songs::new("journey-marathon-rate", &maps::all());
+    let mut cfg = harness::config();
+    cfg.journey_flow = JourneyFlow::Marathon;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.open_journey();
+    s.journey_go_offline();
+    s.journey_pick_level(2);
+    // Up next: 180 BPM and 2:00 at 1.0x, sent at 1.15x. After it: 2:30, at 1.0x.
+    let mut it = item("Rate Wheel Song", "Oni", 5252);
+    it.bpm = 207.0;
+    it.length_ms = 104_348;
+    it.rate = Some(1.15);
+    let mut after = item("Nomod After", "Oni", 5253);
+    after.length_ms = 150_000;
+    let queue = |s: &mut State| {
+        s.journey.queue.clear();
+        for item in [it.clone(), after.clone()] {
+            s.journey.queue.push_back(QueuedMap {
+                item,
+                source: MapSource::Pending,
+            });
+        }
+    };
+    queue(&mut s);
+    s.marathon_start();
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert_eq!(scene_name(&s), "Marathon");
+    assert!(shows(&c, "1.15x"), "the recommended rate is on the wheel");
+    assert!(shows(&c, "BPM 207"), "BPM at 1.15x, not scaled twice");
+    assert!(shows(&c, "1:44"), "length at 1.15x");
+    assert!(shows(&c, "Length 2:30") && !shows(&c, "2:30  ·"));
+
+    // DT over it: the map plays at 1.50x of its own 180 BPM, and so does the one after it.
+    s.cfg.mods.toggle(crate::mods::Mod::DoubleTime);
+    queue(&mut s);
+    now += Duration::from_millis(16);
+    let c = frame(&mut s, now);
+    assert!(!shows(&c, "1.15x"), "DT overrides the recommended rate");
+    assert!(shows(&c, "BPM 270"), "180 * 1.5, not 207 * 1.5");
+    assert!(shows(&c, "LENGTH 1:20"), "2:00 / 1.5");
+    assert!(shows(&c, "Length 1:40  ·  1.50x"), "2:30 / 1.5");
+
+    let card = |speed: f64| {
+        let mut c = crate::hit::Canvas {
+            width: 800.0,
+            height: 600.0,
+            audit: true,
+            ..Default::default()
+        };
+        crate::screens::journey::draw_up_next(&mut c, Some(&it), speed, 1.0);
+        c
+    };
+    let c = card(1.15);
+    assert!(shows(&c, "1.15x") && shows(&c, "1:44"));
+    let c = card(1.5);
+    assert!(shows(&c, "1.50x") && shows(&c, "1:20") && !shows(&c, "1:44"));
+    let c = card(1.0);
+    assert!(!shows(&c, "1.00x"), "no label at 1.0x");
+    assert!(shows(&c, "2:00"), "1.0x: the map's own length");
+}
+
 /// Plays the map up through (every note hit) until the marathon has counted it, the next map
 /// loading meanwhile (given the moment its thread needs). `before_end`: done once, 10 s before
 /// the last note.
