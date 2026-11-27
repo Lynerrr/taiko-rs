@@ -130,6 +130,7 @@ pub enum Hit {
     /// Direct choice clicks inside Journey's settings panel.
     JourneyFocus(crate::config::JourneyFocus),
     JourneyLength(crate::config::JourneyLength),
+    JourneyRates(crate::config::JourneyRates),
     JourneyFlow(crate::config::JourneyFlow),
     MarathonGap(crate::config::MarathonGap),
     /// Starts a fresh marathon from the marathon summary screen.

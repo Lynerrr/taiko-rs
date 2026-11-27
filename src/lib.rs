@@ -1856,7 +1856,14 @@ impl State {
                 label = format!("TEST  {label}");
                 self.load_text(entry, text)
             }
-            None => self.load_with(entry, self.cfg.rate, self.cfg.mods),
+            None => {
+                let rate = if self.journey.in_play {
+                    self.journey_rate_for(0)
+                } else {
+                    self.cfg.rate
+                };
+                self.load_with(entry, rate, self.cfg.mods)
+            }
         };
         (rx, label)
     }
@@ -16156,6 +16163,7 @@ impl State {
             Hit::JourneySetting(row, dir) => self.journey_change_setting(row, dir),
             Hit::JourneyFocus(focus) => self.journey_set_focus(focus),
             Hit::JourneyLength(length) => self.journey_set_length(length),
+            Hit::JourneyRates(rates) => self.journey_set_rates(rates),
             Hit::JourneyFlow(flow) => self.journey_set_flow(flow),
             Hit::MarathonGap(gap) => self.journey_set_gap(gap),
             Hit::MarathonRestart => self.marathon_start(),
