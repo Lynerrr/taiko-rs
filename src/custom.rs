@@ -466,6 +466,26 @@ pub fn search(
     Ok(sets)
 }
 
+/// One custom set by its website ID (None: the website doesn't have it).
+pub fn set_by_id(id: u32) -> Result<Option<SetInfo>, String> {
+    crate::offline::internet()?;
+    let mut reply = ureq::get(format!("{WEBSITE}/api/custom"))
+        .query("ids", id.to_string())
+        .config()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .call()
+        .map_err(|e| e.to_string())?;
+    let text = reply
+        .body_mut()
+        .with_config()
+        .limit(16 << 20)
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+    let sets = parse_list(&text)?;
+    Ok(sets.into_iter().find(|s| s.id == id))
+}
+
 /// The sets of an `/api/custom` answer. A difficulty's number is its place in the set, from 1.
 fn parse_list(text: &str) -> Result<Vec<SetInfo>, String> {
     #[derive(serde::Deserialize)]
