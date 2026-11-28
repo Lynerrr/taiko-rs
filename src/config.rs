@@ -1188,8 +1188,6 @@ pub fn data_folder() -> Option<PathBuf> {
         .clone()
 }
 
-/// Where replays, scores, videos, play history and the like are kept: the data folder, else
-/// next to config.txt.
 /// The graphics APIs this system offers (`Config::graphics_api`, what the setting stores).
 pub const RENDERERS: &[&str] = if cfg!(windows) {
     &["auto", "dx12", "vulkan", "gl"]
@@ -1210,6 +1208,8 @@ pub fn renderer_name(api: &str) -> &'static str {
     }
 }
 
+/// Where replays, scores, videos, play history and the like are kept: the data folder, else
+/// next to config.txt.
 pub fn data_dir() -> Option<PathBuf> {
     data_folder().or_else(|| user_dir(false))
 }
@@ -2730,7 +2730,8 @@ fn save_worker() -> mpsc::Sender<Save> {
     tx
 }
 
-/// Called outside State's lock on shutdown, after queuing the final settings snapshot.
+/// Waits until the queued saves are on disk: before a restart or shutdown reads or drops them.
+/// Call it outside State's lock.
 pub fn flush_saves() {
     if let Some(tx) = SAVES.get() {
         let (done, wait) = mpsc::channel();
