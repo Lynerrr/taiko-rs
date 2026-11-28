@@ -65,7 +65,7 @@ pub trait Audio {
     fn set_paused(&self, paused: bool);
     fn sfx_at(&self, s: Sound, volume: f32);
     fn sfx_at_song(&self, s: Sound, volume: f32, song_ms: f64);
-    /// Output and input latency, ms.
+    /// The output latency (ms) the clock goes by, and what the stream reports.
     fn latencies_ms(&self) -> (f64, f64);
     /// Where the song has got at `now`, ms.
     fn position_ms(&self, now: Instant) -> Option<f64>;
@@ -930,7 +930,7 @@ pub const TOWER_LEAD_MS: f64 = 1500.0;
 /// the turn), so the player before isn't cut off in the middle of a note.
 pub(crate) const TAG_LEAD_MS: f64 = 1000.0;
 
-/// Most ticks one roll keeps (`NoteState::ticks`).
+/// Most ticks one roll keeps (`NoteState::ticks`): a tick every 10 ms for an hour.
 pub(crate) const MAX_ROLL_TICKS: usize = 360_000;
 
 /// Crumble: a piece of the lane a hit knocked out of line.
@@ -1130,8 +1130,8 @@ impl Game {
             .map(|n| NoteState {
                 // A fake slider has none (taiko_arranger's `drumroll_tick_times`).
                 ticks: if n.kind == Kind::Roll && n.tick_spacing > 0.0 && !n.tiny {
-                    // At most a tick every 10 ms of the longest roll: a tick spacing of next to
-                    // nothing (a tiny beat length) mustn't ask for more than can be counted.
+                    // Capped at `MAX_ROLL_TICKS`: a tick spacing of next to nothing (a tiny
+                    // beat length) mustn't ask for more than can be counted.
                     vec![
                         false;
                         (((n.end_time - n.time) / n.tick_spacing + 0.5).floor() as usize)
@@ -1144,10 +1144,6 @@ impl Game {
                 ..Default::default()
             })
             .collect();
-        // Barlines too: a gimmick's bars can scroll slower than any note, and the lookahead is
-        // sized from this.
-        // Floored only against 0: SV 0.02 at 120 BPM is already under 0.01, and a fake slider
-        // in it is on screen ~40 s ahead, and nothing caps the lookahead (the whole map can be).
         let main_beat = {
             let cps = &map.control_points;
             let mut spans: Vec<(f64, f64)> = Vec::new();
@@ -1186,7 +1182,8 @@ impl Game {
             was_kiai = cp.kiai;
         }
         let flows = flows(&map);
-        // Overtime: once, plus once more per 75 s of map, anywhere from 8 s in to 4 s before the end.
+        // Overtime: once, plus once more per 75 s of map (at most 4), anywhere from 8 s in to 4 s
+        // before the end.
         let scares = if mods.has(Mod::Overtime) {
             let span = (end_time - first_note - 12_000.0).max(0.0);
             let n = (1 + (span / 75_000.0) as usize).min(4);

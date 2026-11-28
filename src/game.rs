@@ -39,7 +39,7 @@ pub struct Look {
     /// .tko notes drawn as what they are, whatever colour or size their map makes them show as
     /// (Settings -> Gameplay).
     pub true_notes: bool,
-    /// The note colours of plays without Multiverse (Settings > Skin).
+    /// The note colours of plays without Multiverse (Settings -> Skin).
     pub note_colours: multiverse::Colours,
 }
 
