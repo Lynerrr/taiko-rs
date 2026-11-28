@@ -526,11 +526,11 @@ fn tar_file(tar: &[u8], wanted: &str) -> Option<Vec<u8>> {
             format!("{prefix}/{name}")
         };
         let size = u64::from_str_radix(field(124..136).trim(), 8).ok()? as usize;
-        let data = at + 512;
+        let body = at + 512;
         if path.trim_start_matches("./") == wanted && matches!(header[156], b'0' | 0) {
-            return tar.get(data..data + size).map(<[u8]>::to_vec);
+            return tar.get(body..body + size).map(<[u8]>::to_vec);
         }
-        at = data + size.div_ceil(512) * 512;
+        at = body + size.div_ceil(512) * 512;
     }
     None
 }

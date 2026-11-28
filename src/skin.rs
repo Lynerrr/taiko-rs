@@ -1149,9 +1149,9 @@ mod tests {
         let mut wav = Vec::new();
         {
             let samples = 6 * rate;
-            let data = samples * 2;
+            let data_len = samples * 2;
             wav.extend(b"RIFF");
-            wav.extend((36 + data).to_le_bytes());
+            wav.extend((36 + data_len).to_le_bytes());
             wav.extend(b"WAVEfmt ");
             wav.extend(16u32.to_le_bytes());
             wav.extend(1u16.to_le_bytes());
@@ -1161,7 +1161,7 @@ mod tests {
             wav.extend(2u16.to_le_bytes());
             wav.extend(16u16.to_le_bytes());
             wav.extend(b"data");
-            wav.extend(data.to_le_bytes());
+            wav.extend(data_len.to_le_bytes());
             for i in 0..samples {
                 wav.extend((((i % 50) as i16 - 25) * 800).to_le_bytes());
             }

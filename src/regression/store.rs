@@ -277,22 +277,22 @@ fn snapshot_dir(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 
 #[test]
 fn the_old_files_come_in_once_and_read_back_as_the_game_read_them() {
-    let data = temp_dir("import");
-    let files = old_files(&data);
-    let before = snapshot_dir(&data);
+    let data_dir = temp_dir("import");
+    let files = old_files(&data_dir);
+    let before = snapshot_dir(&data_dir);
     let db = temp_dir("import-db").join(store::FILE);
 
     let mut s = Store::open(&db).unwrap();
     assert!(!import::imported(&s).unwrap());
-    assert_eq!(import::read_files(&data).unwrap(), expected(&data));
-    assert!(import::import(&mut s, &data, 1_700_001_000).unwrap());
+    assert_eq!(import::read_files(&data_dir).unwrap(), expected(&data_dir));
+    assert!(import::import(&mut s, &data_dir, 1_700_001_000).unwrap());
     drop(s);
 
     // The next launch: the database alone holds the same as the files did.
     let s = Store::open(&db).unwrap();
     assert!(import::imported(&s).unwrap());
-    let back = import::read_store(&s, &data.join("replays")).unwrap();
-    assert_eq!(back, expected(&data));
+    let back = import::read_store(&s, &data_dir.join("replays")).unwrap();
+    assert_eq!(back, expected(&data_dir));
     // Song select's leaderboard: the plays whose replay is there, as `scores::load_index` gave.
     let shown: Vec<u64> = back
         .scores
@@ -307,20 +307,20 @@ fn the_old_files_come_in_once_and_read_back_as_the_game_read_them() {
     );
 
     // The files weren't touched, and nothing was added next to them.
-    assert_eq!(snapshot_dir(&data), before);
+    assert_eq!(snapshot_dir(&data_dir), before);
     assert_eq!(files.len(), 6);
     drop(s);
-    let _ = std::fs::remove_dir_all(&data);
+    let _ = std::fs::remove_dir_all(&data_dir);
     let _ = std::fs::remove_dir_all(db.parent().unwrap());
 }
 
 #[test]
 fn a_second_launch_doesnt_bring_the_files_in_again() {
-    let data = temp_dir("import-twice");
-    old_files(&data);
+    let data_dir = temp_dir("import-twice");
+    old_files(&data_dir);
     let db = temp_dir("import-twice-db").join(store::FILE);
     let mut s = Store::open(&db).unwrap();
-    assert!(import::import(&mut s, &data, 1).unwrap());
+    assert!(import::import(&mut s, &data_dir, 1).unwrap());
     // Played on since: in the database.
     s.add_play(Path::new("/songs/9 new/n.osu"), 1_700_009_000)
         .unwrap();
@@ -328,21 +328,24 @@ fn a_second_launch_doesnt_bring_the_files_in_again() {
     // Meanwhile an older build wrote to the old files.
     let mut f = std::fs::OpenOptions::new()
         .append(true)
-        .open(data.join("plays.tsv"))
+        .open(data_dir.join("plays.tsv"))
         .unwrap();
     std::io::Write::write_all(&mut f, b"1700005000\t/songs/8 old/o.osu\n").unwrap();
-    std::fs::write(data.join("favourite-songs.txt"), "").unwrap();
+    std::fs::write(data_dir.join("favourite-songs.txt"), "").unwrap();
     drop(f);
 
     let mut s = Store::open(&db).unwrap();
-    assert!(!import::import(&mut s, &data, 2).unwrap(), "imported again");
+    assert!(
+        !import::import(&mut s, &data_dir, 2).unwrap(),
+        "imported again"
+    );
     let plays = s.plays().unwrap();
     assert!(plays.contains_key(Path::new("/songs/9 new/n.osu")));
     assert!(!plays.contains_key(Path::new("/songs/8 old/o.osu")));
-    assert_eq!(s.favourites().unwrap(), expected(&data).favourites);
+    assert_eq!(s.favourites().unwrap(), expected(&data_dir).favourites);
     assert_eq!(s.meta(import::IMPORTED).unwrap().as_deref(), Some("1"));
     drop(s);
-    let _ = std::fs::remove_dir_all(&data);
+    let _ = std::fs::remove_dir_all(&data_dir);
     let _ = std::fs::remove_dir_all(db.parent().unwrap());
 }
 
@@ -350,102 +353,102 @@ fn a_second_launch_doesnt_bring_the_files_in_again() {
 /// stand in the way of the rest.
 #[test]
 fn an_old_hidden_maps_file_is_left_out_of_the_import() {
-    let data = temp_dir("import-hidden");
-    old_files(&data);
-    std::fs::write(data.join("hidden.tsv"), b"song\t/songs/\xff\xfe\n").unwrap();
+    let data_dir = temp_dir("import-hidden");
+    old_files(&data_dir);
+    std::fs::write(data_dir.join("hidden.tsv"), b"song\t/songs/\xff\xfe\n").unwrap();
     let mut s = Store::in_memory().unwrap();
-    assert!(import::import(&mut s, &data, 3).unwrap());
-    let back = import::read_store(&s, &data.join("replays")).unwrap();
-    assert_eq!(back, expected(&data));
+    assert!(import::import(&mut s, &data_dir, 3).unwrap());
+    let back = import::read_store(&s, &data_dir.join("replays")).unwrap();
+    assert_eq!(back, expected(&data_dir));
     assert_eq!(
-        std::fs::read(data.join("hidden.tsv")).unwrap(),
+        std::fs::read(data_dir.join("hidden.tsv")).unwrap(),
         b"song\t/songs/\xff\xfe\n",
         "the file stays as it was"
     );
-    let _ = std::fs::remove_dir_all(&data);
+    let _ = std::fs::remove_dir_all(&data_dir);
 }
 
 #[test]
 fn a_file_that_cant_be_read_stops_the_import_and_keeps_nothing() {
-    let data = temp_dir("import-bad");
-    old_files(&data);
+    let data_dir = temp_dir("import-bad");
+    old_files(&data_dir);
     // Not text: the game took it for no favourites; the import doesn't guess.
-    std::fs::write(data.join("favourite-songs.txt"), b"1 a/\xff\xfe\n").unwrap();
-    let before = snapshot_dir(&data);
+    std::fs::write(data_dir.join("favourite-songs.txt"), b"1 a/\xff\xfe\n").unwrap();
+    let before = snapshot_dir(&data_dir);
     let db = temp_dir("import-bad-db").join(store::FILE);
 
     let mut s = Store::open(&db).unwrap();
-    let e = import::import(&mut s, &data, 1).unwrap_err();
+    let e = import::import(&mut s, &data_dir, 1).unwrap_err();
     assert!(e.contains("favourite-songs.txt"), "{e}");
     assert!(!import::imported(&s).unwrap());
     assert_eq!(
-        import::read_store(&s, &data.join("replays")).unwrap(),
+        import::read_store(&s, &data_dir.join("replays")).unwrap(),
         Files::default()
     );
-    assert_eq!(snapshot_dir(&data), before, "the files were touched");
+    assert_eq!(snapshot_dir(&data_dir), before, "the files were touched");
     drop(s);
 
     // Mended: the next launch brings everything in.
-    std::fs::write(data.join("favourite-songs.txt"), "3 c/song.ogg\n").unwrap();
+    std::fs::write(data_dir.join("favourite-songs.txt"), "3 c/song.ogg\n").unwrap();
     let mut s = Store::open(&db).unwrap();
-    assert!(import::import(&mut s, &data, 2).unwrap());
-    let back = import::read_store(&s, &data.join("replays")).unwrap();
-    assert_eq!(back.scores, expected(&data).scores);
+    assert!(import::import(&mut s, &data_dir, 2).unwrap());
+    let back = import::read_store(&s, &data_dir.join("replays")).unwrap();
+    assert_eq!(back.scores, expected(&data_dir).scores);
     assert_eq!(back.favourites, ["3 c/song.ogg".to_string()].into());
     drop(s);
-    let _ = std::fs::remove_dir_all(&data);
+    let _ = std::fs::remove_dir_all(&data_dir);
     let _ = std::fs::remove_dir_all(db.parent().unwrap());
 }
 
 #[test]
 fn a_player_without_old_files_starts_with_an_empty_database() {
-    let data = temp_dir("import-none");
+    let data_dir = temp_dir("import-none");
     let mut s = Store::in_memory().unwrap();
-    assert!(import::import(&mut s, &data, 5).unwrap());
+    assert!(import::import(&mut s, &data_dir, 5).unwrap());
     assert!(import::imported(&s).unwrap());
     assert_eq!(
-        import::read_store(&s, &data.join("replays")).unwrap(),
+        import::read_store(&s, &data_dir.join("replays")).unwrap(),
         Files::default()
     );
-    let _ = std::fs::remove_dir_all(&data);
+    let _ = std::fs::remove_dir_all(&data_dir);
 }
 
 #[test]
 fn offsets_from_before_osus_sign_come_in_turned_round() {
-    let data = temp_dir("import-old-sign");
-    std::fs::write(data.join("map_offsets.tsv"), "00000000000000aa\t10\n").unwrap();
+    let data_dir = temp_dir("import-old-sign");
+    std::fs::write(data_dir.join("map_offsets.tsv"), "00000000000000aa\t10\n").unwrap();
     let mut s = Store::in_memory().unwrap();
-    assert!(import::import(&mut s, &data, 1).unwrap());
+    assert!(import::import(&mut s, &data_dir, 1).unwrap());
     assert_eq!(s.map_offsets().unwrap(), [(0xaa, -10.0)].into());
     // As read; the game's own reader renames that file, the import leaves it.
-    assert!(data.join("map_offsets.tsv").is_file());
-    let _ = std::fs::remove_dir_all(&data);
+    assert!(data_dir.join("map_offsets.tsv").is_file());
+    let _ = std::fs::remove_dir_all(&data_dir);
 }
 
 // A launch of the game (`store::open_in`, what `store::with` opens).
 
 #[test]
 fn the_first_launch_after_the_update_brings_the_files_in_and_later_ones_read_the_database() {
-    let data = temp_dir("launch");
-    old_files(&data);
-    let before = snapshot_dir(&data);
+    let data_dir = temp_dir("launch");
+    old_files(&data_dir);
+    let before = snapshot_dir(&data_dir);
 
-    let (s, imported) = store::open_in(&data, 10).unwrap();
+    let (s, imported) = store::open_in(&data_dir, 10).unwrap();
     assert!(imported);
     // Played on: the database has it.
-    let replays = data.join("replays");
+    let replays = data_dir.join("replays");
     let new = row(&replays, 7, Some(100.0));
     s.add_score(&new).unwrap();
     drop(s);
 
-    let (s, imported) = store::open_in(&data, 20).unwrap();
+    let (s, imported) = store::open_in(&data_dir, 20).unwrap();
     assert!(!imported, "brought in again");
-    let mut scores = expected(&data).scores;
+    let mut scores = expected(&data_dir).scores;
     scores.push(new);
     assert_eq!(s.scores(&replays).unwrap(), scores);
     drop(s);
     // The old files are as they were; the database sits next to them.
-    let after = snapshot_dir(&data);
+    let after = snapshot_dir(&data_dir);
     let old: Vec<_> = after
         .iter()
         .filter(|(p, _)| {
@@ -457,23 +460,23 @@ fn the_first_launch_after_the_update_brings_the_files_in_and_later_ones_read_the
         .cloned()
         .collect();
     assert_eq!(old, before);
-    assert!(data.join(store::FILE).is_file());
-    let _ = std::fs::remove_dir_all(&data);
+    assert!(data_dir.join(store::FILE).is_file());
+    let _ = std::fs::remove_dir_all(&data_dir);
 }
 
 #[test]
 fn a_launch_that_cant_bring_the_files_in_keeps_to_them_and_tries_again_next_time() {
-    let data = temp_dir("launch-bad");
-    old_files(&data);
-    std::fs::write(data.join("map_skins_off.txt"), b"\xff\n").unwrap();
-    let e = store::open_in(&data, 1).err().expect("opened");
+    let data_dir = temp_dir("launch-bad");
+    old_files(&data_dir);
+    std::fs::write(data_dir.join("map_skins_off.txt"), b"\xff\n").unwrap();
+    let e = store::open_in(&data_dir, 1).err().expect("opened");
     assert!(e.contains("map_skins_off.txt"), "{e}");
-    std::fs::write(data.join("map_skins_off.txt"), "1 a\n").unwrap();
-    let (s, imported) = store::open_in(&data, 2).unwrap();
+    std::fs::write(data_dir.join("map_skins_off.txt"), "1 a\n").unwrap();
+    let (s, imported) = store::open_in(&data_dir, 2).unwrap();
     assert!(imported);
     assert_eq!(s.map_skins_off().unwrap(), ["1 a".to_string()].into());
     drop(s);
-    let _ = std::fs::remove_dir_all(&data);
+    let _ = std::fs::remove_dir_all(&data_dir);
 }
 
 #[test]

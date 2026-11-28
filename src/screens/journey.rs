@@ -3280,11 +3280,12 @@ impl State {
         let (tx, rx) = std::sync::mpsc::channel();
         let folder_bg = folder.clone();
         std::thread::spawn(move || {
-            let res = crate::journey::copy_cached_folder(&folder_bg, &dest_root, &dest).map(|d| {
-                let fresh = crate::journey::scan_single_folder(&d);
-                (d, fresh)
-            });
-            let _ = tx.send(res);
+            let copied =
+                crate::journey::copy_cached_folder(&folder_bg, &dest_root, &dest).map(|d| {
+                    let fresh = crate::journey::scan_single_folder(&d);
+                    (d, fresh)
+                });
+            let _ = tx.send(copied);
         });
         self.journey.saving.push(crate::journey::SaveJob {
             folder,

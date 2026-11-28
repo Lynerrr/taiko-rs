@@ -640,9 +640,9 @@ pub fn mix_audio(
 
 pub fn write_wav(path: &Path, samples: &[i16], sr: u32) -> std::io::Result<()> {
     let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
-    let data = (samples.len() * 2) as u32;
+    let data_len = (samples.len() * 2) as u32;
     f.write_all(b"RIFF")?;
-    f.write_all(&(36 + data).to_le_bytes())?;
+    f.write_all(&(36 + data_len).to_le_bytes())?;
     f.write_all(b"WAVEfmt ")?;
     f.write_all(&16u32.to_le_bytes())?;
     f.write_all(&1u16.to_le_bytes())?;
@@ -652,7 +652,7 @@ pub fn write_wav(path: &Path, samples: &[i16], sr: u32) -> std::io::Result<()> {
     f.write_all(&4u16.to_le_bytes())?;
     f.write_all(&16u16.to_le_bytes())?;
     f.write_all(b"data")?;
-    f.write_all(&data.to_le_bytes())?;
+    f.write_all(&data_len.to_le_bytes())?;
     for s in samples {
         f.write_all(&s.to_le_bytes())?;
     }

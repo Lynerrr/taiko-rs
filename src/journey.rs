@@ -969,12 +969,12 @@ impl Journey {
         let (tx, rx) = mpsc::channel();
         self.fetching = Some(rx);
         std::thread::spawn(move || {
-            let res = online::call(&server, req).and_then(|reply| match reply {
+            let batch = online::call(&server, req).and_then(|reply| match reply {
                 online::Reply::Journey(batch) => Ok(batch),
                 online::Reply::Error(e) => Err(e),
                 _ => Err("Unexpected reply from server".into()),
             });
-            let _ = tx.send(res);
+            let _ = tx.send(batch);
         });
     }
 
@@ -1211,7 +1211,7 @@ fn start_item_download(item: &JourneyItem, protected: &[PathBuf]) -> MapSource {
     let item = item.clone();
     let protected = protected.to_vec();
     std::thread::spawn(move || {
-        let res = if let Some(cached) = find_in_cache(&item) {
+        let loaded = if let Some(cached) = find_in_cache(&item) {
             Ok(cached)
         } else if c.load(Ordering::Relaxed) {
             Err(download::CANCELLED.into())
@@ -1233,7 +1233,7 @@ fn start_item_download(item: &JourneyItem, protected: &[PathBuf]) -> MapSource {
                     })
             })
         };
-        let _ = tx.send(res);
+        let _ = tx.send(loaded);
     });
     MapSource::Downloading(Box::new(DownloadTask {
         done,
