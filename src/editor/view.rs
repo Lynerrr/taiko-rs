@@ -531,8 +531,8 @@ pub struct View {
     /// Play was pressed while the music was still loading (at a new speed): it starts once the
     /// track is there.
     play_when_loaded: bool,
-    /// The player asked to see the map's folder (File > Open song folder).
-    /// A file for the game to show in the file manager (the map, or what was exported).
+    /// A file for the game to show in the file manager: the map (File > Open song folder), or
+    /// what was exported.
     show: Option<std::path::PathBuf>,
     /// A save moved the map's file to a new name (from, to), for the game's list to follow.
     renamed: Option<(std::path::PathBuf, std::path::PathBuf)>,
@@ -604,8 +604,7 @@ pub struct View {
     k_base_picked: Vec<usize>,
     /// A key pressed that a click (no drag) takes in or out (Ctrl) or picks alone.
     k_click: Option<usize>,
-    /// The effect clip picked, the shelf effect a drag on a row draws, and whether the keyframe
-    /// and node pages are shown.
+    /// The effect clip picked.
     fx_sel: Option<u32>,
     /// The shelf effect a drag on an empty row draws, picked on the shelf.
     fx_armed: Option<usize>,
@@ -678,8 +677,7 @@ pub struct View {
     k_ease: crate::tko::track::Ease,
     /// The graph's value range while a key is being dragged, so it doesn't rescale under the pointer.
     k_frozen: Option<(f64, f64)>,
-    /// Nodes page: the selected node, the canvas's pan and zoom, the palette's category, the clip
-    /// preset last given.
+    /// Nodes page: the selected node, the canvas's pan and zoom, the palette's category.
     n_sel: Option<u32>,
     n_pan: (f32, f32),
     n_zoom: f32,
@@ -691,6 +689,7 @@ pub struct View {
     n_typing: Option<(usize, String)>,
     /// Which group of playfield properties the Keyframes page lists.
     k_tab: usize,
+    /// Nodes page: the clip preset last given.
     n_clip: usize,
     /// The menu bar's open menu.
     menu: Option<usize>,
@@ -755,9 +754,10 @@ pub struct View {
     line_origin: Vec<(u64, f64, f64)>,
     /// The graph's range, held still while its dots are dragged.
     g_frozen: Option<(f64, f64)>,
-    /// The Timing panel's tools: the velocity to set and the factor to multiply by.
-    /// The modifier keys as of the last pointer event, for the scrolling that carries on without one.
+    /// The modifier keys as of the last pointer event, for the scrolling that carries on without
+    /// one.
     held: Keys,
+    /// The SV tool of the Timing panel and the velocity graph.
     svt: curves::SvtUi,
     /// The last `update`, for how long the view scrolls at an edge.
     last_tick: Option<Instant>,
@@ -2289,7 +2289,6 @@ impl View {
 
     // ---- the pointer ----
 
-    /// The object under `x` on the timeline: a note by its head, a roll or swell along its body.
     /// The middle of the notes' lane.
     fn lane_cy(&self) -> f32 {
         let [_, y, _, h] = self.layout.timeline;
