@@ -72,7 +72,7 @@ pub struct View {
 
 impl View {
     /// A play's drawing state at its start: the default HUD, and what the visual mods worked out
-    /// from the map (`Game::with_half`).
+    /// from the map (`for_play`).
     pub(super) fn new(
         min_velocity: f64,
         note_blocks: Vec<NoteBlock>,
@@ -2296,10 +2296,10 @@ impl Play {
         // Notes drawn over every effect leave a hole where they were (nothing moves in the
         // list, which clips count by), and come back on top once the effects are on.
         let lifted = lift_shapes(c, &above_shapes);
-        // A .tko map's trails, stretches and fringes turn and zoom with the playfield.
         // What the playfield is sized by from here on, so the lane is still told from the notes
         // once it is turned over or zoomed out.
         let size = [fx, 1.0];
+        // A .tko map's trails, stretches and fringes turn and zoom with the playfield.
         crate::tko::screen::local(c, start_shape, &tko_fx, pivot, size);
         let size = [
             size[0] * tko_fx.stretch_x * zoom,
@@ -2829,6 +2829,8 @@ pub(super) fn said(done: Done) -> (&'static str, &'static str) {
     }
 }
 
+/// Overtime's animatronic bear lunging at the screen, `p` (0-1) of the way through, shaking
+/// with map time `t`. Drawn from shapes, centred on a canvas `c.width` wide.
 pub(super) fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
     let w = c.width;
     let start = c.shapes.len();
@@ -3610,7 +3612,7 @@ pub fn team_colour(k: usize) -> u32 {
     TEAM_COLOURS[k % TEAM_COLOURS.len()]
 }
 
-/// How many of those there are on a lane `lane_len` long, past both ends.
+/// How many `BODY_CELL` stretches there are on a lane `lane_len` long, past both ends.
 pub(super) fn body_cells(lane_len: f32) -> usize {
     ((lane_len + HIT_X + 2.0 * BIG_R) / BODY_CELL).max(0.0) as usize + 2
 }

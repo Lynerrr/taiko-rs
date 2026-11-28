@@ -79,10 +79,13 @@ pub struct Shape {
     pub half: [f32; 2],
     pub fill: [f32; 4],
     pub border: [f32; 4],
-    /// x: corner radius, y: border width, z: glow/softness width, w: half clip (0 none, 1 left, 2 right)
-    /// or a skin image (`SPRITE_BASE` + `Sprite`, tinted by `fill`) or a character of the font
-    /// (`GLYPH_BASE` + `font::index`, in `fill`, sampled from the font atlas) or a profile
-    /// picture (-1 - its `avatars` slot, rounded by x, faded by fill's alpha).
+    /// x: corner radius, y: border width, z: glow/softness width. w says what the shape is: a half
+    /// clip (0 none, 1 left, 2 right) or a plain shape's kind (`SHADE_ACROSS`, `SHADE_EASED`,
+    /// `GROUND_SHADE`); a skin image (`SPRITE_BASE` + `Sprite`, tinted by `fill`); a character of
+    /// the font (`GLYPH_BASE` + `font::index`, in `fill`, sampled from the font atlas) or of the
+    /// system font (`system_font::BASE` + its slot); a profile picture (-1 - its `avatars` slot,
+    /// rounded by x, faded by fill's alpha); a map picture (-`PICTURE_BASE` - slot) or a card
+    /// picture (-`CARD_BASE` - slot).
     pub params: [f32; 4],
     /// Rotation (radians, clockwise on screen) about the centre; 0 for nearly everything.
     pub angle: f32,
@@ -251,8 +254,6 @@ impl Sprite {
 }
 pub(crate) const SPRITE_BASE: f32 = 10.0;
 
-/// What a shape needs, besides its position, to come out mirrored left to right: half circles
-/// swap sides, and a drumroll's end cap turns around (the other sprites are round).
 /// A plain shape's kind (`params[3]`) for `Canvas::shade_across`: its fill sweeps from `fill`
 /// to `border` across it.
 pub const SHADE_ACROSS: f32 = 3.0;
@@ -264,6 +265,8 @@ pub const SHADE_EASED: f32 = 4.0;
 /// (Not 5: #643's frosted routes had that, and a test keeps it unused.)
 pub const GROUND_SHADE: f32 = 7.0;
 
+/// What a shape needs, besides its position, to come out mirrored left to right: half circles
+/// swap sides, and a drumroll's end cap turns around (the other sprites are round).
 fn flip_x(sh: &mut Shape) {
     let sprite = |s: Sprite| SPRITE_BASE + s as usize as f32;
     // The drum's halves have their mirror images in the atlas.
@@ -292,11 +295,6 @@ fn flip_x(sh: &mut Shape) {
     }
 }
 
-/// `shapes` with each skin image's quad cut down to the part of its image the atlas kept
-/// (`Atlas::trims`), into `out`: the clear margins round it, which every pixel of went through
-/// the shader for nothing, are no longer drawn (a skin's `scorebar-bg` is often a whole screen of
-/// clear with the bar in a corner). What's drawn is the same, pixel for pixel. False (and `out`
-/// untouched) when the skin's images have no margins to cut.
 /// `shapes` as the GPU gets them, into `out`: skin images cut down (`trim_sprites`), and
 /// `hide` (a ground the background draws itself, `foldable_ground`) left out. False (and `out`
 /// meaningless) when they go as they are.
@@ -348,6 +346,11 @@ pub(crate) fn foldable_ground(
     .then_some(i)
 }
 
+/// `shapes` with each skin image's quad cut down to the part of its image the atlas kept
+/// (`Atlas::trims`), into `out`: the clear margins round it, which every pixel of went through
+/// the shader for nothing, are no longer drawn (a skin's `scorebar-bg` is often a whole screen of
+/// clear with the bar in a corner). What's drawn is the same, pixel for pixel. False (and `out`
+/// untouched) when the skin's images have no margins to cut.
 pub(crate) fn trim_sprites(
     shapes: &[Shape],
     trims: &PerSprite<[f32; 4]>,
@@ -1216,8 +1219,6 @@ fn fs(i: V) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// The shapes shader, its `sprites` array as long as there are sprites and the font atlas laid
-/// out like `font::atlas`.
 /// Puts a card's picture (a `CARD_CELL` strip, premultiplied RGBA) in `slot` of the cards'
 /// texture.
 fn write_card(queue: &wgpu::Queue, texture: &wgpu::Texture, slot: u32, rgba: &[u8]) {
@@ -1279,6 +1280,8 @@ fn shape_binding_stages(binding: u32) -> wgpu::ShaderStages {
     }
 }
 
+/// The shapes shader, its `sprites` array as long as there are sprites and the font atlas laid
+/// out like `font::atlas`.
 fn shape_shader(custom_height: u32) -> String {
     SHADER
         .replace("GROUND_ALPHA_FN", GROUND_ALPHA_WGSL)
@@ -2434,7 +2437,7 @@ impl Renderer {
         atlas: &Atlas,
     ) -> wgpu::BindGroup {
         // The texture can't be empty or exceed the GPU's 2D texture limit.
-        let (w, h, data) = fit_atlas_rgba(
+        let (w, h, atlas_rgba) = fit_atlas_rgba(
             atlas.width,
             atlas.height,
             atlas.rgba.as_slice(),
@@ -2457,7 +2460,7 @@ impl Renderer {
         });
         queue.write_texture(
             texture.as_image_copy(),
-            &data,
+            &atlas_rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * w),
@@ -2693,7 +2696,6 @@ impl Renderer {
         });
     }
 
-    /// Applies a present mode, falling back toward vsync if the compositor lacks it.
     /// The present modes this renderer can do, in the settings' order (vsync always).
     pub fn present_choices(&self) -> Vec<PresentChoice> {
         let to_wgpu = |p: PresentChoice| match p {
@@ -2707,6 +2709,7 @@ impl Renderer {
             .collect()
     }
 
+    /// Applies a present mode, falling back toward vsync if the compositor lacks it.
     pub fn set_present(&mut self, want: PresentChoice) {
         let order: &[PresentChoice] = match want {
             PresentChoice::Mailbox => &[
@@ -2798,14 +2801,14 @@ impl Renderer {
         );
     }
 
-    /// Render pixels per virtual unit for crisp text (`set_text_grid`) when drawing at half
-    /// resolution.
     /// How much smaller the safe area draws the interface than the screen would: text picks its
     /// whole font pixels as if on the whole screen (`set_text_bias`), so it keeps its size.
     pub fn text_bias(&self) -> f32 {
         self.size().1 as f32 / self.game_size().1.max(1) as f32
     }
 
+    /// Render pixels per virtual unit for crisp text (`set_text_grid`) when drawing at half
+    /// resolution.
     pub fn text_grid(&self) -> Option<f32> {
         // A phone keeps this text with Half resolution off too: at its exact size it's unreadable.
         let scale = if crate::mobile::active() {
@@ -2876,8 +2879,9 @@ impl Renderer {
 
     /// Draws `shapes` into an acquired frame and presents it; with `capture`, also returns the
     /// frame as tightly packed RGB.
-    /// `clip`: shapes in that range are clipped to a screen rectangle given as fractions
-    /// (x, y, w, h) — the playfield area — so notes can't spill outside it.
+    /// `clips`: shape ranges clipped to rects given as fractions of the interface's area
+    /// (x, y, w, h), so notes can't spill outside the playfield. `opaque`: a shape that hides the
+    /// background under its rect.
     pub fn submit(
         &mut self,
         frame: wgpu::SurfaceTexture,
@@ -3194,9 +3198,9 @@ impl Renderer {
                 timeout: None,
             })
             .ok()?;
-        let data = buf.slice(..).get_mapped_range().ok()?;
+        let padded_rows = buf.slice(..).get_mapped_range().ok()?;
         let mut rgb = Vec::with_capacity((w * h * 3) as usize);
-        for row in data.chunks_exact(bpr as usize) {
+        for row in padded_rows.chunks_exact(bpr as usize) {
             for px in row[..(w * 4) as usize].as_chunks::<4>().0 {
                 rgb.extend_from_slice(&px[..3]);
             }
@@ -3333,15 +3337,14 @@ impl Renderer {
                 timeout: None,
             })
             .ok()?;
-        let data = buf.slice(..).get_mapped_range().ok()?;
+        let padded_rows = buf.slice(..).get_mapped_range().ok()?;
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
-        for row in data.chunks_exact(bpr as usize) {
+        for row in padded_rows.chunks_exact(bpr as usize) {
             rgba.extend_from_slice(&row[..(w * 4) as usize]);
         }
         Some(rgba)
     }
 
-    /// (Re)creates the half-resolution image when the screen size changed.
     /// The blur's images for an image `width` x `height` (`BlurFx`).
     fn ensure_blur(&mut self, width: u32, height: u32) {
         if self
@@ -3480,6 +3483,7 @@ impl Renderer {
         }
     }
 
+    /// (Re)creates the half-resolution image when the screen size changed.
     fn ensure_low(&mut self, width: u32, height: u32) {
         if self
             .low
@@ -3765,12 +3769,6 @@ impl Renderer {
     }
 }
 
-/// Clipped shape ranges (rects as fractions of the screen) as one list in order with no
-/// overlaps, as the draw takes them: where ranges nest (a glitch's slices inside the playfield's
-/// frame), shapes are clipped to every rect over them, and the rest of the outer range keeps the
-/// outer rect alone. Overlapping ranges after the first used to be dropped, so in a framed
-/// playfield (a play area smaller than the screen) each slice drew its whole copy of the lane
-/// unclipped, and the last one covered the notes.
 /// A clip rect (`r`, fractions of `area`: `[x, y, w, h]` in pixels of a `size` image) as a
 /// scissor in whole pixels, rounded in: never past its edges (rounded out, what it clips, a lane's
 /// notes against its tile's edge, stuck out by up to a pixel either side). At least 1 pixel.
@@ -3818,6 +3816,12 @@ mod scissor_tests {
     }
 }
 
+/// Clipped shape ranges (rects as fractions of the screen) as one list in order with no
+/// overlaps, as the draw takes them: where ranges nest (a glitch's slices inside the playfield's
+/// frame), shapes are clipped to every rect over them, and the rest of the outer range keeps the
+/// outer rect alone. Overlapping ranges after the first used to be dropped, so in a framed
+/// playfield (a play area smaller than the screen) each slice drew its whole copy of the lane
+/// unclipped, and the last one covered the notes.
 fn flatten_clips(
     clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
 ) -> Vec<(std::ops::Range<usize>, [f32; 4])> {
@@ -4097,8 +4101,6 @@ pub fn animations() -> bool {
     )
 }
 
-/// Moves `value` toward `target`, covering ~63% of the way every `tau_ms` (jumps there with
-/// animations off).
 /// A list's own position, apart from what's selected in it: where it's going and where it's got to.
 #[derive(Clone, Copy, Debug)]
 pub struct Glide {
@@ -4121,6 +4123,8 @@ impl Glide {
     }
 }
 
+/// Moves `value` toward `target`, covering ~63% of the way every `tau_ms` (jumps there with
+/// animations off).
 pub fn approach(value: &mut f32, target: f32, dt_ms: f32, tau_ms: f32) {
     if !animations() || !value.is_finite() {
         *value = target;
@@ -4134,8 +4138,6 @@ thread_local! {
     static FRAME_TIME: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
 }
 
-/// Animations in the frame being built use this time instead of each reading the clock (which
-/// can cost microseconds a read). Per thread: the render thread sets it before each frame.
 /// The text caret's width, how long it's on (and then off) as it blinks, how long after a move it
 /// stops blinking, how long its trail's leading and trailing edges take to get to it, how
 /// strong the trail is at the caret, and how long a caret not drawn is forgotten after (the
@@ -4224,6 +4226,8 @@ thread_local! {
     static CARET: std::cell::RefCell<Caret> = std::cell::RefCell::new(Caret::default());
 }
 
+/// Animations in the frame being built use this time instead of each reading the clock (which
+/// can cost microseconds a read). Per thread: the render thread sets it before each frame.
 pub fn set_frame_time(now: Option<std::time::Instant>) {
     FRAME_TIME.with(|t| t.set(now));
 }
@@ -4610,10 +4614,6 @@ impl<H> Canvas<H> {
         (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
     }
 
-    /// Clips everything drawn since shape `start` to a rect (virtual units). Shapes in there that
-    /// already have a clip of their own keep it, cut down to this rect: the renderer takes one
-    /// clip per shape, so an outer clip laid over inner ones (the editor's preview over a sliced
-    /// playfield) must not hide them.
     /// Stretches plain rects that reach the canvas's edges past them by `out` (left, top, right,
     /// bottom, in virtual units): dimming, bars and lanes go on to the screen's edges beyond the
     /// safe area.
@@ -4644,6 +4644,10 @@ impl<H> Canvas<H> {
         }
     }
 
+    /// Clips everything drawn since shape `start` to a rect (virtual units). Shapes in there that
+    /// already have a clip of their own keep it, cut down to this rect: the renderer takes one
+    /// clip per shape, so an outer clip laid over inner ones (the editor's preview over a sliced
+    /// playfield) must not hide them.
     pub fn clip_since(&mut self, start: usize, x: f32, y: f32, w: f32, h: f32) {
         let end = self.shapes.len();
         if end <= start {
@@ -4949,8 +4953,6 @@ impl<H> Canvas<H> {
         self.shapes[start].params[2] = -1.0e6;
     }
 
-    /// `name`'s profile picture, round, centred on (`x`, `y`) with radius `r`; until it's here
-    /// (and without one) their initial on a disc of `colour`.
     /// A map's picture `file`, `h` tall (as wide as its own shape makes it) centred on (`x`, `y`),
     /// turned by `angle` (radians, clockwise) and tinted by `tint`. Asks for it to be loaded and
     /// draws nothing until it is; false then.
@@ -5239,6 +5241,8 @@ impl<H> Canvas<H> {
         }
     }
 
+    /// `name`'s profile picture, round, centred on (`x`, `y`) with radius `r`; until it's here
+    /// (and without one) their initial on a disc of `colour`.
     pub fn avatar(&mut self, name: &str, x: f32, y: f32, r: f32, colour: u32, a: f32) {
         let key = name.to_ascii_lowercase();
         let slot = self.avatar_slots.get(&key).copied();
@@ -5517,8 +5521,8 @@ impl<H> Canvas<H> {
         for sh in &mut self.shapes[start.min(end)..end] {
             // Map and card pictures store shader parameters in `border` (vertical fade range,
             // greyness/arrival sweep) rather than a colour.
-            let data_border = sh.params[3] < -PICTURE_BASE + 0.5;
-            let cols: &mut [&mut [f32; 4]] = if data_border {
+            let border_is_params = sh.params[3] < -PICTURE_BASE + 0.5;
+            let cols: &mut [&mut [f32; 4]] = if border_is_params {
                 &mut [&mut sh.fill]
             } else {
                 &mut [&mut sh.fill, &mut sh.border]

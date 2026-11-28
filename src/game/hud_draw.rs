@@ -905,8 +905,6 @@ impl Play {
         p
     }
 }
-/// Overtime's animatronic bear lunging at the screen, `p` (0-1) of the way through, shaking
-/// with map time `t`. Drawn from shapes, centred on a canvas `c.width` wide.
 /// The HP bar's top.
 pub(super) const HP_BAR_Y: f32 = 88.0;
 /// The UR counter's text size.
