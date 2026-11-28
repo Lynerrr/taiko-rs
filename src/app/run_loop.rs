@@ -123,8 +123,6 @@ impl Drop for TimerPeriod {
     }
 }
 
-/// The render loop. Order matters for latency: (under vsync) optionally delay, wait for the
-/// swapchain, and only then sample the clock and build the frame.
 /// What the render thread tells the window thread.
 pub(crate) enum UserEvent {
     /// The render thread stopped (quit requested or screenshot run finished).
@@ -157,6 +155,8 @@ pub(crate) enum FileDrag {
     Drop(Vec<PathBuf>),
 }
 
+/// The render loop. Order matters for latency: (under vsync) optionally delay, wait for the
+/// swapchain, and only then sample the clock and build the frame.
 pub(super) fn render_loop(
     state: Arc<Mutex<State>>,
     mut renderer: Renderer,
@@ -849,13 +849,11 @@ impl App {
                 // A word left half composed is dropped with the focus: kept, it would hold every
                 // key for the input method (`ime_has_key`) after coming back.
                 s.ime_preedit.clear();
-                // The release may happen in another window.
+                // Releases (keys, buttons, Alt) happen in the other window: nothing stays held.
                 s.retry_hold = None;
                 s.input_drag = false;
                 s.cancel_restart();
-                // The release may happen in another window.
                 s.right_scroll = false;
-                // Alt is released in the other window; don't keep it "held" here.
                 s.modifiers_alt = false;
                 if let (true, Some(game), false) =
                     (s.scene.is_play(), s.play.as_deref_mut(), s.auto)
@@ -913,7 +911,6 @@ impl App {
         }
     }
 
-    /// A window size picked in settings: out of fullscreen if need be, then that size.
     /// Lets input methods in while text is being typed, and keeps them out otherwise.
     #[cfg(not(target_os = "android"))]
     fn update_ime(&mut self) {
@@ -937,6 +934,7 @@ impl App {
         }
     }
 
+    /// A window size picked in settings: out of fullscreen if need be, then that size.
     fn apply_window_request(&mut self) {
         let Some(window) = &self.window else { return };
         let mut s = lock(&self.state);
