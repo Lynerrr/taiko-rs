@@ -51,6 +51,9 @@
   a few lines and the meaning is plain.
 - One term per concept across the codebase: reuse the name the code already gives a thing
   instead of coining a synonym.
+- Before inserting a new item above an existing one, look at the doc comment right above the
+  insertion point: it belongs to the item below. Insert above that doc, not between it and its
+  item, or the doc ends up on the new item.
 - Don't rename public API, serialized fields (JSON, TOML, database columns, `.osu` / `.tko`
   keys), CLI flags, env vars or network messages in a cleanup: they are external contracts.
 
@@ -61,8 +64,11 @@
 
 ## Continuous integration
 
-- Never wait for CI. Don't poll GitHub Actions runs or `gh pr checks`, don't `gh run watch`,
-  and don't start background scripts that watch a pull request to merge it.
+- Don't wait for CI by default. Don't poll GitHub Actions runs or `gh pr checks`, don't
+  `gh run watch`, and don't start background scripts that watch a pull request to merge it.
+- Exception: when the user explicitly asks to wait for CI and merge, wait for the checks
+  (`gh pr checks <number> --watch`) and squash-merge on green. If a check fails, stop and
+  report it instead of merging.
 - A task is complete once local validation (below) passes and the pull request is opened or
   updated. CI results are read in a later session, or by a person.
 - If the pull request should merge on green, run `gh pr merge --auto --squash` and stop:
