@@ -82,8 +82,6 @@ fn follow_pp(
     }
     *shown
 }
-/// The preview music starts from a quick decode of this much audio at the preview point; the
-/// full song replaces it a moment later without a gap.
 /// The width (virtual units, 480 tall) the preview lays the playfield out at: a 4:3 screen's,
 /// widening up to a 16:9 screen's as the panel is dragged wider than its default.
 const FOUR_THREE: f32 = 640.0;
@@ -102,6 +100,8 @@ fn lane_fit(w: f32, base_w: f32) -> (f32, f32) {
     ((w - 20.0) / lane_w, lane_w)
 }
 
+/// The preview music starts from a quick decode of this much audio at the preview point; the
+/// full song replaces it a moment later without a gap.
 const SNIPPET_MS: f64 = 15_000.0;
 
 pub type Image = crate::render::BgImage;
@@ -617,9 +617,9 @@ impl Preview {
     }
 
     /// Call every frame. `in_menu`: menus where preview music keeps playing; `in_select`: the
-    /// autoplay preview is visible and runs.
+    /// autoplay preview is visible and runs. `rate`: speed the music and the autoplay play at
+    /// (and whether it keeps the pitch).
     #[allow(clippy::too_many_arguments)]
-    /// `rate`: speed the music and the autoplay play at (and whether it keeps the pitch).
     pub fn update(
         &mut self,
         now: Instant,
@@ -1005,8 +1005,6 @@ impl Preview {
         game.autoplay(None);
     }
 
-    /// Jumps the preview music (and the autoplay) to map time `t`, and remembers it as the
-    /// start point (the blue flag): wherever you last scrolled to is where "Play from" starts.
     /// The band the autoplay box shows now (see `reach`).
     fn shown_reach(&self) -> [f32; 2] {
         let (from, to, at) = self.reach;
@@ -1020,6 +1018,8 @@ impl Preview {
         ]
     }
 
+    /// Jumps the preview music (and the autoplay) to map time `t`, and remembers it as the
+    /// start point (the blue flag): wherever you last scrolled to is where "Play from" starts.
     pub fn seek(&mut self, t: f64, engine: Option<&Engine>) {
         if let Some(t) = self.seek_music(t, engine) {
             self.marker = self.audio.as_ref().map(|s| (s.path.clone(), t));
@@ -1109,7 +1109,6 @@ impl Preview {
         self.audio_active && self.audio.as_ref().is_some_and(|s| s.path == audio_path(e))
     }
 
-    /// The panel isn't on screen: nothing of it is there to press.
     /// The shown map's notes, once it's read.
     pub fn notes(&self) -> Option<u32> {
         self.map
@@ -1129,6 +1128,7 @@ impl Preview {
         };
     }
 
+    /// The panel isn't on screen: nothing of it is there to press.
     pub fn hide_panel(&mut self) {
         self.graph_rect = None;
         self.play_rect = None;
@@ -1219,8 +1219,6 @@ impl Preview {
         self.game.as_mut().filter(|_| ready)
     }
 
-    /// The difficulty timeline of `e` (the selected map) in `rect`, with the start point and,
-    /// if `button` is given as (verb, key hint), a "<verb> 1:23" button under it.
     /// Summary stats for the currently loaded map.
     pub(crate) fn loaded_stats(&self) -> Option<LoadedStats> {
         let (_, _, d, _) = self.map.as_ref()?;
@@ -1291,6 +1289,8 @@ impl Preview {
         true
     }
 
+    /// The difficulty timeline of `e` (the selected map) in `rect`, with the start point and,
+    /// if `button` is given as (verb, key hint), a "<verb> 1:23" button under it.
     pub fn draw_timeline(
         &mut self,
         c: &mut Canvas,
@@ -2095,11 +2095,11 @@ impl Preview {
     }
 
     /// Details and the autoplay preview in the right-hand panel (virtual units). Returns the
-    /// shape range to clip and the clip area.
+    /// shape range to clip and the clip area. `button`: the action under the timeline as (verb,
+    /// key hint), e.g. ("Play from", "Shift+Enter"). `status`: the map's on osu! (label, colour),
+    /// shown by the mapper's name. Bare, the details of the song before a change go out under the
+    /// new ones.
     #[allow(clippy::too_many_arguments)]
-    /// `button`: the action under the timeline as (verb, key hint), e.g. ("Play from", "Shift+Enter").
-    /// `status`: the map's on osu! (label, colour), shown by the mapper's name.
-    /// Bare, the details of the song before a change go out under the new ones.
     pub fn draw_panel(
         &mut self,
         c: &mut Canvas,

@@ -506,11 +506,10 @@ struct State {
     input_engaged: bool,
     browse: browse::Browse,
     downloads: Vec<download::Job>,
-    /// Song select: the set being checked for a newer version on osu! (see `poll_set_check`),
-    /// and the one the selection rests on, since when.
-    /// The set being checked against osu!: whether it's outdated, and its difficulties here
-    /// that aren't osu!'s.
+    /// Song select: the set being checked against osu! (`poll_set_check`): whether it's
+    /// outdated, and its difficulties here that aren't osu!'s.
     set_check: Option<SetCheck>,
+    /// The set the selection rests on, and since when: it's checked once the selection rests.
     set_check_due: Option<(u32, Instant)>,
     /// Android: when the folder of .osz files opened with the game was last looked at.
     #[cfg(target_os = "android")]
@@ -880,8 +879,7 @@ struct State {
     data_move: Option<DataMove>,
     /// A single .osu was given on the command line: play it once the scan finishes.
     play_when_scanned: bool,
-    /// Mouse: fractional wheel notches (touchpads), left-button drag of the playfield, window
-    /// height for converting pixels to virtual units, and how long the settings preview shows.
+    /// Fractional wheel notches (touchpads) not yet turned into a step.
     wheel_acc: f32,
     /// Pointer position (physical px), the active playfield-area drag (grip, where it started,
     /// area at that moment) and what the pointer hovers.
@@ -1046,7 +1044,6 @@ impl State {
         });
     }
 
-    /// Scenes that use the gameplay present mode; everything else is a menu.
     /// In a song (or its pause menu's settings): what counts for pp stays as it started.
     fn mid_song(&self) -> bool {
         self.in_song() || self.behind_settings().is_some_and(|prev| prev.plays_song())
@@ -1081,6 +1078,7 @@ impl State {
         self.scene.screen().is_some_and(|s| s.room_lobby())
     }
 
+    /// Scenes that use the gameplay present mode; everything else is a menu.
     fn in_song(&self) -> bool {
         self.scene.screen().is_some_and(|s| s.in_song())
     }
@@ -1164,7 +1162,8 @@ impl State {
         self.cfg.mods.speed(self.cfg.rate, self.cfg.rate_keep_pitch)
     }
 
-    /// Loads `entry` for a play at `rate` with `mods` (`keep_pitch` unless NC/DC say otherwise).
+    /// Loads `entry` for a play at `rate` with `mods`, keeping the pitch as the settings say
+    /// unless NC/DC force it.
     fn load_with(&mut self, entry: usize, rate: f64, mods: Mods) -> Job<Loaded> {
         self.load(entry, rate, mods, true, None)
     }
@@ -2116,7 +2115,7 @@ impl State {
         }
     }
 
-    /// Leaves the editor for a test play of `text` (its map as it is now) from `from`.
+    /// Leaves the editor for a test play of its map as it is now, from `from`.
     fn start_test_play(&mut self, entry: usize, from: Option<f64>) {
         if entry >= self.library.len() {
             if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
@@ -2252,9 +2251,8 @@ impl State {
         }
     }
 
-    /// Parses the map and decodes its audio on a background thread.
-    /// `speed`: rate modifier to prepare the track for (time-stretched or resampled once here).
-    /// Loads a map and its song prepared at `speed` (plus Wind Up / Down from `mods`).
+    /// Parses the map and decodes its song on a background thread, prepared at `speed`
+    /// (time-stretched or resampled once here, plus Wind Up / Down from `mods`).
     fn spawn_loader(
         &self,
         entry: usize,
@@ -2473,7 +2471,6 @@ impl State {
         self.open_settings();
     }
 
-    /// The main menu is what's showing.
     /// Which menu screen is showing, if one is. Songs, loading and the editors aren't: going into
     /// or out of them never glitches, so nothing gets in the way of a play.
     fn menu_screen(&self) -> Option<u8> {
@@ -2500,6 +2497,7 @@ impl State {
         canvas.glitch = ms.and_then(menu::screen_glitch);
     }
 
+    /// The main menu is what's showing.
     fn on_menu(&self) -> bool {
         self.main_menu.is_some()
             && self.scene.is_select()
@@ -2813,8 +2811,6 @@ impl State {
         }
     }
 
-    /// Play on the menu: the camera moves on along its lane to song select (`shifts`), or song
-    /// select is simply there.
     /// Library entry `i`'s hash once it's known (`library::Hasher`), asked for if it isn't: what
     /// a frame draws doesn't wait on reading the map's file for it.
     pub(crate) fn known_hash_of(&mut self, i: usize) -> Option<u64> {
@@ -2912,6 +2908,8 @@ impl State {
         self.cfg.animations && menu_shift::animated() && !self.cfg.legacy_menu
     }
 
+    /// Play on the menu: the camera moves on along its lane to song select (`shifts`), or song
+    /// select is simply there.
     fn leave_menu_for_songs(&mut self, shifts: bool) {
         let left = self.main_menu.take();
         // Song select opens on its preview.
@@ -4953,7 +4951,6 @@ impl State {
         }
     }
 
-    /// Scans `folder` for maps from now on (None: look for osu!'s again) and rescans the library.
     /// Reads TJA charts from `folder` from now on (None: `Tja` beside the taiko.rs maps), and
     /// looks through the library again.
     fn set_tja_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
@@ -4970,6 +4967,7 @@ impl State {
         Ok(())
     }
 
+    /// Scans `folder` for maps from now on (None: look for osu!'s again) and rescans the library.
     fn set_songs_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
         if self.behind_settings().is_some_and(|prev| prev.is_play()) {
             return Err(tr!(
@@ -5278,8 +5276,6 @@ impl State {
         c.hit(x, 2.0, w, 14.0, hit::Hit::Update);
     }
 
-    /// Loads the configured skin: its note images go to the renderer, its hitsounds to the audio
-    /// engine.
     /// How the settings name where a skin part comes from.
     fn skin_source_name(&self, source: &skin::Source) -> String {
         match source {
@@ -5304,6 +5300,8 @@ impl State {
         }
     }
 
+    /// Loads the configured skin: its note images go to the renderer, its hitsounds to the audio
+    /// engine.
     fn load_skin(&mut self) {
         self.request_skin(true);
     }
@@ -5575,8 +5573,8 @@ impl State {
         self.import_osz(path, &name, false);
     }
 
-    /// Unpacks an `.osz` (or `.rsz`) into the Songs folder, unless everything in it is already in the list or
-    /// on its way (the same file dropped twice). A set that's partly here (a new difficulty) is
+    /// Unpacks an `.osz` (or `.rsz`) into the Songs folder, unless everything in it is already
+    /// in the list or on its way (the same file dropped twice). A set that's partly here (a new difficulty) is
     /// unpacked into its own folder when that's in the Songs folder. `temporary`: delete the
     /// archive whatever happens (a copy, not the player's own file).
     fn import_osz(&mut self, archive: PathBuf, name: &str, temporary: bool) {
@@ -6216,10 +6214,9 @@ impl State {
         }
     }
 
-    /// (The run and its result leave on their own keys; tests leave them this way.)
-    #[cfg(test)]
     /// Leaves calibrating (or its result, taking its suggestion with `apply`) for where it was
-    /// started from.
+    /// started from. The run and its result leave on their own keys; tests leave them this way.
+    #[cfg(test)]
     fn leave_calibration(&mut self, apply: bool) {
         if let Some(run) = self.scene.screen_mut::<screens::calibration::Calibration>() {
             let back = run.take_back();
@@ -6251,7 +6248,6 @@ impl State {
         }
     }
 
-    /// Applies the live offset suggestion from the song being played (O key).
     /// Applies the live offset suggestion from the song being played (O key) to that map.
     fn apply_live_offset(&mut self) {
         // Shift+O and a match don't go through the hotkey, so this says it for them all.
@@ -7100,7 +7096,6 @@ impl State {
         (x / k - self.select_left, y / k)
     }
 
-    /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
     /// Turns the volume picked on the volume overlay (Alt+wheel, Alt+Up/Down) `notches` up.
     fn turn_volume(&mut self, notches: i32) {
         let changed = self.volume.turn(&mut self.cfg, notches, Instant::now());
@@ -7114,6 +7109,7 @@ impl State {
         }
     }
 
+    /// Mouse wheel: scales the playfield area in game / in the editor, scrolls lists elsewhere.
     fn wheel(&mut self, notches: i32) {
         if self.idle.input(Instant::now()) {
             return;
@@ -7650,9 +7646,6 @@ impl State {
         self.hover = None;
     }
 
-    /// Right button on song select: hold it and move up and down to fly through the list, like
-    /// osu!'s right-click scrolling. The selection stays.
-    /// Released without moving, it opens the row's menu; on the scrollbar, it goes there.
     /// The middle button: pans the map editor's timeline.
     fn middle_button(&mut self, pressed: bool) {
         if self.scene.screen_is::<MapEditor>() && !self.social.open {
@@ -7663,6 +7656,9 @@ impl State {
         }
     }
 
+    /// Right button on song select: hold it and move up and down to fly through the list, like
+    /// osu!'s right-click scrolling. The selection stays. Released without moving, it opens the
+    /// row's menu; on the scrollbar, it goes there.
     fn right_button(&mut self, pressed: bool) {
         // A click that wakes the idle screen does nothing else, its release neither.
         if pressed {
@@ -8826,7 +8822,6 @@ impl State {
         }
     }
 
-    /// Forgets the saved online login.
     /// The terms are on screen: open, and nothing playing under them.
     fn terms_showing(&self) -> bool {
         self.terms.is_some() && !self.in_song() && self.splash.is_none()
@@ -8887,6 +8882,7 @@ impl State {
         });
     }
 
+    /// Forgets the saved online login.
     fn sign_out(&mut self, why: &str) {
         self.terms_kept = None;
         self.social = social::Social::default();
@@ -10494,7 +10490,6 @@ impl State {
         }
     }
 
-    /// Tab in play: hides (or shows again) the offset / UR line.
     /// Somewhere text can be typed now (Ctrl+V pastes there).
     fn takes_text(&self) -> bool {
         self.social_keys()
@@ -11313,6 +11308,7 @@ impl State {
         }
     }
 
+    /// Tab in play: hides (or shows again) the offset / UR line.
     fn toggle_map_info(&mut self) {
         self.cfg.show_map_info = !self.cfg.show_map_info;
         self.cfg.save();
@@ -12981,8 +12977,6 @@ impl State {
         }
     }
 
-    /// A key press: the player's own hotkeys (`keys::Bindings`) turned into the keys the game
-    /// knows them by, then `key_inner`.
     /// Asks whether to exit; asked again (Ctrl+Q or the close button twice), exits.
     fn ask_quit(&mut self) {
         if self.quit_asked {
@@ -13002,6 +12996,8 @@ impl State {
         1.0 - (1.0 - (ms / QUIT_SLIDE_MS).min(1.0)).powi(3)
     }
 
+    /// A key press: the player's own hotkeys (`keys::Bindings`) turned into the keys the game
+    /// knows them by, then `key_inner`.
     fn key(
         &mut self,
         code: KeyCode,
@@ -14434,7 +14430,6 @@ impl State {
         {
             draw_analysis(canvas, done, total);
         }
-        // Not during a song, where a pointer left there would hold it over the notes for good.
         // Holding quick retry: the screen goes dark on the way to the restart.
         if let Some(t) = self.restart_delay_progress(now).or_else(|| {
             self.cfg
@@ -15532,7 +15527,8 @@ impl State {
     }
 
     /// Downloads the newest version of map `entry`'s set into its folder: the set's own
-    /// difficulties are replaced; home-made ones and edited copies (rates) stay (`download::is_own`).
+    /// difficulties are replaced; home-made ones and edited copies (rates) stay
+    /// (`download::is_own`).
     fn update_set(&mut self, entry: usize) {
         let e = &self.library[entry];
         // A custom set keeps the IDs of the osu! set it was made from: its newer version is the
@@ -15844,7 +15840,6 @@ impl State {
         self.toast(text);
     }
 
-    /// The topmost clickable thing under (`x`, `y`), from the last frame.
     /// Whether the song preview is the topmost thing at a point, so it takes the pointer there.
     /// Anything drawn over it (the friends panel, a drop-down, the changelog) gets it instead.
     fn preview_on_top(&self, x: f32, y: f32) -> bool {
@@ -15858,6 +15853,7 @@ impl State {
             && matches!(self.hit_at(x, y), Some(hit::Hit::Preview))
     }
 
+    /// The topmost clickable thing under (`x`, `y`), from the last frame.
     fn hit_at(&self, x: f32, y: f32) -> Option<hit::Hit> {
         if mobile::active() {
             return mobile::hit_near(&self.hits, x, y);
@@ -16535,9 +16531,9 @@ impl State {
 
 /// Rounds of asking the server about statuses it didn't have yet, and the wait between them.
 const STATUS_ROUNDS: usize = 60;
+const STATUS_ROUND_SECS: u64 = 45;
 /// How long until the server is asked again about a selected set it was still checking.
 const VERDICT_AGAIN: Duration = Duration::from_secs(30);
-const STATUS_ROUND_SECS: u64 = 45;
 
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;

@@ -581,8 +581,8 @@ const FLYING_SPEED: f32 = 0.05;
 /// `list_wave` of how far its middle is from the view's (none in the middle, `WAVE_MAX` at the
 /// view's top and bottom edges, along one soft symmetric arc), its right edge staying put. Cards
 /// far from the selection's target fade by up to `ARC_FADE` (all of it `ARC_FADE_REACH` of the
-/// list's height beyond `ARC_STRAIGHT` of it from the target). A song or difficulty landing in the target flashes it
-/// for `LAND_FLASH_MS`, its brackets opening out `LAND_FLASH_GROW` units, like a note hit on
+/// list's height beyond `ARC_STRAIGHT` of it from the target). A song or difficulty landing in
+/// the target flashes it for `LAND_FLASH_MS`, its brackets opening out `LAND_FLASH_GROW` units, like a note hit on
 /// the menu's target.
 const ARC_STRAIGHT: f32 = 0.12;
 pub(crate) const WAVE_MAX: f32 = 16.0;
@@ -1911,7 +1911,6 @@ impl Select {
         self.group_of.get(row).is_some() && self.group_of.get(row) == self.group_of.get(self.cursor)
     }
 
-    /// The songs as ranges of `rows`.
     /// Tests: the library index of list row `row`.
     #[cfg(test)]
     pub fn visible_index(&self, row: usize) -> usize {
@@ -2146,8 +2145,7 @@ impl Select {
         self.visible.get(self.menu.as_ref()?.row).copied()
     }
 
-    /// The menu's items for its row: delete the difficulty (not on a song's own row), delete the
-    /// set, and get the song's newest version from osu! (a set that has an ID).
+    /// Whether `e`'s song is liked.
     pub fn is_liked(&self, e: &Entry) -> bool {
         self.favourites.contains(&crate::playlist::favourite_key(e))
     }
@@ -2400,7 +2398,6 @@ impl Select {
         }
     }
 
-    /// Library indices of the selected song's difficulties (for star rating requests).
     /// Orders the selected song's difficulties by star rating once all of them are known, like
     /// osu!, keeping the same difficulty selected. (Other songs are collapsed, so their order
     /// doesn't show until they are opened.)
@@ -2439,6 +2436,7 @@ impl Select {
         self.hardest_pending = None;
     }
 
+    /// Library indices of the selected song's difficulties (for star rating requests).
     pub fn selected_set(&self) -> Vec<usize> {
         self.cursor_group()
             .map(|g| self.visible[g].to_vec())
@@ -4773,7 +4771,8 @@ fn folder_name(dir: &std::path::Path) -> Option<String> {
     Some(dir.file_name()?.to_string_lossy().into_owned())
 }
 
-/// Whether osu! has a newer version of a set than the one here.
+/// Whether a newer version of a set than the one here is known: osu!'s, or the website's for a
+/// custom set (`Select::update_of`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SetUpdate {
     Checking,
