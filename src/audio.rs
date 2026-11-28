@@ -1,6 +1,6 @@
-//! Audio output. The song is fully decoded into memory and mixed by hand inside the
-//! device callback, so the callback itself is the master clock: every callback publishes
-//! "song frame N starts playing at instant T" and the game interpolates from that.
+//! Audio output. Songs are mixed by hand inside the device callback, so the callback itself is
+//! the master clock: every callback publishes "song frame N starts playing at instant T" and the
+//! game interpolates from that.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -107,7 +107,7 @@ enum Cmd {
     Epoch(u64),
     Pause(bool),
     Stop,
-    /// A sound and its volume (0..1, the map's timing point volume for hits).
+    /// A sound and its gain (1 = as recorded; hits use the map's timing point volume).
     Sfx(Sfx, f32),
     /// A sound to start when the stream gets to this song frame.
     SfxAt(i64, Sfx, f32),
@@ -131,7 +131,6 @@ struct Stamp {
     playing: bool,
     /// Song frame written at the start of the last callback.
     frame: i64,
-    /// When that callback ran.
     at: Instant,
     /// Delay from callback to the samples reaching the speakers.
     latency: Duration,
@@ -145,7 +144,7 @@ struct Stamp {
 
 pub struct Engine {
     _stream: cpal::Stream,
-    tx: Sender<Cmd>,
+    commands: Sender<Cmd>,
     garbage: Receiver<Garbage>,
     stamp: Arc<Mutex<Stamp>>,
     /// The last Play / Seek sent.
@@ -183,21 +182,21 @@ impl Engine {
             AtomicU32::new(1.0f32.to_bits()),
             AtomicU32::new(1.0f32.to_bits()),
         ]);
-        let fmt = supported.sample_format();
+        let sample_format = supported.sample_format();
         let open = |config: StreamConfig| -> Result<(cpal::Stream, Sender<Cmd>, Receiver<Garbage>), String> {
-            let (tx, rx) = mpsc::channel();
-            let (gc_tx, garbage) = mpsc::channel();
-            let mixer = Mixer::new(rx, gc_tx, stamp.clone(), volume.clone(), rate, channels);
-            let stream = match fmt {
+            let (commands, command_rx) = mpsc::channel();
+            let (garbage_tx, garbage) = mpsc::channel();
+            let mixer = Mixer::new(command_rx, garbage_tx, stamp.clone(), volume.clone(), rate, channels);
+            let stream = match sample_format {
                 cpal::SampleFormat::F32 => build::<f32>(&device, config, mixer),
                 cpal::SampleFormat::I16 => build::<i16>(&device, config, mixer),
                 cpal::SampleFormat::I32 => build::<i32>(&device, config, mixer),
                 cpal::SampleFormat::U16 => build::<u16>(&device, config, mixer),
                 other => Err(format!("unsupported sample format {other}")),
             }?;
-            Ok((stream, tx, garbage))
+            Ok((stream, commands, garbage))
         };
-        let (stream, tx, garbage) = match open(config) {
+        let (stream, commands, garbage) = match open(config) {
             Ok(v) => v,
             Err(e) if config.buffer_size != cpal::BufferSize::Default => {
                 eprintln!("fixed audio buffer rejected ({e}), using device default");
@@ -223,18 +222,18 @@ impl Engine {
             crate::audiolog::line(&format!("audio {description} device={name}"));
             let stamp = Arc::downgrade(&stamp);
             crate::audiolog::every(rate, move || {
-                let s = *stamp.upgrade()?.lock().ok()?;
+                let latest = *stamp.upgrade()?.lock().ok()?;
                 Some(format!(
                     "clock playing={} frame={} latency_ms={:.3}",
-                    u8::from(s.playing),
-                    s.frame,
-                    s.latency.as_secs_f64() * 1000.0
+                    u8::from(latest.playing),
+                    latest.frame,
+                    latest.latency.as_secs_f64() * 1000.0
                 ))
             });
         }
         Ok(Engine {
             _stream: stream,
-            tx,
+            commands,
             garbage,
             stamp,
             epoch: AtomicU64::new(0),
@@ -263,13 +262,13 @@ impl Engine {
     /// so `position_ms` reports nothing rather than that.
     fn jump(&self, cmd: Cmd) {
         let epoch = self.epoch.fetch_add(1, Ordering::Relaxed) + 1;
-        let _ = self.tx.send(cmd);
-        let _ = self.tx.send(Cmd::Epoch(epoch));
+        let _ = self.commands.send(cmd);
+        let _ = self.commands.send(Cmd::Epoch(epoch));
     }
 
     /// Swaps in another decode of the playing song (the full one for a part), seamlessly.
     pub fn swap(&self, track: Arc<Track>, base: i64) {
-        let _ = self.tx.send(Cmd::Swap { track, base });
+        let _ = self.commands.send(Cmd::Swap { track, base });
     }
 
     pub fn seek(&self, ms: f64) {
@@ -277,19 +276,21 @@ impl Engine {
     }
 
     pub fn stop(&self) {
-        let _ = self.tx.send(Cmd::Stop);
+        let _ = self.commands.send(Cmd::Stop);
     }
 
     /// The next song played fades in over `in_ms` while the one playing now fades out over
     /// `out_ms` (a full decode; a streamed song is cut as usual).
     pub fn crossfade_next(&self, out_ms: f64, in_ms: f64) {
         let frames = |ms: f64| (ms.max(0.0) / 1000.0 * self.rate as f64).round() as u32;
-        let _ = self.tx.send(Cmd::Crossfade(frames(out_ms), frames(in_ms)));
+        let _ = self
+            .commands
+            .send(Cmd::Crossfade(frames(out_ms), frames(in_ms)));
     }
 
     /// Freezes the song where it is (output goes silent; hitsounds still play).
     pub fn set_paused(&self, paused: bool) {
-        let _ = self.tx.send(Cmd::Pause(paused));
+        let _ = self.commands.send(Cmd::Pause(paused));
     }
 
     pub fn sfx(&self, s: Sfx) {
@@ -298,7 +299,7 @@ impl Engine {
 
     /// Plays a sound at `volume` times the hitsound volume (1 = as recorded, more boosts it).
     pub fn sfx_at(&self, s: Sfx, volume: f32) {
-        let _ = self.tx.send(Cmd::Sfx(s, volume));
+        let _ = self.commands.send(Cmd::Sfx(s, volume));
     }
 
     /// Plays a sound when the song reaches `song_ms` (the units of `position_ms`), so that it is
@@ -306,12 +307,12 @@ impl Engine {
     /// passed plays at once. Dropped by a seek, pause, restart or stop.
     pub fn sfx_at_song(&self, s: Sfx, volume: f32, song_ms: f64) {
         let frame = (song_ms / 1000.0 * self.rate as f64).round() as i64;
-        let _ = self.tx.send(Cmd::SfxAt(frame, s, volume));
+        let _ = self.commands.send(Cmd::SfxAt(frame, s, volume));
     }
 
     /// Hands over prepared mono samples at the device rate without rebuilding them here.
     pub fn set_hitsounds(&self, sounds: Arc<Sounds>) {
-        let _ = self.tx.send(Cmd::Sounds(sounds));
+        let _ = self.commands.send(Cmd::Sounds(sounds));
     }
 
     pub fn set_volume(&self, music: f32, effects: f32) {
@@ -327,10 +328,10 @@ impl Engine {
 
     /// The output latency (ms) the clock goes by, and what the stream reports.
     pub fn latencies_ms(&self) -> (f64, f64) {
-        let s = *self.stamp.lock().unwrap();
+        let stamp = *self.stamp.lock().unwrap();
         (
-            s.latency.as_secs_f64() * 1000.0,
-            s.reported.as_secs_f64() * 1000.0,
+            stamp.latency.as_secs_f64() * 1000.0,
+            stamp.reported.as_secs_f64() * 1000.0,
         )
     }
 
@@ -340,16 +341,18 @@ impl Engine {
         self.stamp.lock().unwrap().settled
     }
 
-    /// Song position (ms) audible at `now`, or None when nothing is playing yet.
+    /// Song position (ms) audible at `now`. None while nothing plays, and until the callback has
+    /// applied the last Play / Seek.
     pub fn position_ms(&self, now: Instant) -> Option<f64> {
         // Free tracks the callback replaced; deallocation stays off the audio thread.
         while self.garbage.try_recv().is_ok() {}
-        let s = *self.stamp.lock().unwrap();
-        if !s.playing || s.epoch != self.epoch.load(Ordering::Relaxed) {
+        let stamp = *self.stamp.lock().unwrap();
+        if !stamp.playing || stamp.epoch != self.epoch.load(Ordering::Relaxed) {
             return None;
         }
-        let since = now.saturating_duration_since(s.at).as_secs_f64() - s.latency.as_secs_f64();
-        Some((s.frame as f64 / self.rate as f64 + since) * 1000.0)
+        let since =
+            now.saturating_duration_since(stamp.at).as_secs_f64() - stamp.latency.as_secs_f64();
+        Some((stamp.frame as f64 / self.rate as f64 + since) * 1000.0)
     }
 }
 
@@ -376,14 +379,13 @@ where
     device
         .build_output_stream(
             config,
-            move |data: &mut [T], info: &OutputCallbackInfo| mixer.render(data, info),
+            move |out: &mut [T], callback: &OutputCallbackInfo| mixer.render(out, callback),
             |e| eprintln!("audio stream error: {e}"),
             None,
         )
         .map_err(|e| e.to_string())
 }
 
-/// A sound waiting for its song frame.
 struct Pending {
     frame: i64,
     sound: Sfx,
@@ -470,8 +472,8 @@ impl SteadyLatency {
 }
 
 struct Mixer {
-    rx: Receiver<Cmd>,
-    gc: Sender<Garbage>,
+    commands: Receiver<Cmd>,
+    garbage: Sender<Garbage>,
     stamp: Arc<Mutex<Stamp>>,
     volume: Arc<[AtomicU32; 3]>,
     channels: usize,
@@ -484,7 +486,7 @@ struct Mixer {
     epoch: u64,
     paused: bool,
     /// A stream's next frames, read once a callback.
-    streamed: Vec<f32>,
+    stream_buf: Vec<f32>,
     voices: Vec<Voice>,
     /// Sounds for song frames not written yet.
     pending: Vec<Pending>,
@@ -526,8 +528,8 @@ fn focus_step(at: f32, to: f32, secs: f32) -> f32 {
 
 impl Mixer {
     fn new(
-        rx: Receiver<Cmd>,
-        gc: Sender<Garbage>,
+        commands: Receiver<Cmd>,
+        garbage: Sender<Garbage>,
         stamp: Arc<Mutex<Stamp>>,
         volume: Arc<[AtomicU32; 3]>,
         rate: u32,
@@ -535,8 +537,8 @@ impl Mixer {
     ) -> Mixer {
         let sounds = Arc::new(hitsound_set(rate, Custom::default()));
         Mixer {
-            rx,
-            gc,
+            commands,
+            garbage,
             stamp,
             volume,
             channels,
@@ -547,7 +549,7 @@ impl Mixer {
             frame: 0,
             epoch: 0,
             paused: false,
-            streamed: vec![0.0; 1 << 16],
+            stream_buf: vec![0.0; 1 << 16],
             voices: Vec::with_capacity(64),
             pending: Vec::with_capacity(PENDING_CAPACITY),
             sounds,
@@ -584,7 +586,7 @@ impl Mixer {
                             self.fade_in = (into, into);
                         }
                         _ => {
-                            let _ = self.gc.send(Garbage::Track(old));
+                            let _ = self.garbage.send(Garbage::Track(old));
                         }
                     }
                 }
@@ -595,7 +597,7 @@ impl Mixer {
             }
             Cmd::Swap { track, base } => {
                 if let Some(old) = self.track.replace(track) {
-                    let _ = self.gc.send(Garbage::Track(old));
+                    let _ = self.garbage.send(Garbage::Track(old));
                 }
                 self.base = base;
             }
@@ -616,12 +618,12 @@ impl Mixer {
                 self.fade_in = (0, 0);
                 self.drop_outgoing();
                 if let Some(old) = self.track.take() {
-                    let _ = self.gc.send(Garbage::Track(old));
+                    let _ = self.garbage.send(Garbage::Track(old));
                 }
             }
             Cmd::Sounds(sounds) => {
                 let _ = self
-                    .gc
+                    .garbage
                     .send(Garbage::Sounds(std::mem::replace(&mut self.sounds, sounds)));
             }
             Cmd::Crossfade(out, into) => self.fade_next = Some((out, into)),
@@ -647,11 +649,10 @@ impl Mixer {
 
     fn drop_outgoing(&mut self) {
         if let Some(o) = self.outgoing.take() {
-            let _ = self.gc.send(Garbage::Track(o.track));
+            let _ = self.garbage.send(Garbage::Track(o.track));
         }
     }
 
-    /// The playing song's share of the volume this frame, as it fades in.
     fn fade_in_gain(&mut self) -> f32 {
         let (left, total) = self.fade_in;
         if left == 0 {
@@ -681,15 +682,13 @@ impl Mixer {
         out
     }
 
-    /// Mixes one stereo frame of the current track and any crossfading outgoing track.
     /// Does not advance fades or the outgoing track while paused, and holds `fade_in` until the
     /// incoming track actually starts (`at >= 0`).
     fn mix_music_frame(
         &mut self,
         music_vol: f32,
-        music_vol_all: f32,
-        read: &mut usize,
-        streamed: usize,
+        frames_read: &mut usize,
+        streamed_frames: usize,
     ) -> (f32, f32) {
         let (mut l, mut r) = (0.0f32, 0.0f32);
         if !self.paused && self.track.is_some() {
@@ -699,10 +698,10 @@ impl Mixer {
             if let Some(track) = self.track.as_ref() {
                 if let Some(s) = &track.stream {
                     let in_song = at >= 0 && (at as usize) < s.frames();
-                    if *read < streamed && in_song {
-                        l = self.streamed[*read * 2] * vol;
-                        r = self.streamed[*read * 2 + 1] * vol;
-                        *read += 1;
+                    if *frames_read < streamed_frames && in_song {
+                        l = self.stream_buf[*frames_read * 2] * vol;
+                        r = self.stream_buf[*frames_read * 2 + 1] * vol;
+                        *frames_read += 1;
                         self.frame += 1;
                     } else if !in_song {
                         self.frame += 1;
@@ -718,14 +717,13 @@ impl Mixer {
             }
         }
         if !self.paused && self.outgoing.is_some() {
-            let (ol, or) = self.outgoing_frame(music_vol_all);
-            l += ol;
-            r += or;
+            let (out_l, out_r) = self.outgoing_frame(music_vol);
+            l += out_l;
+            r += out_r;
         }
         (l, r)
     }
 
-    /// Starts the waiting sounds whose song frame the stream is at.
     fn start_due(&mut self) {
         let mut i = 0;
         while i < self.pending.len() {
@@ -741,17 +739,15 @@ impl Mixer {
     fn render<T: SizedSample + FromSample<f32>>(
         &mut self,
         out: &mut [T],
-        info: &OutputCallbackInfo,
+        callback: &OutputCallbackInfo,
     ) {
         let now = Instant::now();
-        {
-            while let Ok(cmd) = self.rx.try_recv() {
-                self.apply(cmd);
-            }
+        while let Ok(cmd) = self.commands.try_recv() {
+            self.apply(cmd);
         }
 
-        let ts = info.timestamp();
-        let reported = ts.playback.duration_since(ts.callback);
+        let timestamp = callback.timestamp();
+        let reported = timestamp.playback.duration_since(timestamp.callback);
         let latency = if cfg!(windows) {
             self.steady
                 .of(reported, out.len() / self.channels, self.rate)
@@ -764,8 +760,8 @@ impl Mixer {
         } else {
             self.steady.callbacks > LATENCY_SETTLE
         };
-        if let Ok(mut s) = self.stamp.try_lock() {
-            *s = Stamp {
+        if let Ok(mut stamp) = self.stamp.try_lock() {
+            *stamp = Stamp {
                 playing: self.track.is_some() && !self.paused,
                 frame: self.frame,
                 at: now,
@@ -776,35 +772,33 @@ impl Mixer {
             };
         }
 
-        let ch = self.channels;
+        let channels = self.channels;
         let focus_to = f32::from_bits(self.volume[2].load(Ordering::Relaxed));
-        let secs = (out.len() / ch.max(1)) as f32 / self.rate.max(1) as f32;
+        let secs = (out.len() / channels.max(1)) as f32 / self.rate.max(1) as f32;
         self.focus = focus_step(self.focus, focus_to, secs);
         let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed)) * self.focus;
-        let music_vol_all = music_vol;
         let fx_vol = f32::from_bits(self.volume[1].load(Ordering::Relaxed)) * self.focus;
         // A stream's frames for this callback. Where they run out inside the song, the position
         // holds, so that the music comes back still on the notes.
         let stream = self.track.as_ref().and_then(|t| t.stream.as_ref());
-        let mut streamed = 0;
+        let mut streamed_frames = 0;
         if let Some(s) = stream {
             let at = self.frame - self.base;
             s.want(at);
             if !self.paused {
-                let n = (out.len() / ch.max(1) * 2).min(self.streamed.len());
-                streamed = s.read(at.max(0), &mut self.streamed[..n]);
-                if at >= 0 && streamed == 0 && (at as usize) < s.frames() {
+                let n = (out.len() / channels.max(1) * 2).min(self.stream_buf.len());
+                streamed_frames = s.read(at.max(0), &mut self.stream_buf[..n]);
+                if at >= 0 && streamed_frames == 0 && (at as usize) < s.frames() {
                     s.stalls.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
-        let mut read = 0;
-        for frame in out.chunks_mut(ch) {
+        let mut frames_read = 0;
+        for frame in out.chunks_mut(channels) {
             if !self.pending.is_empty() {
                 self.start_due();
             }
-            let (mut l, mut r) =
-                self.mix_music_frame(music_vol, music_vol_all, &mut read, streamed);
+            let (mut l, mut r) = self.mix_music_frame(music_vol, &mut frames_read, streamed_frames);
             for v in &mut self.voices {
                 let buf = &self.sounds[v.sound as usize];
                 let fade = if v.fade == 0 {
@@ -825,7 +819,7 @@ impl Mixer {
                 }
             }
             let (l, r) = self.limiter.apply(l, r);
-            match ch {
+            match channels {
                 1 => frame[0] = T::from_sample((l + r) * 0.5),
                 _ => {
                     frame[0] = T::from_sample(l);
@@ -848,8 +842,8 @@ impl Mixer {
 }
 
 /// The mix's ceiling. A hit landing on a loud chorus turns the whole mix down at once and lets it
-/// back up over ~150 ms, instead of bending the waveform past 0.9 (a soft clip did that here,
-/// and it's what made finishers, and every hit in a kiai, sound distorted).
+/// back up over ~150 ms, instead of bending the waveform (the soft clip this replaced did, and
+/// it's what made finishers, and every hit in a kiai, sound distorted).
 pub struct Limiter {
     gain: f32,
     release: f32,
@@ -1057,8 +1051,8 @@ mod tests {
     }
 
     fn mixer() -> Mixer {
-        let (_tx, rx) = mpsc::channel();
-        let (gc, _garbage) = mpsc::channel();
+        let (_commands, command_rx) = mpsc::channel();
+        let (garbage_tx, _garbage) = mpsc::channel();
         let stamp = Arc::new(Mutex::new(Stamp {
             playing: false,
             frame: 0,
@@ -1073,7 +1067,7 @@ mod tests {
             AtomicU32::new(1),
             AtomicU32::new(1.0f32.to_bits()),
         ]);
-        Mixer::new(rx, gc, stamp, volume, 48_000, 2)
+        Mixer::new(command_rx, garbage_tx, stamp, volume, 48_000, 2)
     }
 
     fn silence(frames: usize) -> Arc<Track> {
@@ -1184,23 +1178,23 @@ mod tests {
             base: 0,
         });
         m.apply(Cmd::Pause(true));
-        let mut read = 0;
+        let mut frames_read = 0;
         // While paused, mix_music_frame outputs silence and freezes both outgoing and fade_in.
-        assert_eq!(m.mix_music_frame(1.0, 1.0, &mut read, 0), (0.0, 0.0));
+        assert_eq!(m.mix_music_frame(1.0, &mut frames_read, 0), (0.0, 0.0));
         assert_eq!(m.outgoing.as_ref().unwrap().left, 4);
         assert_eq!(m.fade_in.0, 2);
 
         // Unpause: during the 2 negative lead-in frames, outgoing fades out while fade_in waits.
         m.apply(Cmd::Pause(false));
-        let f0 = m.mix_music_frame(1.0, 1.0, &mut read, 0);
-        let f1 = m.mix_music_frame(1.0, 1.0, &mut read, 0);
+        let f0 = m.mix_music_frame(1.0, &mut frames_read, 0);
+        let f1 = m.mix_music_frame(1.0, &mut frames_read, 0);
         assert!((f0.0 - 0.5).abs() < 1e-6);
         assert!((f1.0 - 0.375).abs() < 1e-6);
         assert_eq!(m.fade_in.0, 2, "fade_in must wait until track frame >= 0");
 
         // At frame 0 and 1, incoming track fades in (0.0 then 0.5 of 0.4) over outgoing (0.25, 0.125).
-        let f2 = m.mix_music_frame(1.0, 1.0, &mut read, 0);
-        let f3 = m.mix_music_frame(1.0, 1.0, &mut read, 0);
+        let f2 = m.mix_music_frame(1.0, &mut frames_read, 0);
+        let f3 = m.mix_music_frame(1.0, &mut frames_read, 0);
         assert!((f2.0 - 0.25).abs() < 1e-6);
         assert!((f3.0 - (0.125 + 0.2)).abs() < 1e-6);
         assert!(m.outgoing.is_none());
@@ -1652,9 +1646,8 @@ mod tests {
             let full = decode(path, rate).unwrap();
             for from in [30_000.0, 61_234.0] {
                 let (part, base) = decode_part(path, rate, Some((from, 3000.0))).unwrap();
-                // The shift (in frames) at which the part best matches the full decode.
                 let window = (rate as usize / 2).min(part.frames().saturating_sub(4000));
-                let best = (-3000i64..=3000)
+                let best_lag_frames = (-3000i64..=3000)
                     .min_by(|&a, &b| {
                         let err = |lag: i64| -> f64 {
                             (2000..2000 + window)
@@ -1673,7 +1666,7 @@ mod tests {
                     })
                     .unwrap();
                 println!(
-                    "{:60} from {from:>6} ms: part is {best:+} frames ({:+.1} ms) off the full decode",
+                    "{:60} from {from:>6} ms: part is {best_lag_frames:+} frames ({:+.1} ms) off the full decode",
                     path.display()
                         .to_string()
                         .chars()
@@ -1683,7 +1676,7 @@ mod tests {
                         .chars()
                         .rev()
                         .collect::<String>(),
-                    best as f64 / rate as f64 * 1000.0
+                    best_lag_frames as f64 / rate as f64 * 1000.0
                 );
             }
         }
@@ -1852,7 +1845,8 @@ pub struct Custom {
     pub scream: Option<Vec<f32>>,
 }
 
-/// The built-in hitsounds (`assets/hitsounds`, from the quassbot v2 skin).
+/// The built-in hitsounds, synthesized by `assets/hitsounds/synth.py` so none comes from
+/// someone else's skin.
 const BUILT_IN: [(&[u8], &str); 4] = [
     (include_bytes!("../assets/hitsounds/don.wav"), "wav"),
     (include_bytes!("../assets/hitsounds/kat.wav"), "wav"),
@@ -1860,7 +1854,6 @@ const BUILT_IN: [(&[u8], &str); 4] = [
     (include_bytes!("../assets/hitsounds/combobreak.ogg"), "ogg"),
 ];
 
-/// A built-in sound as mono samples at `rate`.
 fn built_in(index: usize, rate: u32) -> Vec<f32> {
     let (bytes, ext) = BUILT_IN[index];
     decode_bytes(bytes, ext, rate)
@@ -1868,7 +1861,6 @@ fn built_in(index: usize, rate: u32) -> Vec<f32> {
         .unwrap_or_default()
 }
 
-/// Stereo samples folded down to mono.
 pub fn mono(track: &Track) -> Vec<f32> {
     track
         .samples
@@ -1889,7 +1881,7 @@ pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
     static CACHE: OnceLock<Mutex<std::collections::HashMap<u32, Arc<Builtin>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     let cached = cache.lock().unwrap().get(&rate).cloned();
-    let base = cached.unwrap_or_else(|| {
+    let builtin = cached.unwrap_or_else(|| {
         // Build outside the cache lock: different-rate preparation need not block a lookup.
         let don = built_in(0, rate);
         let kat = built_in(1, rate);
@@ -1916,7 +1908,7 @@ pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
         });
         cache.lock().unwrap().entry(rate).or_insert(value).clone()
     });
-    let mut sounds = base.sounds.clone();
+    let mut sounds = builtin.sounds.clone();
     let custom_don = custom.don.is_some();
     let custom_kat = custom.kat.is_some();
     let custom_finish = custom.finish.is_some();
@@ -1929,7 +1921,7 @@ pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
     let finish = custom
         .finish
         .map(Arc::from)
-        .unwrap_or_else(|| base.finish.clone());
+        .unwrap_or_else(|| builtin.finish.clone());
     if custom_don || custom_finish {
         sounds[Sfx::BigDon as usize] = mix(&sounds[Sfx::Don as usize], &finish).into();
     }
@@ -1988,7 +1980,6 @@ fn chime(rate: u32) -> Vec<f32> {
     out
 }
 
-/// Two mono sounds played together.
 fn mix(a: &[f32], b: &[f32]) -> Vec<f32> {
     let mut out = vec![0.0; a.len().max(b.len())];
     for (i, o) in out.iter_mut().enumerate() {
@@ -2142,7 +2133,6 @@ impl Pieces {
     }
 }
 
-/// Decodes a whole audio file to interleaved stereo at `rate`.
 pub fn decode(path: &Path, rate: u32) -> Result<Track, String> {
     decode_part(path, rate, None).map(|(track, _)| track)
 }
@@ -2228,7 +2218,6 @@ pub fn decode_bytes(bytes: &'static [u8], ext: &str, rate: u32) -> Result<Track,
         .map(|(track, _)| track)
 }
 
-/// An audio file being read, a packet at a time.
 pub(crate) struct Reader {
     format: Box<dyn symphonia::core::formats::FormatReader>,
     decoder: Box<dyn symphonia::core::codecs::audio::AudioDecoder>,
@@ -2557,8 +2546,8 @@ impl Heard<'_> {
 }
 
 /// WSOLA time stretch of interleaved stereo, a grain at a time: overlap-adds Hann-windowed ~40 ms
-/// grains, choosing each grain's source position within +-8 ms so its waveform lines up with the
-/// previous grain. `in_of` maps an output frame to the input frame that should sound there.
+/// grains, choosing each grain's source position within +-8 ms of the search centre (itself up to
+/// 8 ms from `nominal`, see `lean`) so its waveform lines up with the previous grain. `in_of` maps an output frame to the input frame that should sound there.
 pub(crate) struct Grains {
     pub win: usize,
     pub hop_out: usize,
@@ -2631,32 +2620,34 @@ impl Grains {
                 let centre = (nominal as f64 + self.lean).max(0.0) as usize;
                 let lo = centre.saturating_sub(search);
                 let hi = centre + search;
-                let ov = hop_out;
-                let (mut best, mut best_c) = (nominal, f32::MIN);
-                let len = ov / DEC;
+                let overlap = hop_out;
+                let (mut best, mut best_similarity) = (nominal, f32::MIN);
+                let len = overlap / DEC;
                 let at = target / DEC;
                 let coarse_end = heard.coarse_end();
                 let loud_at = heard.corr(at, at, len).1.max(1e-12);
                 for cand in around(centre / DEC, lo / DEC, hi / DEC) {
-                    if (target + ov) / DEC < coarse_end && (cand * DEC + ov) / DEC < coarse_end {
+                    if (target + overlap) / DEC < coarse_end
+                        && (cand * DEC + overlap) / DEC < coarse_end
+                    {
                         let (dot, loud) = heard.corr(at, cand, len);
-                        let like = dot / (loud_at * loud.max(1e-12)).sqrt() as f32;
-                        if like > best_c {
-                            best_c = like;
+                        let similarity = dot / (loud_at * loud.max(1e-12)).sqrt() as f32;
+                        if similarity > best_similarity {
+                            best_similarity = similarity;
                             best = cand * DEC;
                         }
                     }
                 }
-                let (mut fine, mut fine_c) = (best, f32::MIN);
+                let (mut fine, mut fine_similarity) = (best, f32::MIN);
                 let fine_lo = best.saturating_sub(DEC);
                 for c in around(
                     best,
                     fine_lo,
                     (best + DEC).min(frames - win - 1).max(fine_lo),
                 ) {
-                    let v = heard.fine_corr(target.min(frames - ov - 1), c, ov);
-                    if v > fine_c {
-                        fine_c = v;
+                    let v = heard.fine_corr(target.min(frames - overlap - 1), c, overlap);
+                    if v > fine_similarity {
+                        fine_similarity = v;
                         fine = c;
                     }
                 }
@@ -2667,10 +2658,10 @@ impl Grains {
         // hop, not the window): near the end of the song a grain must still fit.
         let chosen = chosen.min(frames - win);
         let (input, base) = (heard.input, heard.base);
-        for (i, &wgt) in self.window[..win].iter().enumerate() {
+        for (i, &weight) in self.window[..win].iter().enumerate() {
             let (to, from) = ((out_pos + i - out_base) * 2, (chosen + i - base) * 2);
-            out[to] += input[from] * wgt;
-            out[to + 1] += input[from + 1] * wgt;
+            out[to] += input[from] * weight;
+            out[to + 1] += input[from + 1] * weight;
         }
         // Near 1x the continuation sits just behind `nominal` every time, so grains picked by
         // likeness alone walk to the edge of the search and stay there, up to 8 ms off the notes.

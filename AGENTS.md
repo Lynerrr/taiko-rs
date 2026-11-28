@@ -39,6 +39,26 @@
   logical commits (each with its own Conventional subject and `Changelog:` lines), not into a
   chain of dependent pull requests that have to merge one after another.
 
+## Comments and naming
+
+- Comments explain why, never what. Keep one only for a non-obvious workaround, a bug in an
+  external library being worked around, or a constraint the code alone can't show. Delete
+  comments that restate the code or have gone stale.
+- Doc comments on public items only where the name and signature leave a real question: units,
+  ranges, ownership, what `None` or an error means, an ordering or threading contract.
+- Give variables, functions, types and modules names that say what they hold or do. No vague
+  names (`data`, `tmp`, `info`, `item`, `val`, `res`, `handle_stuff`) unless the scope is
+  a few lines and the meaning is plain.
+- One term per concept across the codebase: reuse the name the code already gives a thing
+  instead of coining a synonym.
+- Don't rename public API, serialized fields (JSON, TOML, database columns, `.osu` / `.tko`
+  keys), CLI flags, env vars or network messages in a cleanup: they are external contracts.
+
+## Replies
+
+- Answer briefly and directly: short sentences, active voice, no preamble, no restating the
+  question or the obvious.
+
 ## Continuous integration
 
 - Never wait for CI. Don't poll GitHub Actions runs or `gh pr checks`, don't `gh run watch`,

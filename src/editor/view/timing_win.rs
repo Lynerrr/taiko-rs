@@ -228,11 +228,11 @@ impl View {
                 rgba(if p.is_red() { RED_LINE } else { 0x4fd16b }, 1.0),
                 if p.is_red() { "Red" } else { "Green" },
             );
-            let val = match p.bpm() {
+            let bpm_or_sv = match p.bpm() {
                 Some(b) => format!("{b:.2}"),
                 None => format!("x{:.2}", p.sv()),
             };
-            c.text(col(2), ty, 7.0, white, &val);
+            c.text(col(2), ty, 7.0, white, &bpm_or_sv);
             if p.is_red() {
                 c.text(col(3), ty, 7.0, rgba(DIM, 1.0), &format!("{}/4", p.meter));
             }
